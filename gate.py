@@ -16,7 +16,7 @@ The gate imports nothing but the standard library, so this one file is the whole
 project or take from a commit with `git show REV:gate.py`. What it runs it takes from the project it judges: the
 linters from PATH, and pytest, pytest-randomly and mutmut through the Python that runs this file (sys.executable).
 So run it with that project's Python, in which its dev tools are installed, such as `uv run python gate.py`. Rust it
-reads through a helper of its own, built from ci/gate-rust, which --rust-syntax names (GateChange.rust_files).
+reads through a helper of its own, built from gate-rust, which --rust-syntax names (GateChange.rust_files).
 
 docs/quality-gate.md says what the gate judges and why, and, under "The quality file as a contract", which parts
 of the file's format the orchestrator reads back. The orchestrator imports nothing from this module: it keeps its
@@ -56,8 +56,9 @@ from dataclasses import dataclass, field
 from typing import Any
 from xml.etree import ElementTree
 
-# Files a change may edit that alter how Jenkins and the gate judge it.
-BUILD_CONFIG_FILES = ("Jenkinsfile", "pyproject.toml", "uv.lock")
+# Files a change may edit that alter how the gate judges it: its rules and the versions of the linters it runs. A CI's
+# own files are not among them; the gate knows no CI.
+BUILD_CONFIG_FILES = ("pyproject.toml", "uv.lock")
 # The names of the files, anywhere in the tree, that clippy takes its rules or its toolchain from, which the change
 # judged supplies whatever --config says: a manifest's [lints], clippy's configuration, the toolchain that brings
 # clippy, and, under a `.cargo` directory or in the CARGO_HOME clippy runs with (_cargo_home_in), cargo's
@@ -115,23 +116,29 @@ class GateError(Exception):
     user."""
 
 
-def tool_env() -> dict[str, str]:
-    """The environment for every process the gate starts, git, a linter, pytest or mutmut: its own, without the CI
-    credentials the orchestrator reads (JENKINS_USER and JENKINS_TOKEN, and JENKINS_URL with them), without
-    UPDATE_GOLDEN, and without git's switches for how it reads every pathspec.
+# The endings of the names of environment variables that hold credentials, which tool_env keeps from every process
+# the gate starts, as GITHUB_TOKEN, DB_PASSWORD or ANTHROPIC_API_KEY. Each ending starts with its underscore, so a
+# name such as TOKENIZER keeps its value.
+CREDENTIAL_NAME_ENDINGS = ("_TOKEN", "_PASSWORD", "_SECRET", "_API_KEY")
 
-    So a test the change brings, which the flaky-tests check reruns or mutmut runs, never inherits the tokens when the
-    gate runs where they are set. A golden test (tests/golden.py) under UPDATE_GOLDEN=1 rewrites its file instead of
-    comparing with it: a golden test the flaky-tests reruns, the passes-at-base run or mutmut run, each in a copy of
-    the tree, could then not fail. And the gate's
-    pathspecs are written in git's default syntax, which each switch breaks without an error: under
-    GIT_LITERAL_PATHSPECS the linters' globs and GateChange.from_tree's exclude match nothing, under
-    GIT_NOGLOB_PATHSPECS the globs match nothing, under GIT_GLOB_PATHSPECS "*.py" matches only the top level's files,
-    and under GIT_ICASE_PATHSPECS the exclude leaves out a Mutants/ that is not mutmut's.
+
+def tool_env() -> dict[str, str]:
+    """The environment for every process the gate starts, git, a linter, pytest or mutmut: its own, without the
+    variables whose names end in one of CREDENTIAL_NAME_ENDINGS, without UPDATE_GOLDEN, and without git's switches for
+    how it reads every pathspec.
+
+    So a test the change brings, which the flaky-tests check reruns or mutmut runs, never inherits a CI's or a
+    service's tokens when the gate runs where they are set. A golden test (tests/golden.py) under UPDATE_GOLDEN=1
+    rewrites its file instead of comparing with it: a golden test the flaky-tests reruns, the passes-at-base run or
+    mutmut run, each in a copy of the tree, could then not fail. And the gate's pathspecs are written in git's
+    default syntax, which each switch breaks without an error: under GIT_LITERAL_PATHSPECS the linters' globs and
+    GateChange.from_tree's exclude match nothing, under GIT_NOGLOB_PATHSPECS the globs match nothing, under
+    GIT_GLOB_PATHSPECS "*.py" matches only the top level's files, and under GIT_ICASE_PATHSPECS the exclude leaves
+    out a Mutants/ that is not mutmut's.
     """
-    left_out = ("JENKINS_URL", "JENKINS_USER", "JENKINS_TOKEN", "UPDATE_GOLDEN", "GIT_LITERAL_PATHSPECS",
-                "GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS")
-    return {k: v for k, v in os.environ.items() if k not in left_out}
+    left_out = ("UPDATE_GOLDEN", "GIT_LITERAL_PATHSPECS", "GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS",
+                "GIT_ICASE_PATHSPECS")
+    return {k: v for k, v in os.environ.items() if k not in left_out and not k.endswith(CREDENTIAL_NAME_ENDINGS)}
 
 
 def _git_run(cwd: str, *args: str, timeout: float = 60, verbatim: bool = False) -> subprocess.CompletedProcess:
@@ -438,9 +445,6 @@ def _tests_section(tests: list[tuple[str, str]]) -> list[str]:
 
 def _config_section(edited, rules_from: str | None, clippy_config) -> list[str]:
     out = ["", "## Build configuration", ""]
-    if "Jenkinsfile" in edited:
-        out.append("- The change edits `Jenkinsfile`. The quality job reads it from `main`, "
-                   "so this analysis ran without the edit.")
     if "pyproject.toml" in edited:
         out.append(f"- The change edits `pyproject.toml`. The gate took its rules from {rules_from}, so the edit "
                    f"did not change how the change was judged." if rules_from else
@@ -850,7 +854,7 @@ def judge_change(cwd: str, base: str, checks: tuple[GateCheck, ...], *, rules: s
                               f"lines to cover.")
 
     head = _git(root, "rev-parse", "HEAD").strip()
-    intro = (f"`orchestrator.py gate` judged the working tree at `{head}` against the base `{base_sha}`"
+    intro = (f"`gate.py` judged the working tree at `{head}` against the base `{base_sha}`"
              + (f", by the rules in `{rules}`." if rules else "."))
     text = quality_report(GATE_ERROR if conditions else GATE_OK, intro, conditions=conditions, issues=issues,
                           to_weigh=to_weigh, elsewhere=elsewhere, tests=failing, coverage=coverage_sentence,
@@ -991,7 +995,7 @@ def _rust_documents(helper: str, paths: list[str], cwd: str) -> tuple[list[dict]
         if type(schema) is not int or schema != RUST_SYNTAX_SCHEMA:
             return [], (f"{named} printed a document of schema {json.dumps(schema)}, where this gate.py reads schema "
                         f"{RUST_SYNTAX_SCHEMA}; build the helper from the tree this gate.py comes from, its "
-                        f"`ci/gate-rust`")
+                        f"`gate-rust`")
         documents.append(document)
     if len(documents) != len(paths):
         return [], f"{named} printed {len(documents)} documents for {len(paths)} files"
@@ -3270,7 +3274,7 @@ def _base_run_budget_reached(budget: float, when: str, runner: str = "pytest") -
 # Rust's tests at the base: passes_at_base's second half, which runs them with cargo-nextest.
 
 # The profile of the nextest configuration the runs at the base take with --config-file (_rust_base_run_findings), in
-# place of the copy's own .config/nextest.toml, as Jenkins's Test stage takes ci/nextest.toml. It writes the JUnit
+# place of the copy's own .config/nextest.toml. It writes the JUnit
 # report the gate reads to <profile>/junit.xml in the configuration's store directory, which nextest otherwise puts
 # under the workspace's target directory whatever --target-dir says (https://nexte.st/docs/machine-readable/junit/).
 _NEXTEST_PROFILE = "gate-base"
@@ -5816,7 +5820,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                              "tests it records reaching the functions the change edits. Without it, mutmut runs "
                              "[tool.mutmut]'s whole test selection")
     parser.add_argument("--rust-syntax", metavar="PATH",
-                        help="the gate-rust helper, built from ci/gate-rust, through which the checks read the .rs "
+                        help="the gate-rust helper, built from gate-rust, through which the checks read the .rs "
                              "files a change touches; without it, each check that reads Rust reports a change to a .rs "
                              "file as not run, and a change to none is judged as with it")
     return parser.parse_args(argv)

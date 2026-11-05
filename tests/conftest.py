@@ -5,14 +5,12 @@ The guards, each a fixture every test runs under, and each for this process only
 starts:
 
 - No test may open a network connection, so a test that reaches for the real network is a bug, and fails with
-  `NetworkUsed`, naming the address. The contract marker is the exception, for a test that exists to talk to a live
-  server.
+  `NetworkUsed`, naming the address. A Unix socket is not the network.
 - No test may wait in time.sleep: a real sleep makes the suite slow, and a test that depends on how long one takes
   flaky. The test code is guarded; gate.py and the standard library are not: subprocess sleeps while it waits for a
   child with a timeout, which is how the gate runs its tools.
 """
 
-import ipaddress
 import os
 import pathlib
 import socket
@@ -58,51 +56,22 @@ _GUARDED_TESTS = _ROOT / "tests"
 
 
 def pytest_configure(config):
-    """Register the markers that let a test past a guard."""
+    """Register the marker that lets a test past the sleep guard."""
     config.addinivalue_line(
         "markers",
-        "loopback: the test talks to a server it started itself on a loopback address, such as a fake PyPI or "
-        "`orchestrator serve`, whose HTTP over real sockets is what it tests. Connections to any other address "
-        "still fail. Loopback is not allowed to every test: the Jenkins and SonarQube a developer runs on this "
-        "machine listen there too.")
-    config.addinivalue_line(
-        "markers",
-        "real_sleep: the test waits on something outside this process's control, a child process or a server "
-        "thread, by polling it with time.sleep: what it tests is how a program behaves with real processes "
-        "and real time. Keep such waits short and bounded by a deadline.")
-    config.addinivalue_line(
-        "markers",
-        "contract: the test talks to a live server elsewhere on the network, such as the real Jenkins, to check that "
-        "its answers have the shape the fakes give them. It may connect to any address. A run "
-        "deselects it unless asked, by pyproject.toml's addopts `-m \"not contract\"`: run it with `-m contract` "
-        "and the variables its module names, which it fails without.")
-
-
-def _is_loopback(address) -> bool:
-    """Whether a socket address, a (host, port, ...) tuple, names this machine's loopback interface."""
-    host = address[0] if isinstance(address, tuple) else address
-    if host == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(str(host).partition("%")[0]).is_loopback
-    except ValueError:  # a host name other than localhost
-        return False
+        "real_sleep: the test waits on something outside this process's control, a child process, by polling it with "
+        "time.sleep: what it tests is how a program behaves with real processes and real time. Keep such waits short "
+        "and bounded by a deadline.")
 
 
 @pytest.fixture(autouse=True)
-def no_network(request, monkeypatch):
+def no_network(monkeypatch):
     """For the length of each test, make socket.socket.connect, connect_ex and socket.create_connection raise
-    NetworkUsed for any address but a Unix socket's or, in a test marked loopback, a loopback address. A test marked
-    contract is not guarded."""
-    if request.node.get_closest_marker("contract") is not None:
-        return
-    loopback = request.node.get_closest_marker("loopback") is not None
+    NetworkUsed for any address but a Unix socket's."""
 
     def check(family, address):
-        if family == socket.AF_UNIX or (loopback and _is_loopback(address)):
-            return
-        allowed = "only to a loopback address" if loopback else "to no address; see the loopback marker"
-        raise NetworkUsed(f"the test connected to {address!r}, and tests connect {allowed} (tests/conftest.py)")
+        if family != socket.AF_UNIX:
+            raise NetworkUsed(f"the test connected to {address!r}, and tests connect to no address (tests/conftest.py)")
 
     def connect(sock, address):
         check(sock.family, address)

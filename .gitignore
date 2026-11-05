@@ -1,0 +1,28 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# What `uv run pytest --cov ...` and `gate.py --out` write
+.coverage
+coverage.xml
+coverage-rust.xml
+test-results.xml
+quality.md
+
+# The build output of the gate-rust helper
+gate-rust/target/
+/target/
+
+# What Hypothesis keeps of the examples it tried, and mutmut's working copy
+.hypothesis/
+mutants/
+
+# Agent working notes
+.scratch/
+TESTING.md

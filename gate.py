@@ -19,8 +19,8 @@ So run it with that project's Python, in which its dev tools are installed, such
 reads through a helper of its own, built from gate-rust, which --rust-syntax names (GateChange.rust_files).
 
 docs/quality-gate.md says what the gate judges and why, and, under "The quality file as a contract", which parts
-of the file's format the orchestrator reads back. The orchestrator imports nothing from this module: it keeps its
-own copy of those parts, and TestQualityFileContract checks that the two agree.
+of the file's format a program that reads it back, such as octoflow's orchestrator, may rely on; tests/golden/ holds
+the files the gate writes for its tests, which such a reader checks itself against.
 """
 
 import argparse

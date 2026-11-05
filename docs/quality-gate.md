@@ -1,24 +1,27 @@
 # Quality gate
 
-How Jenkins judges this repository with `gate.py`, and how `orchestrator run --quality-gate` uses
-it: the [gate](#the-gate) itself, [running it in another project](#running-the-gate-in-another-project), the
-[quality file as a contract](#the-quality-file-as-a-contract) between the gate and the orchestrator, the
-[Jenkins setup](#jenkins-setup), the
-[credentials and permissions](#credentials-and-permissions) the orchestrator needs, the
-[orchestrator loop](#orchestrator-loop), and the [orchestrator's own checks](#the-orchestrators-checks), which
-need the run's spec.
+What `gate.py` judges and why: the [gate](#the-gate) itself, its [Rust tests and
+coverage](#rust-tests-and-coverage), the [gate-rust helper](#reading-rust-the-gate-rust-helper) it reads Rust with,
+[whose rules judge a change](#whose-rules-judge-a-change), and the [quality file as a
+contract](#the-quality-file-as-a-contract) with the programs that read it back. [README.md](../README.md) says how to
+run it in a project.
+
+The gate was written inside [octoflow](https://github.com/DavidSiegl/octoflow-ai), whose orchestrator has an agent,
+the Builder, answer the quality file and another, the Reviewer, judge the answer; this document still names them
+where it says who a part of the file is for, and cites octoflow's pull requests and measurements where a decision
+was made on them.
 
 ## The gate
 
 `gate.py --base REV` judges the change from `REV` to the working tree and writes the quality file:
 
 ```bash
-uv run pytest --cov=orchestrator --cov=gate --cov-branch --cov-report=xml --junitxml=test-results.xml
-cargo llvm-cov nextest --workspace --ignore-run-fail --profile ci \
+uv run pytest --cov=gate --cov-branch --cov-report=xml --junitxml=test-results.xml
+cargo llvm-cov nextest --manifest-path gate-rust/Cargo.toml --ignore-run-fail --profile ci \
     --config-file ci/nextest.toml --cobertura --output-path coverage-rust.xml
-cargo build --release --locked --manifest-path ci/gate-rust/Cargo.toml
-uv run python gate.py --base main --tests test-results.xml --tests target/nextest/ci/junit.xml \
-    --coverage coverage.xml --coverage coverage-rust.xml --rust-syntax ci/gate-rust/target/release/gate-rust \
+cargo build --release --locked --manifest-path gate-rust/Cargo.toml
+uv run python gate.py --base main --tests test-results.xml --tests gate-rust/target/nextest/ci/junit.xml \
+    --coverage coverage.xml --coverage coverage-rust.xml --rust-syntax gate-rust/target/release/gate-rust \
     --out quality.md
 ```
 
@@ -27,10 +30,6 @@ cargo-nextest](#rust-tests-and-coverage); without them, leave out the Rust repor
 alone. The `cargo build` builds the helper the gate reads Rust with ([gate-rust](#reading-rust-the-gate-rust-helper)),
 which `--rust-syntax` names.
 
-`gate.py` is a program of its own beside the engine, and the two share no code: the engine, Rust since 0.49.0, runs
-none of it and reads only the file it writes ([the quality file as a
-contract](#the-quality-file-as-a-contract)).
-
 It runs six linters over the files git tracks outside `mutants/` (below), each over the files it reads, and keeps
 only the findings on lines the change adds, and the lineless ones on files it touches. Findings on older lines are
 counted, never listed and never held against the change, so the gate judges the change rather than the codebase.
@@ -38,11 +37,11 @@ counted, never listed and never held against the change, so the gate judges the 
 | Linter | Files | Rules |
 |---|---|---|
 | ruff | `*.py` | `[tool.ruff.lint]` in `pyproject.toml` |
-| mypy | `[tool.mypy] files`, here `gate.py` and the eval runner | `[tool.mypy]` |
+| mypy | `[tool.mypy] files`, here `gate.py` | `[tool.mypy]` |
 | pymarkdown | `*.md` | `[tool.pymarkdown]` |
 | shellcheck | `*.sh` | its defaults |
 | actionlint | `.github/workflows/*.yml` | its defaults |
-| clippy | `*.rs`, in each Cargo workspace, here the top-level one and `ci/gate-rust/` | the workspace's `[lints]` and `clippy.toml` |
+| clippy | `*.rs`, in each Cargo workspace, here `gate-rust/` | the workspace's `[lints]` and `clippy.toml` |
 
 ruff's rules include the coding rules the agents are given as prose that a linter can apply, so that every harness
 gets them, every time: a docstring on every public module, class, method and function (`D100`-`D104`, `D106`,
@@ -69,7 +68,7 @@ cargo's own: a change that deletes a function an old line calls breaks the build
 that outlives its timeout is killed with every process it started, such as cargo's rustc.
 
 ruff, mypy and pymarkdownlnt are in uv's `dev` group, so `uv run` puts them on `PATH`; shellcheck, actionlint, cargo
-and clippy come from the Jenkins agent image (see "What Jenkins needs"). `gate.py` stays stdlib-only: it runs them
+and clippy from the machine, in Jenkins the agent image. `gate.py` stays stdlib-only: it runs them
 as processes.
 
 After the linters come the checks `gate_checks` gives, which judge what the change did rather than how the tree
@@ -561,8 +560,8 @@ first, at most 50 in all, then a count:
   a string or a docstring are not one; `# shellcheck disable` in a `.sh` file or a workflow under
   `.github/workflows/`; in Markdown, a `<!-- pyml disable` pragma that is a line of its own, from its first column,
   as pymarkdown reads one; the attributes in Rust. Any other file has none.
-- **Build configuration**: an edit to `Jenkinsfile`, `pyproject.toml` or `uv.lock` is noted, since each can change how
-  the change was judged, as is one to a file anywhere in the tree that clippy takes its rules or its toolchain from
+- **Build configuration**: an edit to `pyproject.toml` or `uv.lock` (`BUILD_CONFIG_FILES`) is noted, since each can
+  change how the change was judged, as is one to a file anywhere in the tree that clippy takes its rules or its toolchain from
   (`Cargo.toml`, `clippy.toml`, `rust-toolchain.toml`, `.cargo/config.toml`; `CLIPPY_CONFIG_NAMES` in `gate.py`),
   and cargo's `config.toml` in the `CARGO_HOME` clippy runs with when that lies inside the tree, as the Jenkinsfile's
   `.cargo-home` does.
@@ -572,43 +571,43 @@ first, at most 50 in all, then a count:
 The Rust tests run with [cargo-nextest](https://nexte.st/), under
 [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov), which builds them with rustc's `-C instrument-coverage`
 and turns what they ran into a Cobertura report with the toolchain's own `llvm-profdata` and `llvm-cov`, from rustup's
-`llvm-tools-preview` component. Jenkins's Test stage runs them in the repository's one Cargo workspace, the top-level
-`Cargo.toml`, whose members are the engine (`engine/`) and the desktop shell (`ui/src-tauri/`):
+`llvm-tools-preview` component. This repository's Jenkins Test stage runs them in its one Cargo workspace,
+`gate-rust/`:
 
 ```bash
-cargo llvm-cov nextest --locked --workspace --ignore-run-fail --profile ci --config-file "$WORKSPACE/ci/nextest.toml" \
-    --cobertura --output-path "$WORKSPACE/coverage-rust.xml"
+cargo llvm-cov nextest --locked --manifest-path gate-rust/Cargo.toml --ignore-run-fail --profile ci \
+    --config-file "$WORKSPACE/ci/nextest.toml" --cobertura --output-path "$WORKSPACE/coverage-rust.xml"
 ```
 
 - **What it measures** is lines, not branches: branch coverage of Rust needs a nightly compiler. Each line of the
   workspace's own crates that the compiler maps to code counts, the dependencies' do not. That includes the lines of
-  a `#[cfg(test)]` module, which coverage.py's `--cov=orchestrator --cov=gate` leaves out of the Python's: the tests'
+  a `#[cfg(test)]` module, which coverage.py's `--cov=gate` leaves out of the Python's: the tests'
   own lines count as covered when they run, so they raise a change's coverage that adds both a function and its tests
   (`TODO.md`).
 - **Paths.** cargo-llvm-cov names each file relative to the workspace's directory, which it gives as the report's
-  `<source>`, here the repository's top, so the gate reads `engine/src/lib.rs` as it is, as long as the report was
-  written in the tree the gate judges; an absolute path stands as it is.
+  `<source>`, as an absolute path, so the gate reads `src/main.rs` of `gate-rust/` as `gate-rust/src/main.rs`, as
+  long as the report was written in the tree the gate judges; an absolute path stands as it is.
 - **Failing tests** do not stop the build, as pytest's do not: `--ignore-run-fail` runs every test and writes the
   report whatever fails, and the `ci` profile of `ci/nextest.toml` writes their JUnit report to
-  `target/nextest/ci/junit.xml` in the workspace, which the Gate stage passes as another `--tests`. A workspace that
+  `target/nextest/ci/junit.xml` in the workspace, here `gate-rust/target/nextest/ci/junit.xml`, which the Gate stage passes as another `--tests`. A workspace that
   does not compile stops the build there, and so does a run that leaves no JUnit report, since `--ignore-run-fail`
   also passes a nextest that ran no test. `--config-file` replaces the workspace's own `.config/nextest.toml`, so a
   change cannot configure how its tests run in Jenkins.
 - **Doctests** do not run: cargo-nextest has none, and cargo-llvm-cov runs them only on a nightly toolchain
   (`TODO.md`).
 - **Where the tools come from**: `ci/install-tools.sh` downloads cargo-llvm-cov and cargo-nextest, each pinned by
-  version and the sha256 of its release's archive, as it does cargo-about for the Package stage; rustup's `llvm-tools` component comes with the agent image, as
-  clippy does (see [What Jenkins needs](#what-jenkins-needs)).
+  version and the sha256 of its release's archive; rustup's `llvm-tools` component comes with the agent image, as
+  clippy does.
 
 ### Reading Rust: the gate-rust helper
 
 `gate.py` stays one stdlib-only file, so it reads Rust through a program of its own, `gate-rust`, a small crate in
-`ci/gate-rust/` built on [syn](https://docs.rs/syn/2), which parses each file it is given and prints what the checks
+`gate-rust/` built on [syn](https://docs.rs/syn/2), which parses each file it is given and prints what the checks
 need to know of it as JSON. `gate.py --rust-syntax PATH` names the built binary:
 
 ```bash
-cargo build --release --locked --manifest-path ci/gate-rust/Cargo.toml
-uv run python gate.py --base main --rust-syntax ci/gate-rust/target/release/gate-rust --out quality.md
+cargo build --release --locked --manifest-path gate-rust/Cargo.toml
+uv run python gate.py --base main --rust-syntax gate-rust/target/release/gate-rust --out quality.md
 ```
 
 The gate runs it once per run, over every `.rs` file the change adds, edits, deletes or renames, on both sides of the
@@ -728,45 +727,20 @@ a change that adds or edits files there fails the gate, as [the gate](#the-gate)
 The rule sets were tuned until `main` gave a short list of real findings: ruff's defaults plus bugbear,
 simplifications, pyupgrade, bandit, cyclomatic complexity (`C90`, `max-complexity = 15`; nesting is the
 `cognitive-complexity` check's) and pylint's errors and warnings, with the fake tokens, paths and fixtures of `tests/`
-exempt; mypy at its default strictness on `gate.py` and the eval runner; pymarkdown without the line-length and
+exempt; mypy at its default strictness on `gate.py`; pymarkdown without the line-length and
 inline-HTML rules. Only lines a change adds count, so what `main` already has does not block.
-
-## Running the gate in another project
-
-`gate.py` is one file and imports only the standard library, so another Python project runs it as this one does:
-take the file from a commit of this repository (`git show main:gate.py > gate.py`) and run it in the project's
-working tree, with the project's own Python:
-
-```bash
-uv run pytest --cov=<package> --cov-branch --cov-report=xml --junitxml=test-results.xml
-uv run python path/to/gate.py --base main --tests test-results.xml --coverage coverage.xml --out quality.md
-```
-
-It takes what it runs from that project, so the project's dev dependencies hold them: ruff, mypy and pymarkdownlnt from
-`PATH`, which `uv run` points at the project's environment, and pytest, pytest-randomly and mutmut through the Python
-that runs `gate.py`, for the flaky-tests, passes-at-base and surviving-mutants checks. shellcheck, actionlint and clippy
-come from the machine, and only for a project that tracks shell scripts, GitHub workflows or Rust files. A change to
-Rust files is read with the [gate-rust helper](#reading-rust-the-gate-rust-helper), built from this repository's
-`ci/gate-rust/` at the same commit as `gate.py` and named with `--rust-syntax`; a project without Rust needs neither. A linter that
-is missing is a failed condition naming it, and for clippy that is a `cargo clippy --version` that fails, as it does
-where rustup's `clippy` component is not installed; a check that cannot run is one of its own findings. The rules come
-from the project's `pyproject.toml`, or the one `--config` names, as [whose rules judge a
-change](#whose-rules-judge-a-change) says. Which files the test-integrity check takes for tests is fixed for now:
-`tests/**`, `test_*.py` and `*_test.py`, and Rust's as [the gate](#the-gate) says.
 
 ## The quality file as a contract
 
-The gate writes the quality file and the orchestrator reads it back: from Jenkins after each quality round, to
-decide whether the gate passed, to compare one round's failures with the last (`gate_failures`, and
-`GateFailures.repeats` for a stuck loop), and to amend it with its own checks (`judge_run`). Neither imports the
-other. Each keeps its own copy of the parts below, the gate's in `gate.py` and the engine's in `engine/src/quality.rs`
-beside `parse_gate`. `TestQualityFileContract` holds the engine's copies of the format's words to the gate's, and the
-engine's `the_engine_reads_what_the_gate_writes` reads the quality files the gate's tests hold to `tests/golden/` as
-it reads a build's. A change to one of these parts changes both copies.
+A program that reads the quality file back, such as [octoflow](https://github.com/DavidSiegl/octoflow-ai)'s
+orchestrator, which runs the gate in Jenkins after each round of its Builder's, may rely on the parts below and on
+nothing else. It keeps its own copy of them rather than importing `gate.py`, and checks that copy against the files
+the gate's tests write to `tests/golden/` (`gate_*.md`, `quality_report_*.md`), which change whenever the format
+does. So a change to one of these parts is a change to every reader's.
 
-- **The gate line.** The first non-blank line is `GATE: OK` or `GATE: ERROR`; the reader tolerates Markdown
-  emphasis around it. Only the orchestrator writes `GATE: BUILD_FAILED`, for a build that ended before its Gate
-  stage, and `GATE: LEAK`, for a snapshot it did not push.
+- **The gate line.** The first non-blank line is `GATE: OK` or `GATE: ERROR`; a reader should tolerate Markdown
+  emphasis around it. The gate writes no other; a reader may add its own, as octoflow's `GATE: BUILD_FAILED` for a
+  build that ended before the gate ran.
 - **Sections.** Each starts with a level-2 heading, a line that starts with `##` and a space, and runs to the next.
 - **Failed conditions.** Under `## Failed conditions`, one bullet per condition, as the file words it.
 - **Numbered findings.** Issues and findings to weigh, numbered as one list over the whole file, at most
@@ -782,496 +756,5 @@ it reads a build's. A change to one of these parts changes both copies.
   escape, `\x0d` or `\u2028`, in every list item and name (`one_line`), so each item is read back as the one line
   it was written as.
 
-Everything else in the file, such as the intro, coverage, suppressions and build configuration, is for the Builder
-and the Reviewer to read; the orchestrator passes it on as it is.
-
-## Jenkins setup
-
-One `Jenkinsfile` serves two jobs. Every build installs, tests with branch coverage of `orchestrator` and `gate` and
-line coverage of the Rust, checks the desktop app's frontend, runs the gate and archives `quality.md`; a pull request or
-`main` build then builds the Linux binary and desktop app, which a quality build skips (the `Jenkinsfile`'s Package
-stage says why), and a build of `main` that gets that far also releases. A build of `main` whose tree a pull request
-build already judged skips the tests, the desktop app's checks and the gate (see [A build of main judged at its pull
-request](#a-build-of-main-judged-at-its-pull-request)).
-
-### What Jenkins needs
-
-- **Plugins**: Pipeline, Git, JUnit, Workspace Cleanup, Credentials Binding and Email Extension, and GitHub Branch
-  Source for the multibranch job. Email Extension sends with Jenkins's own SMTP settings.
-- **An agent labelled `untrusted`**, which the `Jenkinsfile` asks for. Builds run code the agents wrote, so the
-  agent must hold nothing an agent should not have: in the homelab it is a container on the agents' own box,
-  restricted to this folder's jobs, while the agents that deploy accept no job from this folder. A label alone
-  does not enforce that - a pushed branch's `Jenkinsfile` can ask for any label - so the restriction sits on
-  the nodes, with the Job Restrictions plugin.
-- **`uv`, `git`, `shellcheck`, `actionlint` and clippy on the agent**: the Install stage runs `uv sync --frozen`,
-  and `uv` brings the Python of `.python-version`; clippy and llvm-tools (which cargo-llvm-cov reads its coverage
-  data with) are rustup components of the Rust below, which the agent image must add: its rustup home is root's, so
-  a build cannot, and the Install stage fails naming a missing one. The gate fails a build that lacks a linter, and
-  the tests that run the real clippy fail without it.
-- **`curl`, `sha256sum`, `tar` and `openssl` on the agent**: the Install stage downloads, with `ci/install-tools.sh`,
-  pinned releases of the gitleaks the e2e scenarios (`engine/e2e`) run, of cargo-llvm-cov and cargo-nextest,
-  for the [Rust tests and coverage](#rust-tests-and-coverage) and the passes-at-base check's run of the changed Rust
-  tests at the base, of cargo-mutants, for the surviving-mutants check's Rust, and of cargo-about, for the Package
-  stage's third-party licenses, into the workspace's `.tools/bin`,
-  which the Jenkinsfile puts first on `PATH`. cargo-mutants releases only a glibc build for linux x86_64, so the agent
-  image's glibc must be one it runs on. The scenarios make the fake PyPI's certificate with openssl. Without gitleaks or openssl the
-  scenarios fail, naming it.
-- **Node 20.19 or later and npm, Rust 1.90 or later, and Tauri 2's system packages on the agent**, for the Test stage's
-  Rust tests, the UI stage's checks of the desktop app and the Package stage's `tauri build` of it. Debian 13's `nodejs`
-  and `npm` packages do for the frontend (`ui/.npmrc` makes their npm 9.2 resolve the tree), but its Rust 1.85 is older
-  than the shell's locked Tauri crates need; the packages are `libwebkit2gtk-4.1-dev`, `build-essential`, `pkg-config`,
-  `libxdo-dev`, `libssl-dev` and `file` ([Tauri's prerequisites](https://v2.tauri.app/start/prerequisites/)). A clean
-  `cargo test` took about 100 s on 2 CPUs, and the Test stage's instrumented run of the same tests about 100 s on 3 of
-  the development host's CPUs; `CARGO_HOME` is kept in the workspace, so nothing is cached between builds. The UI stage
-  runs `cargo check` under the same lock, since the Test stage's build of the dependencies is not the check clippy
-  needs: with them checked, the Gate stage's clippy checks only the workspace's own crates, in about 2 s for the shell
-  alone, against 77 s for a clean one on the development host's 6 CPUs. The Install stage builds the
-  [gate-rust helper](#reading-rust-the-gate-rust-helper) with `cargo build --release --locked`, from the judged
-  `main`'s `ci/gate-rust/` in a quality build, fetching syn, proc-macro2 and serde_json from crates.io, in about 35 s
-  on those 6 CPUs, and checks the tree's own `ci/gate-rust/`, a package outside the top-level workspace, for the Gate
-  stage's clippy as the UI stage checks the workspace, in about 4 s, which leaves clippy under a second for it. A
-  helper that does not build, as when crates.io cannot be reached, does not stop the build: the gate then reports a
-  change to Rust as not run by each check that reads it. Package bundles the `.deb` with `dpkg-deb`, and the `.AppImage` with `linuxdeploy`,
-  which `tauri build` downloads from GitHub each build.
-- **`gh` on the agent, and a GitHub token** for the Release stage: a Secret text credential with the ID
-  `GitHub-Agents`, holding a token with *Contents: read and write* on this repository. It is the agents' own
-  `gh` token, so when that is rotated the credential must be too, or every build of `main` fails at Release.
-  Only builds of `main` use it, for Release and to read pull request statuses.
-- **A GitHub App of Jenkins's own, as the checkout credential**: both jobs check out with `GitHub-Agents-scm`,
-  a GitHub Branch Source *GitHub App* credential, and Jenkins reports each pull request's
-  `continuous-integration/jenkins/pr-head` status with it. The App needs *Contents: read*, *Pull requests:
-  read* and *Commit statuses: read and write* on this repository - without the last the build passes and the
-  required check waits forever, the log saying `Could not update commit status ... 403`. Its login,
-  `<app-slug>[bot]`, is `PR_STATUS_CREATOR` in the `Jenkinsfile`, and the ruleset on `main` requires the
-  `pr-head` check from that App, not from any source. The agents' token cannot post as the App, so a green
-  required check, and the status a build of `main` trusts, show that Jenkins set it. With the agents' token as
-  the checkout credential instead, as before, the agents could post that status themselves.
-  Keep the credentials in this folder's own store, not the global one: any build can bind any credential it
-  can see by ID, and a pushed branch's `Jenkinsfile` is a build.
-
-### The two jobs
-
-Both load the `Jenkinsfile` with "Pipeline script from SCM". The Checkout stage needs that: it runs
-`checkout scm`, or fetches `GIT_REF` from `scm`'s remote.
-
-- **The ordinary job**, a Multibranch Pipeline, builds `main` and every pull request. Its branch source needs:
-  - **Discover branches** set to *Exclude branches that are also filed as PRs*, so an `orchestrator/*` branch
-    is built once, as its pull request.
-  - **Filter by name (with wildcards)** excluding `orchestrator-ci/*`. The orchestrator pushes its snapshots
-    there for the quality job and deletes them afterwards; the multibranch job would otherwise build each one
-    as a branch of its own.
-- **The quality job**, here `AI-Agents-Orchestrator/py-ai-agents-orchestrator-quality`: a plain Pipeline job that
-  loads the `Jenkinsfile` from `main`. It takes any ref as a parameter, keeps quality builds out of the ordinary
-  job's history, and a change to the `Jenkinsfile` cannot alter how that same change is judged.
-
-Jenkins learns a Jenkinsfile's `parameters` only by running it, so a new job needs one build, by hand and with an
-empty `GIT_REF`, before it accepts `buildWithParameters`.
-
-### What the Gate stage judges
-
-| Build | `--base` | Gate and rules |
-|---|---|---|
-| Quality build (`GIT_REF` set) | `HEAD^`: the snapshot's only parent is the run's base | `main`'s `gate.py`, `pyproject.toml` and gate-rust helper, from the `origin/main` commit its description names (below); a commit without `gate.py` fails the stage, unjudged |
-| Pull request (`CHANGE_TARGET` set) | the merge base with the target branch, fetched first | its own, `Jenkinsfile` included (below) |
-| `main` | the last successful build's commit, else `HEAD^1`, as also when a force-push took that commit out of the history | its own; none when judged at its pull request (below) |
-
-Before Install runs any code of the change, a quality build's Checkout stage sets its build description to
-`judged tree=<sha> parent=<sha> main=<sha>`, exactly: full lowercase shas, one space apart. `tree` is the
-snapshot's tree, `parent` its only parent, the run's base, and `main` the `origin/main` commit fetched then,
-whose gate and rules the Gate stage judges with. `orchestrator judged-in-quality` reads it to decide whether a
-pull request's head is a tree such a build already judged. A build restarted from a later stage skips Checkout,
-records nothing and so is never trusted; its Gate stage refuses to run without the recorded commit.
-
-A pull request is judged by the gate and rules it brings, and most from a branch of this repository merge once
-Jenkins's App reports `pr-head` green, with no human in between (`.github/workflows/automerge.yml` says which).
-The App's status is honest about the build, but the build ran the pull request's own `Jenkinsfile` and gate. So
-whoever can push a branch here, the agents included, can change the rules that branch's merge is judged by, and
-an agent's pull request, the orchestrator's own included, can reach `main` without a human. A fork's pull
-request still waits for one.
-
-The repository is public, so the stage fetches `main` or the target branch without credentials. `GIT_REF` and
-the base reach the shell as environment variables, never as Groovy-built shell code, and `GIT_REF` is otherwise
-interpolated only into the checkout's branch spec.
-
-### A build of main judged at its pull request
-
-A merge whose branch was up to date with `main` leaves `main` with the tree its pull request build judged: the
-same code, tests, `Jenkinsfile`, gate and rules. The "Judged at PR" stage runs `ci/judged-at-pr.sh`, and when it
-finds that build, `main`'s build skips Test and Gate, archives no `quality.md`, and goes on to Package and
-Release. The script's header says what counts as judged; in short, a `pr-head` success that Jenkins's App posted
-on a commit with `HEAD`'s tree that contains `HEAD^1`, with `HEAD^1` built successfully as `main`. A commit
-that was never built as `main`, such as one of several a rebase merge adds, or one after a failed build of
-`main`, is judged in full, so the lines of a failed build are never let through by a later skip. So is every
-merge whose branch was behind `main`: its merged tree was never built.
-
-A status counts only from Jenkins's own GitHub identity because anything a pull request build writes, an archived
-file included, comes from code the agents control: the `Jenkinsfile` and tests of every commit pushed to the
-pull request run unreviewed. Only the status Jenkins itself posts for a commit says that this commit's build,
-with this commit's `Jenkinsfile`, passed.
-
-### What each kind of build reports
-
-The Test stage does not stop at a failing test, so the gate reports failing tests together with the findings; it
-stops only when pytest itself could not run. The gate's exit status then decides:
-
-- **A quality build** ends UNSTABLE on `GATE: ERROR`, SUCCESS on `GATE: OK`. FAILURE means the change never got
-  as far as the gate, and its quality file is `GATE: BUILD_FAILED`.
-- **A pull request or `main`** fails on `GATE: ERROR`, so a red gate blocks the merge and `main`'s release.
-- **Any build** fails when the gate could not judge.
-
-The multibranch job mails a failed build of `main` or a pull request, with the log attached, and the first build
-that passes after one. The quality job mails nothing: its result goes to the orchestrator run that asked for it.
-
-A build of `main` that passes then releases the version in `pyproject.toml`: if GitHub has no release
-`v<version>` yet, `gh release create` makes one, with the tag at the commit built, notes generated from the pull
-requests merged since the last release, after the words of `docs/releases/v<version>.md` where there is one, and
-the Linux binary and desktop app with their `.sha256` attached. To release, raise
-`version` in the pull request; a merge that leaves it alone releases nothing. A release that already exists is
-skipped whole, so its files are never replaced.
-
-## Credentials and permissions
-
-The orchestrator talks to Jenkins itself, over HTTP from the machine it runs on, with these credentials:
-
-| Variable | What it holds |
-|---|---|
-| `JENKINS_URL` | Jenkins's base URL, e.g. `https://jenkins.example/` |
-| `JENKINS_USER`, `JENKINS_TOKEN` | the technical user `agents` and an API token of it |
-
-Put them in `~/.config/ai-agents-orchestrator/ci.env` (`$XDG_CONFIG_HOME/ai-agents-orchestrator/ci.env` if that
-is set), one `NAME=value` per line, and `chmod 600` it:
-
-```bash
-JENKINS_URL=https://jenkins.example/
-JENKINS_USER=agents
-JENKINS_TOKEN=…
-```
-
-The orchestrator reads the file itself, on `run` and `resume`, so no wrapper is needed. Comments, blank lines,
-a comment after a value, and an `export` before a name are allowed, so the same file can also be sourced by a
-shell, and it means the same to both. A value is quoted, or unquoted without blanks, quotes or shell syntax; a
-line that sh would read otherwise is refused, and so is a file with Windows line ends, since sh would keep each
-carriage return in its value.
-A variable set in the environment wins over the file, and the file is read only when one is missing. The
-orchestrator refuses a file that others may read.
-
-Never export them from `~/.bashrc` or a direnv `.envrc`: every agent's shell would have them. Values from the
-file stay inside the orchestrator process and are never put into its environment.
-
-Jenkins's user `agents` needs Overall/Read, and Job/Read and Job/Build on the `AI-Agents-Orchestrator` folder.
-
-The token travels only in the `Authorization` header, never in a URL, so no error message, `state.json` or log
-can carry it; text copied from Jenkins into a quality file has it replaced with `****`. Every process the
-orchestrator starts (herdr, and through `Host` git, ssh and gh) gets its environment without these three
-variables, so the agents cannot inherit them.
-
-**Known limitation**: the agents run as the same OS user as the orchestrator, so they can still read `ci.env`.
-Stripping the variables from subprocesses prevents inheritance, not access.
-
-## Orchestrator loop
-
-With `--quality-gate JOB`, every Builder turn is followed by a quality round, in round 1 and in each round after
-`CHANGES_REQUESTED`: Builder → quality gate → (if it does not pass, back to the Builder) → Reviewer.
-
-```text
-build ──▶ quality ──▶ review
-  ▲          │
-  └── not OK, quality round < --max-quality-rounds, and not stuck
-```
-
-A quality round snapshots the working tree, pushes the snapshot to a throwaway branch on `origin`, has the
-quality job judge it, and writes `quality-<n>-<q>.md`. The gate passes when the file says `GATE: OK`. Otherwise
-the Builder gets the quality file and answers it in `build-<n>-q<q>.md`, and the next quality round judges that.
-After `--max-quality-rounds` rounds (default 3) the change goes to the Reviewer anyway, whose prompt names the
-last quality file as unresolved findings. Three rounds are at most three builds and two fix turns, and each
-review round has its own budget. Without `--quality-gate`, a run behaves as it did before.
-
-The loop also stops early when it is stuck: when quality round Q fails on just what round Q-1 failed on, the
-Builder's turn between them fixed none of it, and another turn is unlikely to. `gate_failures` reads what failed
-from the quality file: its failed conditions, by their words; its failing tests; and each numbered finding before
-the findings to weigh, by `finding_fingerprint`, a hash of its path, rule and message with the digits taken out, so
-a finding whose line moved is the same finding. When round Q's failures are not empty and are round Q-1's, no more
-and no fewer (`GateFailures.repeats`), the change goes to the Reviewer, whose prompt ends with `QUALITY_STUCK_NOTE`,
-and the log says why. A build that failed with nothing listed has no failures to compare, so it is never stuck by
-this rule; a coverage condition is, while its percentage stays the same.
-
-### Snapshotting the uncommitted tree
-
-The Builder leaves its work uncommitted, and Jenkins can only fetch commits. `Host.snapshot(cwd, parent,
-message)` commits the working tree through a temporary index, in one `sh -c` script: it copies the real index,
-runs `git add -A` and `git write-tree` on the copy, and `git commit-tree` with `state.base` as the parent. No ref
-moves, and the index, HEAD and `git status` stay as they were. `git add -A` honours `.gitignore`, and
-`.orchestrator/` ignores itself, so the snapshot holds what the pull request's commit would. Its only parent
-being the base is what lets the Gate stage measure the whole change against `HEAD^`.
-
-The snapshot is pushed with `--force` to `orchestrator-ci/<key>-<n>-q<q>`; `--force` replaces what a failed
-attempt left. A finished round deletes its branch, and `done` deletes any the run left.
-
-### The calls
-
-The engine's `Jenkins` (`engine/src/ci.rs`) makes them through `Http`, its one seam to the network, so the tests
-replace Jenkins. Jenkins takes HTTP Basic `JENKINS_USER:JENKINS_TOKEN` (no crumb with an API token).
-Requests time out after `HTTP_TIMEOUT = 30` seconds. The job's full name may include folders: each `/` in it
-becomes `/job/` in its URL, so `AI-Agents-Orchestrator/py-ai-agents-orchestrator-quality` is
-`<JENKINS_URL>/job/AI-Agents-Orchestrator/job/py-ai-agents-orchestrator-quality/` (`<job>` below).
-
-- **Preflight**, before the interview: the three variables are set, and
-  `<job>/api/json?tree=property[parameterDefinitions[name]]` lists `GIT_REF`. The directory must be a git
-  repository, and a `--no-pr` run also needs a clean tree and an `origin`.
-- **Per quality round**: (1) POST `<job>/buildWithParameters` with `GIT_REF`, the queue item in `Location`; (2)
-  poll `<JENKINS_URL>/queue/item/<id>/api/json` for `executable.number`; (3) poll
-  `<job>/<number>/api/json?tree=building,result` and then `<job>/<number>/artifact/quality.md`, two requests each
-  interval, until the build has archived `quality.md` or has ended. Only for a build without one: (4)
-  `<job>/<number>/testReport/api/json`, and (5) the last 60 lines of `<job>/<number>/consoleText` when no test
-  failed.
-
-The engine's tests answer these calls with `FakeJenkins` (`engine/src/ci/fake.rs`), and the e2e scenarios with their
-world's Jenkins (`engine/e2e/tests/e2e/servers.rs`). `cargo xtask contract` makes them against the live quality job
-instead, through the engine's own `Jenkins`, and checks each raw answer has the fields and types the fakes give it; a
-field it finds shaped otherwise is fixed in the fakes in the same pull request. **It triggers one real build of the
-quality job**, with `GIT_REF=main`: nothing is pushed, and the Release stage does not run for a non-empty `GIT_REF`.
-Run it by hand, never in CI, before a release that changes `engine/src/ci.rs` or `engine/src/http.rs`, and after a
-Jenkins upgrade:
-
-```sh
-CONTRACT_JENKINS_URL=http://cicdbox0.lan:8084/ CONTRACT_JENKINS_USER=agents CONTRACT_JENKINS_TOKEN=... \
-    CONTRACT_JOB=Octoflow-AI/octoflow-ai-quality cargo xtask contract
-```
-
-Its variables are named apart from `JENKINS_URL` and the others of `ci.env`, so that one set for the engine never
-starts it by accident. It prints a line per step, `ok` or what differed, and exits 0 when steps 1 to 8 pass. The
-ninth, reported apart, says whether a quality round could have taken the build within `QUALITY_TIMEOUT` of the start:
-the build is waited for twice that, so that a slow build still has every answer checked, and it counts as taken when a
-round would take it. Two runs must not overlap, nor may another build of `main` be triggered during one: step 4 takes
-the newest build of `main` to be the one it triggered. `xtask/src/contract.rs`'s module comment gives the steps and the
-exit status.
-
-**Once the Gate stage has archived `quality.md`**, live or resumed, the round takes it without waiting for the stages
-after Gate, which cannot change its verdict: on a build that has ended, at the first read; on one still running, once
-two reads at least a poll interval apart agree and hold a whole non-blank line, since Jenkins serves an artifact while
-it is still being copied into place; a copy that stalls that long past its first line and then resumes would defeat
-this. Whatever the build's result, that file is the
-round's, with [the orchestrator's checks](#the-orchestrators-checks) added and a line under its `GATE:` line naming the
-build, the snapshot and the round, and saying that the build ended with its result or was still running. The round then
-deletes its branch, which the build checked out in its first stage; a pipeline that fetches `GIT_REF` again after Gate
-finds it gone. **Without `quality.md`**, from a build that ended ABORTED or one cancelled in the queue, nothing judged
-the change, so the run fails with `ci` cut back to `ref` and `sha`, and the Builder gets no fix turn. Without it
-otherwise: `GATE: BUILD_FAILED`, with the failing tests or the console's end, and a fix turn. A build cut back that way
-is recorded in `ci.rejected`, so a resume builds the snapshot again instead of adopting that build.
-
-**When Jenkins fails**, rather than the change: a request that got no answer, or a 5xx, is retried every
-`CI_POLL_SECONDS = 10` until `QUALITY_TIMEOUT = 1200` seconds after the round started; the run then fails, naming
-the step and keeping `ci`, and a resume gets a fresh timeout. Any other answer, such as 401, 403 or 404, fails the
-run at once, naming the step, method, URL and status. A 404 on the trigger means the job was deleted. The poll
-loops call `_heartbeat`, so a long build does not make the run look stale.
-
-### The orchestrator's checks
-
-Some checks need the run's spec, which lives in the run directory (`.orchestrator/`, ignored, so never in a
-snapshot) and so never reaches Jenkins. The orchestrator runs these itself, in each quality round, after it reads
-the build's `quality.md` and before it writes `quality-<n>-<q>.md`; a build that ended before its Gate stage gets
-none of them. They run only with `--quality-gate`. The spec is the contract step's file, `spec.md` in the default
-workflow, or the run's task for a workflow without one. Each check is an `OrchestratorCheck` in
-`orchestrator_checks`, and judges the change from the run's base to the round's snapshot:
-
-| Check | Fails? | Finds |
-|---|---|---|
-| `new-dependencies` | yes | packages the change adds that the spec does not name or their index does not know |
-| `diff-budget` | no | a change over the workflow's `max_files` or `max_lines` |
-| `unexpected-paths` | no | changed paths the spec never mentions |
-
-**New dependencies** reads the project's manifests from the repository's top level only, in two ecosystems: a Python
-project's `pyproject.toml` and the `uv.lock` beside it, when the change touches either, and a Cargo workspace's
-`Cargo.toml`, the manifests of the members its `[workspace] members` names and the `Cargo.lock` beside it, when the
-change touches any `Cargo.toml` or that `Cargo.lock`. A manifest anywhere else, such as a test fixture, is not the
-project's. It reads them in the snapshot and at the base, both from the top level: a file the change moves there, such
-as a fixture's `pyproject.toml`, was not the project's at the base, so what it lists is new. The direct dependencies
-are `pyproject.toml`'s `[project] dependencies` and `optional-dependencies` and its `[dependency-groups]`, the project
-itself left out, so `all = ["myproj[a,b]"]` adds nothing; the locked packages are `uv.lock`'s, the project and its
-workspace members left out. A Cargo workspace's direct dependencies are the `[dependencies]`, `[dev-dependencies]` and
-`[build-dependencies]` of the top-level manifest and each member's, with their `[target.<cfg>]` forms, and the top
-level's `[workspace.dependencies]`, each by its crate's name (its `package` when the entry renames it); a member named
-by a glob, such as `crates/*`, makes the manifest `unreadable`, since the check does not expand it. The locked
-packages are `Cargo.lock`'s from a registry or a repository, the workspace's own crates and those from a path left
-out. A package is new when the snapshot's files name it and the base's do not. Names compare as PyPI compares them
-(PEP 503), which is also how crates.io compares a crate's, and the spec names a package when it holds the name as a
-word, in any case, so `pytest_randomly` names `pytest-randomly` and `pytest-randomly` does not name `pytest`. The spec
-was agreed with the human, so naming a package there is the approval.
-
-Where a package comes from decides whether its index, PyPI for a Python package and crates.io for a crate, is asked
-about it. A direct dependency's source is its `[tool.uv.sources]` entry (`workspace`, `path`, `git`, `url` or
-`index`), else its PEP 508 URL (`name @ url`), else the `[[tool.uv.index]]` marked `default = true`, else the registry
-`uv.lock` has it from; a locked package's is its `source` in `uv.lock`. A package named from several sources is a
-dependency from each: a requirement with a URL beside one without, each entry of a `[tool.uv.sources]` list (each for
-some platforms), each registry `uv.lock` has it from. Only a package from PyPI's own index
-(`https://pypi.org/simple`) is looked up, at `https://pypi.org/pypi/<name>/json`, with a timeout of 15 seconds
-(`PYPI_TIMEOUT`). A package from another index is never looked up on pypi.org, so a name someone squatted there cannot
-lend it pypi.org's metadata: that is the dependency-confusion case, and the finding names the index instead. Such a
-package is therefore never `not-on-pypi`; only the spec rule can fail it. A crate's source is its entry's: `path`, a
-member of the workspace, which the spec need not name; `git`; `registry` or `registry-index`, an index other than
-crates.io, whose crate is `other-index`; else crates.io. An entry with `workspace = true` has its
-`[workspace.dependencies]` entry's source; one whose `workspace` is anything else, such as `"true"` or `false`,
-makes its manifest `unreadable`, as Cargo refuses it. A locked crate has its `source` in `Cargo.lock`. A crate named
-from several sources, such as `foo = "1"` in `[dependencies]` and `foo = { git = "..." }` under
-`[target.'cfg(windows)'.dependencies]`, is a dependency from each, and each source of a new crate is judged on its
-own. Only a crate from crates.io is looked up, at `https://crates.io/api/v1/crates/<name>`, with a timeout of 15 seconds
-(`CRATES_IO_TIMEOUT`) and a User-Agent that names the project, which crates.io requires; nothing of the user's goes
-with it. Its first release is the crate's creation, and its latest version crates.io's default one, the highest that
-is neither yanked nor a pre-release.
-
-- `not-in-spec` (fails): a new direct dependency the spec does not name, with where it comes from, unless it is a
-  member of the project's workspace (`{ workspace = true }`): the project's own code, not a package from outside;
-- `not-on-pypi` (fails): a package from PyPI that PyPI answers 404 for. That is the slopsquatting case: a name an
-  agent made up, which anyone could register. `not-on-crates-io` is the same for a crate;
-- `unchecked` (fails): the packages from an index that it was not asked about, one finding per index, because a
-  request got no usable answer (no answer, a timeout, an HTTP error other than 404, an answer that is not the index's
-  JSON), or because the quality round had too little time left. An index is asked no more after the first such
-  request it gets, while the other still is, and none is started with less than 60 seconds (`SLOW_STEP_MARGIN`) of
-  the round's `QUALITY_TIMEOUT` left. The run's heartbeat is kept between
-  requests, so a long list of new packages cannot make a live run look stale. A package that could not be checked is
-  never reported as passed, so the next quality round asks again;
-- `unreadable` (fails): a manifest in the change that is not UTF-8 TOML, or not in the shape above. One that cannot
-  be read at the base is a finding to weigh instead, since the Builder did not write it, and so is one that cannot be
-  read in the change because it could not at the base either. Each manifest is judged by its own two sides, so a
-  `pyproject.toml` the change breaks fails even beside a `uv.lock` broken all along. Either way that ecosystem's new
-  dependencies are not checked;
-- `added` (reports): a new direct dependency the spec names, or a workspace member, with its first release date, its
-  latest version and its date, and its license, or the path, repository or URL it comes from. `young` instead when its
-  first release is less than 14 days old (`YOUNG_PACKAGE_DAYS`), or it has no release files: few have used it yet.
-  `other-index` instead for one from an index other than its ecosystem's, naming the index, and `unknown-source` for one whose
-  `[tool.uv.sources]` entry has a shape this check does not know (none of `workspace`, `path`, `git`, `url` or
-  `index`), quoting the entry: where it comes from is not checked, so it is reported rather than passed in silence;
-- `pulled-in` (reports): one finding per `uv.lock` or `Cargo.lock`, listing with the same facts the packages it alone
-  adds, those the new dependencies pull in, a package from several sources once for each. The spec cannot be expected
-  to name them;
-- `source-changed` (reports): a dependency the project already had, direct or locked, that the change takes from
-  a source it did not, instead or as well, naming the sources of both sides: `requests` moved from PyPI to
-  `{ index = "evil" }` is the dependency-confusion move without a new name. A new default index moves every
-  dependency without a source of its own.
-
-**Diff budget** counts the files the change touches and the lines it adds and removes, from `git diff --numstat -M`
-(`Host::changed_line_counts`); a rename counts as one file, with the lines it changes, and a binary file as a file of
-no lines. Over either limit it is one finding about the change as a whole, naming each count over its limit; within
-both it reports nothing, so the counts of a change of usual size do not take a number the Builder must answer. The
-limits are workflow keys, a whole number of at least 1 each, in a workflow file next to `description`:
-
-```toml
-max_files = 15   # the defaults
-max_lines = 600
-```
-
-They belong to the workflow rather than to the quality-gated step, because the change a quality round judges runs
-from the run's base, so it holds every editing step's work, a Test Writer's as well as the Builder's.
-
-**Unexpected paths** is a finding for each path the change touches, or deletes, that the spec mentions neither as a
-whole nor by its file name. A rename is judged at its new path only. A path or name counts as mentioned only where it
-appears whole in the spec, as a plain substring: naming `docs/` does not cover `docs/x.md`.
-
-The findings go into the quality file as the gate's do, with `{path, line, severity, rule, message}` and the rule
-prefixed by the check's name, in one last section, `## The orchestrator's checks`, which holds both the failing ones
-and those to weigh. They are numbered on from the build's last number, failing ones first, then the findings to weigh
-under the same lead sentence as the gate's. The limit of 50 is the whole file's: they are listed only while the file
-holds fewer, and the rest are counted. A check with failing findings is a failed condition, added to the build's, and
-turns `GATE: OK` into `GATE: ERROR`. Findings to weigh never change the gate. The Builder answers them all by number,
-as it answers the gate's.
-
-### What goes to the Builder
-
-`QUALITY_FIX_PROMPT` names the quality file and the Builder's next report, `build-<n>-q<q>.md`, whose findings it
-answers by number. A Builder in a fresh session gets `BUILD_PROMPT`, `REBUILD_NOTE` with every earlier report, and
-`QUALITY_FIX_PROMPT`. The Reviewer's prompt ends with `QUALITY_PASSED_NOTE`, `QUALITY_UNRESOLVED_NOTE` or
-`QUALITY_STUCK_NOTE`, naming the round's last quality file, and points at the Builder's last report of the round.
-The pull request's description includes the last quality file.
-
-A snapshot in which gitleaks, by the base's rules, finds a secret or an added comment telling it to allow a line is not
-pushed, and no build is triggered. Its quality file is `GATE: LEAK`, saying why, with the findings numbered under
-`## Secrets found`: each one's `file:line`, rule, commit and fingerprint, never the secret, which only gitleaks'
-redacted report `leaks-snapshot.json` in the run's directory describes. The Builder gets `QUALITY_FIX_PROMPT` as for
-any other gate, and the round counts toward `--max-quality-rounds`; a round that finds the same secrets as the one
-before it, as many of each rule in each file, stops the loop early as any repeated failure does. A finding that is not a secret
-passes only once the human lists it as `file:rule:line` (the fingerprint without its commit, which is the round's
-snapshot) in `.gitleaksignore` on the base branch, and only in a run started after that: a run keeps the rules of
-its base. A secret in a commit the snapshot does not add, the run's base or a commit below it that origin lacks,
-fails the run instead: those are the human's commits. So does one in the branch at publish.
-
-### Run state and resume
-
-`state.json` holds `quality_job` (None for a run without the gate, as for one saved before it),
-`max_quality_rounds`, `quality_round` and `ci`, `{ref, sha, queue_url, build}`, saved key by key, with `rejected`
-as above. Phase `build` with q = 0 goes to `quality` q = 1; `quality` q goes to `review` on `OK` or at q ≥
-`max_quality_rounds`, else to the fix turn, `build` with the same q, then `quality` q + 1; `CHANGES_REQUESTED`
-goes to `build`, round n + 1, q = 0. `list` shows the phase `quality` and, in `build` and `quality`, the quality
-round.
-
-A resume in `quality` takes the furthest step the state allows: an existing quality file (one without a valid
-`GATE:` line is refused, as an empty handoff file is); `ci.build` (when the job has discarded that build, the run
-fails, cut back to `ci.ref`, so the next resume builds it again); `ci.queue_url` (when Jenkins has forgotten the
-queue item, the build with that `GIT_REF` among the job's last 20); `ci.ref` alone, where a build with that
-`GIT_REF` is adopted before a new one is triggered; otherwise snapshot, push and trigger. A state saved while
-quality rounds went through SonarQube loads too: its project and baseline are dropped, its `ci.ce_task` is
-ignored, and its build, which archived no `quality.md`, counts as one that ended before the gate.
-
-### CLI
-
-`run` takes `--quality-gate JOB` and `--max-quality-rounds N`; `resume` takes `--max-quality-rounds N`.
-`--max-quality-rounds` below 1 is refused, and so is it on `run` without `--quality-gate` or on `resume` of a run
-without the gate. `resume` refuses a limit below `quality_round` in phase `quality`, or up to it in `build` with
-q ≥ 1, where the Builder is answering quality round q. `resume` also takes `--quality-gate JOB` or
-`--no-quality-gate`, below; `--max-quality-rounds` goes with the first and is a usage error with the second.
-
-`judged-in-quality --quality-gate JOB --target BRANCH` exits 0 when a quality build of `JOB` already judged
-`HEAD` as a pull request's build into `BRANCH` would: among the builds Jenkins keeps, it ended SUCCESS, and its
-description (above) names `HEAD`'s tree, the merge base of `HEAD` and `origin/BRANCH` as its parent, and a `main`
-commit at which `Jenkinsfile`, `gate.py`, `ci/gate-rust/`, `pyproject.toml`, `uv.lock`, `.python-version`,
-`rust-toolchain.toml` and `Cargo.lock` are as in `HEAD` and at that merge base. Such a build runs the e2e scenarios (`engine/e2e`) only if the change
-touches what they depend on, where a pull request build always runs them; every path that could make the two differ
-makes the quality build run them too (the Jenkinsfile's Test stage lists them). Otherwise, and on any error, such as
-Jenkins unreachable, an HTTP error or a commit it cannot fetch, it exits 1 with one line on standard error naming the condition the closest build fails, or
-what stopped it asking. It needs the same `JENKINS_*` credentials as `--quality-gate`. No build calls it yet.
-
-### Turning the gate on or off on resume
-
-`turn_quality_gate_on` or `turn_quality_gate_off` applies the flag to the saved state before the run goes on; a refusal exits 1 and leaves
-`state.json` as it was.
-
-`resume --quality-gate JOB` saves `JOB` as `quality_job`, after the preflight: in round 0, `_check_gate`, as for
-`run --quality-gate`; later, an `origin`, gitleaks, the credentials and `CI.preflight`, before any turn. Where the gate
-starts depends on where the run is:
-
-- in round 0, or in `build`: that Builder turn is followed by quality round 1;
-- in `review`, with `review-<n>.md` neither written, prompted for, asked again for its verdict nor waiting on a
-  BLOCKED answer: phase `quality`, q = 1, so the Builder's report is judged before the Reviewer sees it, and a
-  failure goes back to the Builder as usual;
-- otherwise, a Reviewer already prompted included: at the Builder's next turn.
-
-It is refused in `publish` or `done`, even with the run's own job, after `--no-quality-gate` (the gate cannot come
-back), for a run that has another job (the same job is a no-op), in a workflow without a quality-gated step, and for
-a `--no-pr` run in the checkout itself past round 0: its tree was never required to be clean, and a snapshot takes
-the whole tree.
-
-`resume --no-quality-gate` deletes the run's `orchestrator-ci/<key>-*` branches on `origin`, a failure only
-logged, without cancelling a Jenkins build in progress, and saves `quality_job` null, `quality_gate_disabled` true
-and `ci` empty. A run in `quality` goes on at `review`, dropping an analysis that has not finished; a Builder in
-its fix turn writes `build-<n>-q<q>.md` and goes straight to `review`, with `quality_round` past the quality round
-no build ever judges. The Reviewer reads the Builder's latest report of the round. Its prompt ends with
-`QUALITY_PASSED_NOTE`, `QUALITY_UNRESOLVED_NOTE` or `QUALITY_STUCK_NOTE` for the round's last quality file that is
-written; with `QUALITY_OFF_NOTE`, naming the round's quality files, when the Builder changed the code after it; and
-with nothing when the round has none. The pull request carries that file. When no quality file judges the code it
-publishes, because the Builder changed the code after the last one or the gate was turned off before any analysis
-finished, it says so in a note and cites the run's last quality file from any round, if there is one, as `Quality
-gate (round R, before the last change)`, its `Orchestrator-Gate` trailer ending `, then turned off`. A workflow
-without a verdict step ends `FINISHED`. `show` prints the job on a `quality` line, or `off (turned off by resume)`.
-
-### Edge cases
-
-- **Concurrent runs** share only Jenkins's executors; `QUALITY_TIMEOUT` allows for a queue.
-- **Two runs in one checkout**: a snapshot takes every change in the tree, so it would take the other run's
-  too. A run refuses to start or resume while another run in its checkout is live, so the two never overlap.
-  A `run --worktree` run snapshots its own worktree, which holds only its change, so worktree runs go in
-  parallel in one checkout, beside each other and beside one run in the checkout itself.
-- **No change**: the gate passes, and `_publish` refuses the empty change.
-- **Cleanup**: a failed run keeps the branch in flight; `done` deletes the run's `orchestrator-ci/<key>-*`
-  branches, and a failed delete is only logged.
-- **Reachability under `--machine`**: HTTP runs on the orchestrator's machine and git on the agents', meeting at
-  `origin`. If only the agents' machine reaches Jenkins, the calls would need to go through `Host`, with curl
-  taking its config on stdin.
+Everything else in the file, such as the intro, coverage, suppressions and build configuration, is for whoever
+answers the findings to read.

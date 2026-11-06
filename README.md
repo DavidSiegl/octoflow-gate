@@ -71,6 +71,9 @@ tar -xzf "$gate/gate.tar.gz" -C "$gate"
 uv run python "$gate/gate.py" --base main --rust-syntax "$gate/gate-rust-linux-x86_64" --out quality.md
 ```
 
+`ci/fetch-gate.sh <pin> <dir>` does the first four lines from a pin file such as this repository's `ci/gate.pin`, which
+is how this repository's own gate fetches the release that judges it.
+
 A merge into this repository's `main` that raises its version publishes that version's release; every release stays
 published.
 
@@ -145,7 +148,7 @@ uv sync
 ci/install-tools.sh <dir on PATH>   # cargo-nextest, cargo-llvm-cov, cargo-mutants, which some tests run
 uv run pytest
 cargo test --manifest-path gate-rust/Cargo.toml
-scripts/gate                         # as Jenkins runs it: main's gate, which runs both test suites, on the change since main
+scripts/gate                         # as Jenkins runs it: the release main pins (ci/gate.pin) judges the change
 uv run python ci/smoke-release.py "$(ci/package.sh dist)"  # the release tarball, as Jenkins builds and checks it
 ```
 

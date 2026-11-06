@@ -47,3 +47,18 @@ class TestGateScript(RepositoryTest):
         self.commit({"gate.toml": '[budgets]\nmutation = 600\n# [[test]]\n'}, "a gate.toml without [[test]]")
         refused = "gate: refs/heads/main's gate.toml lists no [[test]] command, so no test would be judged\n"
         self.assertEqual(self.gate(), (2, refused))
+
+    def test_a_judge_with_a_pin_judges_with_the_release_not_its_own_gate_py(self):
+        # Pinned, the judge needs the script that fetches the release, and no gate.py or gate-rust/ of its own.
+        self.commit({"ci/gate.pin": f"0.5.0 {'0' * 64}\n"}, "a judge that pins a release")
+        self.assertEqual(self.gate(), (2, "gate: refs/heads/main has no ci/fetch-gate.sh to judge with\n"))
+
+    def test_the_release_is_fetched_by_the_judges_script_not_the_changes(self):
+        # A change that edits ci/fetch-gate.sh, say to skip the sha256 check, must not fetch the gate it is judged by.
+        fetch = "ci/fetch-gate.sh"
+        self.put(fetch, "#!/bin/sh\necho 'fetched by the judge' >&2\nexit 1\n")
+        os.chmod(os.path.join(self.repo, fetch), 0o755)  # noqa: S103
+        self.commit({"ci/gate.pin": f"0.5.0 {'0' * 64}\n", "pyproject.toml": "",
+                     "gate.toml": '[[test]]\nname = "t"\ncommand = ["true"]\n'}, "a judge that pins a release")
+        self.put(fetch, "#!/bin/sh\necho 'fetched by the change' >&2\nexit 1\n")
+        self.assertEqual(self.gate(), (2, "fetched by the judge\n"))

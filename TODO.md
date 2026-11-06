@@ -8,13 +8,6 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
 
 ## Open issues
 
-- **This repository's CI does not run its own `[[test]]` commands yet.** As cross-review 05 put it (R1-2,
-  2026-11-06): "`scripts/gate` … still runs both suites itself and calls gate.py with `--tests … --coverage …`.
-  Either flag replaces every `[[test]]` entry, so the new entries in `gate.toml` never run in CI." Left for a
-  follow-up to gate-standalone/05 because a build is judged by `main`'s `gate.py`: until one that runs `[[test]]` is
-  on `main`, dropping the flags would judge no tests at all. Closes with `scripts/gate` no longer running cargo-nextest
-  and pytest nor passing `--tests`/`--coverage` (keeping `--test-contexts`, `COVERAGE_FILE` and the
-  `HYPOTHESIS_PROFILE` the commands inherit), and the Jenkinsfile publishing the JUnit reports the commands write.
 - **A `[[test]]` command cannot set its environment.** `TestCommand` in `gate.py` holds an argv alone, run with the
   gate's own environment (`tool_env`), so a command that needs a variable set takes it from whoever runs the gate.
   octoflow-ai's Rust test run sets `E2E_ENGINE` to an absolute path in the workspace and wraps cargo in
@@ -47,9 +40,12 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   ticket 07's before/after diff will show if octoflow ever passes the tree's own file." It does: octoflow-ai's
   Jenkinsfile passes `--config pyproject.toml` on a build of `main`. The intro is outside the quality file's contract
   and no reader parses it. Closes when octoflow-ai's gate-standalone/07 has taken that line's change as expected.
-- **agent-estate's Jenkinsfile template archives only `quality.md`.** This repo's Jenkinsfile archives
-  `quality.json` too (gate-standalone/04), an edit to the rendered file that a `copier update` must merge. Closes
-  with the template archiving `quality.json` beside `quality.md` for every repo whose gate writes it.
+- **This repo's Jenkinsfile departs from agent-estate's template in two places.** It archives `quality.json` beside
+  `quality.md` (gate-standalone/04), and it publishes the JUnit reports the gate's `[[test]]` commands write,
+  `test-results.xml` and `gate-rust/target/nextest/ci/junit.xml`, where the template publishes `test-results*.xml`
+  (gate-standalone/05, 2026-11-06). Both are edits to the rendered file that a `copier update` must merge. Closes
+  with the template archiving `quality.json` for every repo whose gate writes it, and taking its JUnit paths from the
+  repo's `gate.toml` or an answer.
 - **Test code outside the places the spec names is judged as code.** The spec of the Rust checks (requirement 2)
   places Rust's tests in a `tests/` directory, a `tests.rs` and an inline `#[cfg(test)]` module; `_in_rust_tests` and
   `GateSettings.rust_test` in `gate.py`, which both Rust checks read, follow it by default (test-integrity's side of this is the

@@ -1,5 +1,6 @@
 # The gate's settings for judging this repository (docs/quality-gate.md, "The gate's settings"): the defaults, but
-# for the commands that run its tests, the same as scripts/gate runs.
+# for the commands that run its tests. scripts/gate judges a change by main's copy of this file, so an edit here
+# takes effect once it is on main.
 
 # gate-rust's tests, with line coverage. --ignore-run-fail writes the coverage report whatever tests fail and exits 0
 # for them; ci/nextest.toml's ci profile writes the JUnit report.
@@ -10,10 +11,12 @@ command = ["cargo", "llvm-cov", "nextest", "--locked", "--manifest-path", "gate-
 junit = ["gate-rust/target/nextest/ci/junit.xml"]
 coverage = ["coverage-rust.xml"]
 
-# --cov-context=test records which tests run each line, for gate.py's --test-contexts.
+# --cov-context=test records which tests run each line, for gate.py's --test-contexts: mutmut then runs only the tests
+# that reach the changed functions. --hypothesis-profile=ci (tests/conftest.py) is for this run alone: mutmut's and
+# the other checks' runs of the tests keep the default.
 [[test]]
 name = "pytest"
 command = ["uv", "run", "--frozen", "pytest", "--cov=gate", "--cov-branch", "--cov-context=test", "--cov-report=xml",
-           "--junitxml=test-results.xml"]
+           "--junitxml=test-results.xml", "--hypothesis-profile=ci"]
 junit = ["test-results.xml"]
 coverage = ["coverage.xml"]

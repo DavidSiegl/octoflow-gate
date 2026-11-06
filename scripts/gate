@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Judge the change this working tree makes since BASE with the gate itself: install what the
-# tests need, run gate-rust's tests and gate.py's with coverage, then run the judge's gate.py,
-# with the judge's rules (pyproject.toml), its settings (gate.toml where it has one, else the
-# defaults) and its gate-rust helper, so that a change cannot loosen how it is itself judged
-# (docs/quality-gate.md says what each check means).
+# tests need, then run the judge's gate.py, with the judge's rules (pyproject.toml), its
+# settings (gate.toml where it has one, else the defaults) and its gate-rust helper, so that a
+# change cannot loosen how it is itself judged (docs/quality-gate.md says what each check
+# means). gate.py runs the tests, with the `[[test]]` commands of the judge's gate.toml.
 #
 #   scripts/gate [BASE]     BASE is any git revision; default the branch main, read as
 #                           refs/heads/main so a tag main cannot stand in (gitrevisions(7)).
@@ -18,19 +18,17 @@
 # the last passing build), and judges by its exit status alone: 0 for GATE: OK, 1 for
 # GATE: ERROR (quality.md says why), 2 when the change could not be judged (a tool missing,
 # BASE or the judge not a commit, the judge without gate.py, pyproject.toml or gate-rust/,
-# the tests unable to run, gate.py ending without a verdict), and 130 when gate.py was
-# interrupted. A failing test does not stop the run; the gate reports it. It leaves at the
-# repo root quality.md and, from a judge whose gate.py writes one (0.3.0 on), quality.json,
-# which Jenkins archives; the tests' JUnit reports test-results.xml (pytest) and
-# test-results-rust.xml (cargo-nextest), which Jenkins publishes; and the coverage reports
-# the gate read.
+# gate.py ending without a verdict), and 130 when gate.py was interrupted. A failing test, or
+# a test command that could not run, is the gate's to report. It leaves at the repo root
+# quality.md and, from a judge whose gate.py writes one (0.3.0 on), quality.json, which
+# Jenkins archives; and the reports the judge's test commands write, which Jenkins publishes
+# the JUnit ones of.
 #
 # In a Jenkins build (WORKSPACE set), crates are fetched into the workspace (CARGO_HOME), so
 # no build compiles sources an earlier one left, and temporary files go under WORKSPACE_TMP
 # rather than /tmp: the tests and the gate build Rust in temporary directories and run what
 # they build, and on the agent /tmp is the container's writable layer, where Falco reports
 # every program run from a file written there ("Drop and execute new binary in container").
-# The test run then takes Hypothesis's `ci` profile (tests/conftest.py).
 #
 # cargo-llvm-cov, cargo-nextest and cargo-mutants are taken from PATH when all three are
 # there, else downloaded by ci/install-tools.sh into .tools/bin, pinned; rustup's clippy and
@@ -40,6 +38,7 @@ set -euo pipefail
 # Any failure before gate.py runs is "could not judge", whatever the command's status.
 trap 'exit 2' ERR
 export UV_NO_PROGRESS=1
+# Where the judge's pytest command, which inherits it, writes the test contexts gate.py reads.
 # Relative, in the tree: set to an absolute path elsewhere, the file vanished during a run and
 # over 2300 tests errored (octoflow-ai, where this script's steps began as Jenkins stages).
 export COVERAGE_FILE=.coverage
@@ -65,14 +64,13 @@ for path in gate.py pyproject.toml gate-rust/Cargo.toml; do
 		exit 2
 	fi
 done
-# The reports and the verdict are gitignored and outlive a run: removed, so a step that
-# writes none cannot leave gate.py the last run's, nor a run that ends early the last verdict.
-rm -f quality.md quality.json test-results.xml test-results-rust.xml coverage.xml coverage-rust.xml "$COVERAGE_FILE"
+# The verdict and the test contexts are gitignored and outlive a run: removed, so a run that
+# ends early cannot leave the last verdict, nor a pytest that writes none the last contexts.
+# gate.py removes each test command's reports before it runs it.
+rm -f quality.md quality.json "$COVERAGE_FILE"
 
 if [[ -n ${WORKSPACE:-} ]]; then
 	export CARGO_HOME="$WORKSPACE/.cargo-home"
-	# tests/conftest.py's larger profile, for the test run alone: mutmut's runs keep the default.
-	hypothesis_profile=ci
 	# Python's tempfile silently takes /tmp for a TMPDIR that does not exist, so it is
 	# created. What an earlier build left there goes first: on the volume, unlike in /tmp, it
 	# would stay. The chmod is for a directory a killed test left without write permission; a
@@ -108,38 +106,10 @@ for tool in cargo-llvm-cov cargo-nextest cargo-mutants; do
 done
 uv sync --frozen
 
-# gate-rust's tests, with line coverage. --ignore-run-fail writes the coverage report whatever
-# tests fail and exits 0 for them, so a non-zero status is a build that did not compile or a
-# tool that could not run; it also passes a nextest that ran no test, so the JUnit report,
-# which ci/nextest.toml's ci profile writes, must be there after.
-junit=gate-rust/target/nextest/ci/junit.xml
-rm -f "$junit"
-cargo llvm-cov nextest --locked --manifest-path gate-rust/Cargo.toml --ignore-run-fail \
-	--profile ci --config-file "$top/ci/nextest.toml" \
-	--cobertura --output-path "$top/coverage-rust.xml"
-if [[ ! -f $junit ]]; then
-	echo "gate: cargo-nextest wrote no $junit, so gate-rust's tests did not run" >&2
-	exit 2
-fi
-cp "$junit" test-results-rust.xml
-
-# --cov-context=test records which tests run each line, for gate.py's --test-contexts: mutmut
-# then runs only the tests that reach the changed functions. pytest exits 1 when tests failed,
-# which the gate judges; anything else means they did not run
-# (https://docs.pytest.org/en/stable/reference/exit-codes.html).
-status=0
-HYPOTHESIS_PROFILE=${hypothesis_profile:-default} uv run --frozen pytest --cov=gate --cov-branch \
-	--cov-context=test --cov-report=xml --junitxml=test-results.xml || status=$?
-if ((status > 1)); then
-	echo "gate: pytest exited $status, so the tests did not run" >&2
-	exit 2
-fi
-
-# The judge's gate.py, rules, settings and helper, copied only now that the tests have run.
-# gate.py reads the gate.toml beside the rules it is given, so a judge without one judges by
-# the defaults, never by the change's own. A helper that does not build is one the gate cannot
-# run, which each check that reads Rust reports as not run on a change to Rust, so it only
-# warns.
+# The judge's gate.py, rules, settings and helper. gate.py reads the gate.toml beside the
+# rules it is given, so a judge without one judges by the defaults, never by the change's
+# own, and runs no test command. A helper that does not build is one the gate cannot run,
+# which each check that reads Rust reports as not run on a change to Rust, so it only warns.
 judge_dir=$(mktemp -d)
 trap 'rm -rf "$judge_dir"' EXIT
 judged=(gate.py pyproject.toml gate-rust)
@@ -153,8 +123,6 @@ cargo build --release --locked --manifest-path "$judge_dir/gate-rust/Cargo.toml"
 trap - ERR
 status=0
 uv run --frozen python "$judge_dir/gate.py" --base "$base" --config "$judge_dir/pyproject.toml" \
-	--tests test-results-rust.xml --tests test-results.xml \
-	--coverage coverage-rust.xml --coverage coverage.xml \
 	--test-contexts "$COVERAGE_FILE" --rust-syntax "$judge_dir/target/release/gate-rust" \
 	--out quality.md || status=$?
 case $status in

@@ -90,7 +90,11 @@ impl NewCoverage {
 /// report's are as its `SF:` lines give them. A relative path, or source, is taken from the current directory; each
 /// is matched to the tree's paths through its real path, so cargo-llvm-cov's report, whose source is its workspace's
 /// directory, maps to the tree's paths as long as the tree is where the report was written. A changed line no report
-/// lists is not coverable, like a comment. Errs when a report cannot be read or parsed.
+/// lists is not coverable, like a comment. Only the entries of the files the change adds lines to are read.
+///
+/// Errs when a report cannot be read or parsed: when it is not XML or LCOV, as an empty or truncated one is not; when
+/// a Cobertura line of a file the change adds lines to has a number, or on a changed line hits, that is not a whole
+/// number; when an LCOV entry of such a file's changed line cannot be read.
 pub fn new_coverage(
     reports: &[PathBuf],
     root: &Path,
@@ -100,13 +104,8 @@ pub fn new_coverage(
     let mut merged: HashMap<(OsString, u32), (bool, usize, usize)> = HashMap::new();
     let real_root = real_path(root);
     for report in reports {
-        let (sources, entries) = read_report(report, root)?;
-        for entry in entries {
-            let Some(path) = tree_path(&entry.file, &sources, &real_root, changed) else { continue };
-            if !changed[&path].contains(&entry.line) {
-                continue;
-            }
-            let was = merged.entry((path, entry.line)).or_default();
+        for entry in changed_line_coverage(report, root, &real_root, changed)? {
+            let was = merged.entry(entry.at).or_default();
             *was = (was.0 || entry.hit, was.1.max(entry.taken), was.2.max(entry.outcomes));
         }
     }
@@ -119,51 +118,43 @@ pub fn new_coverage(
     })
 }
 
-/// One line a report covers or not.
+/// A changed line as one report covers it or not.
 struct LineCoverage {
-    /// The file as the report names it, relative to one of the report's sources unless absolute.
-    file: OsString,
-    line: u32,
+    /// The path, a key of the change's added lines, and the line.
+    at: (OsString, u32),
     hit: bool,
     /// Branch outcomes on the line that were taken, of those there are; 0 of 0 for a line with no branch data.
     taken: usize,
     outcomes: usize,
 }
 
-/// The tree's path, a key of `changed`, that `file` names from the first of `sources` that names one; None when it
-/// names none.
-fn tree_path(
-    file: &OsStr,
-    sources: &[PathBuf],
+/// Each changed line the report at `report` lists, as [`new_coverage`] reads it and errs.
+fn changed_line_coverage(
+    report: &Path,
+    root: &Path,
     real_root: &Path,
     changed: &BTreeMap<OsString, BTreeSet<u32>>,
-) -> Option<OsString> {
-    sources
-        .iter()
-        .map(|source| rel_path(&real_path(&source.join(file)), real_root).into_os_string())
-        .find(|candidate| changed.contains_key(candidate))
-}
-
-/// The directories the paths of the report at `report` are relative to, and its lines, as [`new_coverage`] reads
-/// them.
-fn read_report(report: &Path, root: &Path) -> Result<(Vec<PathBuf>, Vec<LineCoverage>), Unjudged> {
+) -> Result<Vec<LineCoverage>, Unjudged> {
     let cannot = |why: String| Unjudged(format!("cannot read the coverage report {}: {why}", report.display()));
     let bytes = std::fs::read(report).map_err(|e| cannot(e.to_string()))?;
     if bytes.trim_ascii_start().starts_with(b"<") {
         let doc = xml::parse(&String::from_utf8(bytes).map_err(|e| cannot(e.to_string()))?).map_err(cannot)?;
-        cobertura_lines(&doc, root)
+        cobertura_lines(&doc, root, real_root, changed)
             .map_err(|e| Unjudged(format!("the coverage report {} has a line it cannot read: {e}", report.display())))
     } else {
-        let here = vec![PathBuf::from(".")];
-        lcov_lines(&bytes)
-            .map(|lines| (here, lines))
-            .map_err(|e| Unjudged(format!("the coverage report {} has a line it cannot read: {e}", report.display())))
+        lcov_lines(&bytes, real_root, changed).map_err(cannot)
     }
 }
 
-/// The sources of a Cobertura document, `root` when it lists none, and its lines: each `<line>` of each `<class>`'s
-/// `<lines>`. Errs on a line whose number or hits is not a whole number.
-fn cobertura_lines(doc: &xml::Element, root: &Path) -> Result<(Vec<PathBuf>, Vec<LineCoverage>), String> {
+/// The changed lines a Cobertura document lists: each `<line>` of the `<lines>` of each `<class>` whose file, taken
+/// from each of the document's sources in turn, or `root` when it lists none, the change adds lines to. Errs, with
+/// why, on such a line whose number, or on a changed line hits, is not a whole number.
+fn cobertura_lines(
+    doc: &xml::Element,
+    root: &Path,
+    real_root: &Path,
+    changed: &BTreeMap<OsString, BTreeSet<u32>>,
+) -> Result<Vec<LineCoverage>, String> {
     let mut sources: Vec<PathBuf> = (doc.children_named("sources"))
         .flat_map(|s| s.children_named("source"))
         .map(|s| s.text.trim())
@@ -175,18 +166,38 @@ fn cobertura_lines(doc: &xml::Element, root: &Path) -> Result<(Vec<PathBuf>, Vec
     }
     let mut out = Vec::new();
     for class in doc.descendants("class") {
-        let file = OsString::from(class.get("filename").unwrap_or(""));
+        let file = OsStr::new(class.get("filename").unwrap_or(""));
+        let Some((path, added)) = changed_file(file, &sources, real_root, changed) else { continue };
         for line in class.children_named("lines").flat_map(|l| l.children_named("line")) {
-            let number = whole(line.get("number").unwrap_or(""))?;
+            let Some(number) = changed_line(line.get("number").unwrap_or(""), added)? else { continue };
             let (taken, outcomes) = match line.get("branch") {
                 Some("true") => branch_counts(line.get("condition-coverage").unwrap_or("")),
                 _ => (0, 0),
             };
-            let hit = whole(line.get("hits").unwrap_or("0"))? > 0;
-            out.push(LineCoverage { file: file.clone(), line: number, hit, taken, outcomes });
+            let hit = py_int(line.get("hits").unwrap_or("0"))? > 0;
+            out.push(LineCoverage { at: (path.clone(), number), hit, taken, outcomes });
         }
     }
-    Ok((sources, out))
+    Ok(out)
+}
+
+/// The tree's path, a key of `changed`, that `file` names from the first of `sources` that names one, and the lines
+/// the change adds to it; None when it names none.
+fn changed_file<'a>(
+    file: &OsStr,
+    sources: &[PathBuf],
+    real_root: &Path,
+    changed: &'a BTreeMap<OsString, BTreeSet<u32>>,
+) -> Option<(OsString, &'a BTreeSet<u32>)> {
+    sources.iter().find_map(|source| {
+        let candidate = rel_path(&real_path(&source.join(file)), real_root).into_os_string();
+        changed.get_key_value(&candidate).map(|(path, added)| (path.clone(), added))
+    })
+}
+
+/// The line numbered `number` when it is among `added`, None when it is not; errs when `number` is not a whole number.
+fn changed_line(number: &str, added: &BTreeSet<u32>) -> Result<Option<u32>, String> {
+    Ok(u32::try_from(py_int(number)?).ok().filter(|n| added.contains(n)))
 }
 
 /// The (taken, outcomes) of a Cobertura `condition-coverage` such as `50% (1/2)`; 0 of 0 when it has none.
@@ -198,48 +209,98 @@ fn branch_counts(text: &str) -> (usize, usize) {
     counts.unwrap_or((0, 0))
 }
 
-fn whole(text: &str) -> Result<u32, String> {
-    text.trim().parse().map_err(|_| format!("{text:?} is not a whole number"))
+/// `text` as Python's `int()` reads a whole number, as gate.py reads a report's: surrounding whitespace, a sign, and
+/// single underscores between digits allowed. Errs, with why, on anything else, or on a number beyond an i128, which
+/// no coverage tool counts to.
+fn py_int(text: &str) -> Result<i128, String> {
+    let trimmed = text.trim();
+    let digits = trimmed.strip_prefix(['+', '-']).unwrap_or(trimmed);
+    let groups_ok = digits.split('_').all(|g| !g.is_empty() && g.bytes().all(|b| b.is_ascii_digit()));
+    let n = if groups_ok { trimmed.replace('_', "").parse().ok() } else { None };
+    n.ok_or_else(|| format!("{text:?} is not a whole number"))
 }
 
-/// The lines of an LCOV report (https://manpages.debian.org/lcov/geninfo.1.en.html, "TRACEFILE FORMAT"): each
-/// `DA:<line>,<hits>` of each `SF:` record, with the `BRDA:<line>,<block>,<branch>,<taken>` entries of its line as
-/// its branch outcomes, a taken of `-` or 0 one not taken. Errs on a DA or BRDA line it cannot read.
-fn lcov_lines(report: &[u8]) -> Result<Vec<LineCoverage>, String> {
+/// The changed lines an LCOV report (https://manpages.debian.org/lcov/geninfo.1.en.html, "TRACEFILE FORMAT") lists:
+/// each `DA:<line>,<hits>` of each `SF:` record whose file, taken from the current directory, the change adds lines
+/// to, with the `BRDA:<line>,<block>,<branch>,<taken>` entries of its line as its branch outcomes, a taken of `-` or
+/// 0 one not taken. Errs, with why, when the report holds no record, when an entry is outside a record or a record
+/// has no `end_of_record`, as in a truncated report, or on a DA or BRDA entry of a changed line it cannot read.
+fn lcov_lines(
+    report: &[u8],
+    real_root: &Path,
+    changed: &BTreeMap<OsString, BTreeSet<u32>>,
+) -> Result<Vec<LineCoverage>, String> {
+    let here = [PathBuf::from(".")];
     let mut out = Vec::new();
-    // The current record's file, its lines' hits and, by line, its branches' (taken, outcomes).
-    let mut file: Option<OsString> = None;
+    let mut records = 0;
+    // The current record: whether one is open, and when its file is one the change adds lines to, that file; its
+    // changed lines' hits and, by line, their branches' (taken, outcomes).
+    let mut open = false;
+    let mut file: Option<(OsString, &BTreeSet<u32>)> = None;
     let mut hits: BTreeMap<u32, bool> = BTreeMap::new();
     let mut branches: HashMap<u32, (usize, usize)> = HashMap::new();
     for raw in report.split(|&b| b == b'\n') {
         let line = raw.strip_suffix(b"\r").unwrap_or(raw);
+        let entry = || String::from_utf8_lossy(line).into_owned();
         if let Some(path) = line.strip_prefix(b"SF:") {
-            file = Some(OsStr::from_bytes(path).to_os_string());
-        } else if let Some(fields) = line.strip_prefix(b"DA:") {
-            let fields = std::str::from_utf8(fields).map_err(|e| e.to_string())?;
-            let mut parts = fields.split(',');
-            let number = whole(parts.next().unwrap_or(""))?;
-            let count: i64 = parts.next().unwrap_or("").trim().parse().map_err(|_| format!("DA:{fields}"))?;
-            *hits.entry(number).or_default() |= count > 0;
-        } else if let Some(fields) = line.strip_prefix(b"BRDA:") {
-            let fields = std::str::from_utf8(fields).map_err(|e| e.to_string())?;
-            let parts: Vec<&str> = fields.split(',').collect();
-            let [number, _, _, taken] = parts[..] else { return Err(format!("BRDA:{fields}")) };
-            let was = branches.entry(whole(number)?).or_default();
-            was.1 += 1;
-            was.0 += usize::from(!matches!(taken.trim(), "-" | "0"));
+            if open {
+                return Err(format!("a record has no end_of_record before `{}`", entry()));
+            }
+            (open, records) = (true, records + 1);
+            file = changed_file(OsStr::from_bytes(path), &here, real_root, changed);
         } else if line == b"end_of_record" {
-            if let Some(file) = file.take() {
+            if !open {
+                return Err("an end_of_record ends no record".into());
+            }
+            if let Some((path, _)) = file.take() {
                 out.extend(hits.iter().map(|(&number, &hit)| {
                     let (taken, outcomes) = branches.get(&number).copied().unwrap_or_default();
-                    LineCoverage { file: file.clone(), line: number, hit, taken, outcomes }
+                    LineCoverage { at: (path.clone(), number), hit, taken, outcomes }
                 }));
             }
-            hits.clear();
-            branches.clear();
+            (open, hits, branches) = (false, BTreeMap::new(), HashMap::new());
+        } else if !open && !line.trim_ascii().is_empty() && !line.starts_with(b"TN:") {
+            return Err(format!("`{}` is outside a record, so this is not LCOV", entry()));
+        } else if let Some((_, added)) = file {
+            lcov_entry(line, added, &mut hits, &mut branches).map_err(|why| format!("`{}`: {why}", entry()))?;
         }
     }
+    if open {
+        return Err("its last record has no end_of_record".into());
+    }
+    if records == 0 {
+        return Err("it holds no LCOV record".into());
+    }
     Ok(out)
+}
+
+/// Adds `line`, an entry of an LCOV record of a file whose added lines are `added`, to the record's `hits` and
+/// `branches` as [`lcov_lines`] reads them, when it is a DA or BRDA entry of an added line; errs, with why, when it
+/// is one whose fields cannot be read.
+fn lcov_entry(
+    line: &[u8],
+    added: &BTreeSet<u32>,
+    hits: &mut BTreeMap<u32, bool>,
+    branches: &mut HashMap<u32, (usize, usize)>,
+) -> Result<(), String> {
+    if let Some(fields) = line.strip_prefix(b"DA:") {
+        let fields = std::str::from_utf8(fields).map_err(|e| e.to_string())?;
+        let (number, count) = fields.split_once(',').ok_or("no hit count")?;
+        if let Some(number) = changed_line(number, added)? {
+            let count = py_int(count.split(',').next().unwrap_or_default())?;
+            *hits.entry(number).or_default() |= count > 0;
+        }
+    } else if let Some(fields) = line.strip_prefix(b"BRDA:") {
+        let fields = std::str::from_utf8(fields).map_err(|e| e.to_string())?;
+        let parts: Vec<&str> = fields.split(',').collect();
+        let [number, _, _, taken] = parts[..] else { return Err("not 4 fields".into()) };
+        if let Some(number) = changed_line(number, added)? {
+            let was = branches.entry(number).or_default();
+            was.1 += 1;
+            was.0 += usize::from(!matches!(taken.trim(), "-" | "0"));
+        }
+    }
+    Ok(())
 }
 
 /// The Python files `changed` adds lines to whose names are not UTF-8, in order: coverage.py collects no data for
@@ -317,6 +378,58 @@ mod tests {
             got,
             NewCoverage { lines: 3, covered_lines: 2, conditions: 2, covered_conditions: 1, unmeasured: vec![] }
         );
+    }
+
+    #[test]
+    fn a_report_that_is_neither_cobertura_nor_whole_lcov_is_an_error() {
+        let root = std::env::temp_dir();
+        let a = changed(&[("a.py", &[1])]);
+        for (name, text) in [
+            ("empty", ""),
+            ("blank", "\n\n"),
+            ("json", "{\"files\": {}}"),
+            ("truncated", "SF:a.py\nDA:1,1\n"),
+            ("unended", "SF:a.py\nDA:1,1\nSF:b.py\nend_of_record\n"),
+            ("stray-end", "end_of_record\n"),
+        ] {
+            let report = scratch(name, text);
+            assert!(new_coverage(&[report], &root, &a).is_err(), "{name}");
+        }
+        let report = scratch("tn-only-record", "TN:\nSF:x.py\nDA:1,1\nend_of_record\n");
+        assert_eq!(new_coverage(&[report], &root, &a).unwrap().lines, 0);
+    }
+
+    #[test]
+    fn only_the_changed_lines_of_changed_files_are_read() {
+        let root = std::env::temp_dir().join(format!("gate-coverage-only-changed-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let cobertura = scratch(
+            "only-changed.xml",
+            "<coverage><class filename='other.py'><lines><line number='x' hits='y'/></lines></class>\
+             <class filename='a.py'><lines><line number='1' hits='5000000000'/><line number='2' hits='y'/>\
+             </lines></class></coverage>",
+        );
+        let lcov = scratch(
+            "only-changed.info",
+            &format!(
+                "SF:{}\nDA:x,y\nBRDA:x\nend_of_record\nSF:{}\nDA:2,y\nDA:3,9000000000\nend_of_record\n",
+                root.join("other.py").display(),
+                root.join("a.py").display()
+            ),
+        );
+        let a = changed(&[("a.py", &[1, 3])]);
+        let got = new_coverage(&[cobertura, lcov], &root, &a).unwrap();
+        assert_eq!((got.lines, got.covered_lines), (2, 2));
+    }
+
+    #[test]
+    fn whole_numbers_are_python_s() {
+        assert_eq!(py_int(" +1_000 "), Ok(1000));
+        assert_eq!(py_int("-3"), Ok(-3));
+        assert_eq!(py_int("18446744073709551616"), Ok(1 << 64));
+        for bad in ["", "_1", "1_", "1__0", "1.0", "x", "+"] {
+            assert!(py_int(bad).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

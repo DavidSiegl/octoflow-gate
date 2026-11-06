@@ -28,10 +28,12 @@ pipeline {
                 script {
                     def base
                     if (env.CHANGE_TARGET) {
-                        // A pull request: everything since it left its target branch.
+                        // A pull request: everything since it left its target branch, read
+                        // by its full ref, since a tag or branch named origin/<target> would
+                        // win over the short name (gitrevisions(7)).
                         base = sh(returnStdout: true, script: '''
                             git fetch --quiet origin "+refs/heads/$CHANGE_TARGET:refs/remotes/origin/$CHANGE_TARGET"
-                            git merge-base HEAD "origin/$CHANGE_TARGET"
+                            git merge-base HEAD "refs/remotes/origin/$CHANGE_TARGET"
                         ''').trim()
                     } else {
                         // A branch build: since the last successful build, or the last commit when
@@ -71,10 +73,12 @@ pipeline {
     post {
         always {
             archiveArtifacts artifacts: 'quality.md', allowEmptyArchive: true
-            // The JUnit reports scripts/gate left (its header), shown as the build's test results
-            // and never judged: a failing test in them leaves the result to the gate. None, as on
-            // a change to docs alone, is no error.
-            junit allowEmptyResults: true, skipMarkingBuildUnstable: true, testResults: 'test-results*.xml'
+            // The JUnit reports of the tests scripts/gate ran, which it leaves at the repo root,
+            // shown as the build's test results and never judged: neither the build's result nor
+            // a GitHub check (skipPublishingChecks) comes from them, so a failing test leaves the
+            // result to the gate. None, as on a change to docs alone, is no error.
+            junit allowEmptyResults: true, skipMarkingBuildUnstable: true, skipPublishingChecks: true,
+                  testResults: 'test-results*.xml'
         }
         // Mail on every build that did not pass (failed, unstable or aborted), and on the first
         // passing build after one, never on a build that merely passed again.

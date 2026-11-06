@@ -8,6 +8,18 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
 
 ## Open issues
 
+- **The release's gate-rust helper needs the build agent's glibc or newer.** `ci/package.sh` builds it for the
+  default target, so it is linked against the Jenkins agent's GNU C library; as cross-review 07 put it (R1-2): "A
+  project on Debian 11 (2.31), Ubuntu 20.04 (2.31) or RHEL 8 (2.28) that follows the README gets 'GLIBC_2.34 not
+  found' from `--rust-syntax`, and every Rust check is not run." The README says so. Closes with the helper built for
+  `x86_64-unknown-linux-musl`, statically linked, once the agent image's rustup has that target (a build cannot add
+  it: the rustup home is root's).
+- **gate.py trusts the structure of the helper's documents.** `_rust_documents` checks that each line is JSON with the
+  expected `schema`, and the number of documents, nothing more; a helper whose documents lack a field crashes the gate
+  with a `KeyError` (`'mods'` in `_rust_test_spans`, `'fns'` wherever the functions are scored) instead of a
+  condition naming the helper. Only `gate-rust/tests/schema.rs` checks the fields, on
+  the helper's side. Found by cross-review 07 round 2 (2026-11-06). Closes with gate.py validating each document
+  against the helper's schema, or turning a missing field into a failed condition.
 - **A `[[test]]` command cannot set its environment.** `TestCommand` in `gate.py` holds an argv alone, run with the
   gate's own environment (`tool_env`), so a command that needs a variable set takes it from whoever runs the gate.
   octoflow-ai's Rust test run sets `E2E_ENGINE` to an absolute path in the workspace and wraps cargo in
@@ -40,14 +52,16 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   ticket 07's before/after diff will show if octoflow ever passes the tree's own file." It does: octoflow-ai's
   Jenkinsfile passes `--config pyproject.toml` on a build of `main`. The intro is outside the quality file's contract
   and no reader parses it. Closes when octoflow-ai's gate-standalone/07 has taken that line's change as expected.
-- **This repo's Jenkinsfile departs from agent-estate's template in two places.** It archives `quality.json` beside
-  `quality.md` (gate-standalone/04), and it publishes the JUnit reports the gate's `[[test]]` commands write,
-  `test-results.xml` and `gate-rust/target/nextest/ci/junit.xml`, where the template publishes `test-results*.xml`
-  (gate-standalone/05, 2026-11-06). Both are edits to the rendered file that a `copier update` must merge. And the
-  paths repeat `gate.toml`'s `junit` lists, as cross-review 06 put it (R1-4): "A change to a `junit` path in gate.toml
-  without the Jenkinsfile silently stops publishing"; display only, never the verdict. Closes
-  with the template archiving `quality.json` for every repo whose gate writes it, and taking its JUnit paths from the
-  repo's `gate.toml` or an answer.
+- **This repo's Jenkinsfile departs from agent-estate's template in three places.** It archives `quality.json`
+  beside `quality.md` (gate-standalone/04); it builds, checks and releases the release tarball in its Package and
+  Release stages (gate-standalone/06), which no other repo of the template has; and it publishes the JUnit reports
+  the gate's `[[test]]` commands write, `test-results.xml` and `gate-rust/target/nextest/ci/junit.xml`, where the
+  template publishes `test-results*.xml` (gate-standalone/05, 2026-11-06). All three are edits to the rendered file
+  that a `copier update` must merge. And the paths repeat `gate.toml`'s `junit` lists, as cross-review 06 put it
+  (R1-4): "A change to a `junit` path in gate.toml without the Jenkinsfile silently stops publishing"; display only,
+  never the verdict. Closes with the template archiving `quality.json` for every repo whose gate writes it, taking
+  its JUnit paths from the repo's `gate.toml` or an answer, and leaving room for a repo's own stages after the Gate
+  stage.
 - **Test code outside the places the spec names is judged as code.** The spec of the Rust checks (requirement 2)
   places Rust's tests in a `tests/` directory, a `tests.rs` and an inline `#[cfg(test)]` module; `_in_rust_tests` and
   `GateSettings.rust_test` in `gate.py`, which both Rust checks read, follow it by default (test-integrity's side of this is the

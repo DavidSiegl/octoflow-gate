@@ -60,6 +60,17 @@ pub enum Verdict {
     Error,
 }
 
+impl Verdict {
+    /// The word as the quality file and the gate's standard error write it, the same as the serde names above give
+    /// quality.json.
+    pub fn word(self) -> &'static str {
+        match self {
+            Verdict::Ok => "OK",
+            Verdict::Error => "ERROR",
+        }
+    }
+}
+
 /// What the gate found about one change, written two ways from this one value by [`QualityReport::markdown`] and
 /// [`QualityReport::json`]. The verdict is ERROR when a condition failed, else OK.
 #[derive(Clone, Debug, Default)]
@@ -108,7 +119,7 @@ impl QualityReport {
     /// its detail, and counts the rest. It is prose, whose wording may change in any release; a program reads
     /// [`QualityReport::json`] instead. Until the cutover it is gate.py's, word for word (tests/golden/).
     pub fn markdown(&self) -> String {
-        let mut out = vec![format!("GATE: {}", self.verdict_word()), String::new(), self.intro()];
+        let mut out = vec![format!("GATE: {}", self.verdict().word()), String::new(), self.intro()];
         if !self.conditions.is_empty() {
             out.extend([String::new(), FAILED_CONDITIONS.into(), String::new()]);
             out.extend(self.conditions.iter().map(|c| one_line(&format!("- {c}"))));
@@ -172,13 +183,6 @@ impl QualityReport {
         };
         // Serializing structs of strings and numbers cannot fail.
         serde_json::to_string_pretty(&doc).unwrap_or_default() + "\n"
-    }
-
-    fn verdict_word(&self) -> &'static str {
-        match self.verdict() {
-            Verdict::Ok => "OK",
-            Verdict::Error => "ERROR",
-        }
     }
 
     /// The quality file's opening sentence: which commit's tree was judged against which base, and where the rules

@@ -81,7 +81,9 @@ enum Asked {
 }
 
 fn main() -> ExitCode {
-    process::catch_interrupt();
+    if let Err(e) = process::catch_interrupt() {
+        return unjudged(&format!("cannot catch Ctrl-C: {e}"));
+    }
     match parse_args(std::env::args_os().skip(1)) {
         Ok(Asked::Run(args)) => gate_command(&args),
         Ok(Asked::Help) => {
@@ -121,10 +123,7 @@ fn gate_command(args: &Args) -> ExitCode {
     if let Err(Unjudged(e)) = write_files(&contents) {
         return unjudged(&e);
     }
-    let verdict = match report.verdict() {
-        Verdict::Ok => "OK",
-        Verdict::Error => "ERROR",
-    };
+    let verdict = report.verdict().word();
     if !contents.is_empty() {
         let written: Vec<String> = contents.iter().map(|(path, _)| text::path(path.as_os_str())).collect();
         eprintln!("GATE: {verdict}, in {}", series(&written, None));

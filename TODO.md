@@ -54,9 +54,7 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   - a git command past its minute ends "did not finish within 60 seconds" where gate.py's ends with Python's
     `TimeoutExpired` text ("timed out after 60 seconds");
   - `crates/gate/src/main.rs`'s `parse_args` takes no abbreviation of an option (`--cov` for `--coverage`), as
-    argparse does, and takes a value that starts with `-`, which argparse refuses;
-  - the linters and test commands run in a process group of the gate's session, not a session of their own
-    (`process::run`'s comment says why).
+    argparse does, and takes a value that starts with `-`, which argparse refuses.
   Closes at the cutover, with each kept or matched on purpose.
 - **`cargo xtask compare` tells gate.py's ported conditions by their wording.** `ported_condition` in
   `xtask/src/main.rs` matches the start or end of each failed-condition sentence; a condition gate.py rewords drops

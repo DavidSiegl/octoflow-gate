@@ -1,5 +1,5 @@
-//! Running the programs the gate judges a change with, git, a linter or a test command: each in a process group of
-//! its own, killed with all it started when it overruns or when Ctrl-C stops the gate, and the gate's own exit on
+//! Running the programs the gate judges a change with, git, a linter or a test command: each in a session of its
+//! own, killed with all it started when it overruns or when Ctrl-C stops the gate, and the gate's own exit on
 //! Ctrl-C.
 
 use std::ffi::{OsStr, OsString};
@@ -63,8 +63,9 @@ pub fn tool_env() -> Vec<(OsString, OsString)> {
 /// and [`KILL_WAIT`]. When Ctrl-C reaches the gate meanwhile, the group is killed and the gate exits through
 /// [`exit_interrupted`]. Errs when `argv` cannot be started.
 ///
-/// Unlike gate.py, which starts a session, the group stays in the gate's session, so a tool that opens the terminal
-/// still can; neither gets the terminal's Ctrl-C, which is the gate's to pass on.
+/// The process starts a session of its own, as under gate.py, so it has no controlling terminal: the terminal's
+/// Ctrl-C is the gate's to pass on, and a tool that would read the terminal, or write to it under `stty tostop`,
+/// fails rather than stopping the gate with it.
 pub fn run(argv: &[&OsStr], cwd: &Path, timeout: Duration) -> std::io::Result<Finished> {
     let (mut child, group) = start(argv, cwd, Stdio::piped(), Stdio::piped())?;
     let stdout = Printed::read(child.stdout.take());
@@ -98,21 +99,26 @@ pub fn run_to_stderr(argv: &[&OsStr], cwd: &Path) -> std::io::Result<i32> {
     Ok(status_code(status))
 }
 
-/// `argv` started in `cwd` with [`tool_env`] as its whole environment, no input and the given output, in a process
-/// group of its own, which the second value kills when dropped.
+/// `argv` started in `cwd` with [`tool_env`] as its whole environment, no input and the given output, in a session,
+/// and so a process group, of its own, which the second value kills when dropped.
 fn start(argv: &[&OsStr], cwd: &Path, stdout: Stdio, stderr: Stdio) -> std::io::Result<(Child, Group)> {
     use std::os::unix::process::CommandExt;
     let (program, args) = argv.split_first().ok_or_else(|| std::io::Error::other("no program to run"))?;
-    let child = Command::new(program)
+    let mut command = Command::new(program);
+    command
         .args(args)
         .current_dir(cwd)
         .env_clear()
         .envs(tool_env())
         .stdin(Stdio::null())
         .stdout(stdout)
-        .stderr(stderr)
-        .process_group(0)
-        .spawn()?;
+        .stderr(stderr);
+    // SAFETY: setsid(2) is async-signal-safe, so it may run between fork and exec; it touches no memory.
+    #[allow(unsafe_code, reason = "setsid(2) between fork and exec has no safe wrapper in std")]
+    unsafe {
+        command.pre_exec(|| if libc::setsid() == -1 { Err(std::io::Error::last_os_error()) } else { Ok(()) });
+    }
+    let child = command.spawn()?;
     let group = Group(child.id());
     Ok((child, group))
 }
@@ -201,8 +207,9 @@ static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 
 /// Makes Ctrl-C stop the gate, through [`run`] and [`interrupted`], unless the gate was started with SIGINT ignored,
 /// as a command a Jenkins `sh` step runs is: then it stays ignored, for the gate and every process it starts, as for
-/// gate.py. Call it once, at the start.
-pub fn catch_interrupt() {
+/// gate.py. Call it once, at the start. Errs when the handler cannot be installed, as Ctrl-C would then leave the
+/// processes the gate starts running.
+pub fn catch_interrupt() -> std::io::Result<()> {
     extern "C" fn note(_: libc::c_int) {
         INTERRUPTED.store(true, Ordering::SeqCst);
     }
@@ -211,14 +218,21 @@ pub fn catch_interrupt() {
     #[allow(unsafe_code, reason = "sigaction(2) has no safe wrapper in std")]
     unsafe {
         let mut was: libc::sigaction = std::mem::zeroed();
-        if libc::sigaction(libc::SIGINT, std::ptr::null(), &mut was) != 0 || was.sa_sigaction == libc::SIG_IGN {
-            return;
+        if libc::sigaction(libc::SIGINT, std::ptr::null(), &mut was) != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        if was.sa_sigaction == libc::SIG_IGN {
+            return Ok(());
         }
         let mut action: libc::sigaction = std::mem::zeroed();
         action.sa_sigaction = note as extern "C" fn(libc::c_int) as libc::sighandler_t;
-        libc::sigemptyset(&mut action.sa_mask);
-        libc::sigaction(libc::SIGINT, &action, std::ptr::null_mut());
+        if libc::sigemptyset(&mut action.sa_mask) != 0
+            || libc::sigaction(libc::SIGINT, &action, std::ptr::null_mut()) != 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
     }
+    Ok(())
 }
 
 /// Whether Ctrl-C has reached the gate, which must then stop through [`exit_interrupted`] before it writes a report.
@@ -264,6 +278,14 @@ mod tests {
         let done = sh("sleep 30 & echo started", Duration::from_secs(10));
         assert_eq!((done.status, done.stopped), (0, false));
         assert!(start.elapsed() < Duration::from_secs(3), "{:?}", start.elapsed());
+    }
+
+    #[test]
+    fn it_runs_in_a_session_of_its_own() {
+        let done = sh("ps -o pid= -o sess= -p $$", Duration::from_secs(10));
+        let ids: Vec<&str> = std::str::from_utf8(&done.stdout).unwrap().split_whitespace().collect();
+        assert_eq!(ids.len(), 2, "{ids:?}");
+        assert_eq!(ids[0], ids[1]);
     }
 
     #[test]

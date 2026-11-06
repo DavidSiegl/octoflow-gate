@@ -60,9 +60,12 @@ this repository, in the project's working tree and with the project's own Python
 
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/DavidSiegl/octoflow-gate/<commit>/gate.py
-uv run pytest --cov=<package> --cov-branch --cov-report=xml --junitxml=test-results.xml
-uv run python gate.py --base main --tests test-results.xml --coverage coverage.xml --out quality.md
+uv run python gate.py --base main --out quality.md
 ```
+
+It runs the project's tests itself, with the commands its `gate.toml` lists as `[[test]]` (below), and judges the
+JUnit and Cobertura reports they write. A CI that has already run the tests passes their reports instead, with
+`--tests` and `--coverage`, and then no command runs.
 
 It takes what it runs from that project, so the project's dev dependencies hold them: ruff, mypy and pymarkdownlnt
 from `PATH`, which `uv run` points at the project's environment, and pytest, pytest-randomly and mutmut through the
@@ -98,6 +101,20 @@ octoflow's, for example:
 
 [build-config]
 Jenkinsfile = "The quality job reads it from `main`, so this analysis ran without the edit."
+
+[[test]]
+name = "pytest"
+command = ["uv", "run", "pytest", "--cov=gate", "--cov-branch", "--cov-context=test", "--cov-report=xml",
+           "--junitxml=test-results.xml"]
+junit = ["test-results.xml"]
+coverage = ["coverage.xml"]
+
+[[test]]
+name = "cargo-nextest"
+command = ["cargo", "llvm-cov", "nextest", "--locked", "--workspace", "--ignore-run-fail", "--profile", "ci",
+           "--config-file", "ci/nextest.toml", "--cobertura", "--output-path", "coverage-rust.xml"]
+junit = ["target/nextest/ci/junit.xml"]
+coverage = ["coverage-rust.xml"]
 
 # The defaults, written out: a quality round's timeout is sized for them.
 [budgets]

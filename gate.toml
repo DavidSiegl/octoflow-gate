@@ -1,0 +1,19 @@
+# The gate's settings for judging this repository (docs/quality-gate.md, "The gate's settings"): the defaults, but
+# for the commands that run its tests, the same as scripts/gate runs.
+
+# gate-rust's tests, with line coverage. --ignore-run-fail writes the coverage report whatever tests fail and exits 0
+# for them; ci/nextest.toml's ci profile writes the JUnit report.
+[[test]]
+name = "cargo-nextest"
+command = ["cargo", "llvm-cov", "nextest", "--locked", "--manifest-path", "gate-rust/Cargo.toml", "--ignore-run-fail",
+           "--profile", "ci", "--config-file", "ci/nextest.toml", "--cobertura", "--output-path", "coverage-rust.xml"]
+junit = ["gate-rust/target/nextest/ci/junit.xml"]
+coverage = ["coverage-rust.xml"]
+
+# --cov-context=test records which tests run each line, for gate.py's --test-contexts.
+[[test]]
+name = "pytest"
+command = ["uv", "run", "--frozen", "pytest", "--cov=gate", "--cov-branch", "--cov-context=test", "--cov-report=xml",
+           "--junitxml=test-results.xml"]
+junit = ["test-results.xml"]
+coverage = ["coverage.xml"]

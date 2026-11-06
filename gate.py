@@ -7,17 +7,19 @@ Markdown for the people and agents who answer it, and quality.json, the same rep
                    [--test-contexts COVERAGE] [--rust-syntax PATH]
 
 It judges the working tree of the git repository that holds the current directory: the linters (GATE_TOOLS) over
-the files the repository tracks, keeping the findings on the lines the change adds since --base, and the checks
-gate_checks lists, such as weakened tests, flaky tests and surviving mutants. `python gate.py --help` gives each
+the files the repository tracks, keeping the findings on the lines the change adds since --base, the tests that
+gate.toml's `[[test]]` commands run, and the checks gate_checks lists, such as weakened tests, flaky tests and
+surviving mutants. `python gate.py --help` gives each
 option. Exit status 0 when the quality file's first line is GATE: OK, 1 for GATE: ERROR, EXIT_GATE_UNJUDGED (2) when
 it could not judge the change, having written nothing; argparse's own 2 for bad arguments, and EXIT_INTERRUPTED (130)
 for Ctrl-C, likewise writing nothing.
 
 The gate imports nothing but the standard library, so this one file is the whole program, to copy into another
 project or take from a commit with `git show REV:gate.py`. What it runs it takes from the project it judges: the
-linters from PATH, and pytest, pytest-randomly and mutmut through the Python that runs this file (sys.executable).
-So run it with that project's Python, in which its dev tools are installed, such as `uv run python gate.py`. Rust it
-reads through a helper of its own, built from gate-rust, which --rust-syntax names (GateChange.rust_files).
+test commands from its gate.toml, the linters from PATH, and pytest, pytest-randomly and mutmut through the Python
+that runs this file (sys.executable). So run it with that project's Python, in which its dev tools are installed,
+such as `uv run python gate.py`. Rust it reads through a helper of its own, built from gate-rust, which --rust-syntax
+names (GateChange.rust_files).
 
 docs/quality-gate.md says what the gate judges and why, and, under "The report as a contract", what a program that
 integrates the gate may rely on: quality.json, as schema/quality-v1.json describes it. tests/golden/ holds both files
@@ -70,7 +72,7 @@ CLIPPY_CONFIG_NAMES = ("Cargo.toml", "clippy.toml", ".clippy.toml", "rust-toolch
 CARGO_CONFIG_NAMES = ("config", "config.toml")
 # This gate's version: pyproject.toml's, which tests/test_invariants.py holds it to, carried here for a copy of gate.py
 # taken from a release, which has no pyproject.toml beside it. quality.json names it (QualityReport.json).
-GATE_VERSION = "0.3.0"
+GATE_VERSION = "0.4.0"
 # The most findings the quality file lists, issues and findings to weigh numbered as one list, and the most failing
 # tests; the rest are counted.
 QUALITY_ISSUE_LIMIT = 50
@@ -802,12 +804,12 @@ _BRACKET_EXPRESSION = re.compile(r"\\.|\[\^?\]?(?:\\.|[^\]\\])*\]")
 
 @dataclass(frozen=True)
 class TestCommand:
-    """A command that runs the project's tests, one `[[test]]` entry of gate.toml. The gate reads and checks them but
-    does not run them yet; `--tests` and `--coverage` give it the reports."""
+    """A command that runs the project's tests, one `[[test]]` entry of gate.toml, which the gate runs and whose
+    reports it judges, as run_test_commands says; `--tests` or `--coverage` replace all of them."""
     __test__ = False  # not a test class, to pytest
     name: str  # what findings about the command call it
     command: tuple[str, ...]  # the argv, run in the tree's top level; never through a shell
-    junit: tuple[str, ...] = ()  # the JUnit reports it writes, paths from the tree's top level
+    junit: tuple[str, ...] = ()  # the JUnit reports it writes, paths inside the tree from its top level
     coverage: tuple[str, ...] = ()  # the Cobertura reports it writes, likewise
 
 
@@ -964,10 +966,15 @@ def _test_command_settings(value: object, table: str, path: str) -> dict[str, An
             raise GateError(f"{path}: `{key}.name` must be a non-empty string")
         if "command" not in test:
             raise GateError(f"{path}: `{key}.command` is missing")
+        reports = {r: _settings_strings(test.get(r, []), f"{key}.{r}", path) for r in ("junit", "coverage")}
+        for r, paths in reports.items():
+            # The gate removes each before the command runs, so one outside the tree would be a file of anyone's.
+            outside = [p for p in paths if os.path.isabs(p) or os.path.normpath(p).split(os.sep)[0] == os.pardir]
+            if outside:
+                raise GateError(f"{path}: `{key}.{r}` must name paths inside the tree, from its top level, "
+                                f"not {outside[0]!r}")
         commands.append(TestCommand(test["name"], _settings_strings(test["command"], f"{key}.command", path,
-                                                                    empty=False),
-                                    *(_settings_strings(test.get(r, []), f"{key}.{r}", path)
-                                      for r in ("junit", "coverage"))))
+                                                                    empty=False), reports["junit"], reports["coverage"]))
     return {"test_commands": tuple(commands)}
 
 
@@ -1133,15 +1140,20 @@ def judge_change(cwd: str, base: str, checks: tuple[GateCheck, ...], *, rules: s
     (GateChange.mutmut_state), which is always mutmut's scratch state committed by accident, when there is such a linter
     finding or a check's finding judged an error, when a linter is missing, fails or prints nothing readable, when a
     file a linter reads and the change adds lines to holds a line end that git does not count, as stray_line_ends finds,
-    when one of tests, JUnit reports of the tree's tests such as pytest's --junitxml and cargo-nextest's, has a failing
-    test, or when coverage, Cobertura reports of the tree such as pytest-cov's coverage.xml and cargo-llvm-cov's, merged
-    as new_coverage says, puts new code below GATE_MIN_COVERAGE percent on GATE_MIN_NEW_LINES or more new lines to
-    cover; else OK. With no tests, or no coverage, the report's failing_tests, or coverage, is None. Suppressions the
-    change added are listed, not counted against it. Paths are absolute or relative to the process's working directory.
+    when a test fails, or when the reports, merged as new_coverage says, put new code below GATE_MIN_COVERAGE percent
+    on GATE_MIN_NEW_LINES or more new lines to cover; else OK. The tests are those the settings' `[[test]]` commands
+    run, before the linters and checks, as run_test_commands says, which is also ERROR when a command's tests could not
+    be judged. tests, JUnit reports of the tree's tests such as pytest's --junitxml and cargo-nextest's, and coverage,
+    Cobertura reports such as pytest-cov's coverage.xml and cargo-llvm-cov's, replace those commands when either is
+    given: no command runs, and these reports are read. With no JUnit report to read, or no coverage report, the
+    report's failing_tests, or coverage, is None. Suppressions the change added are listed, not counted against it.
+    Paths are absolute or relative to the process's working directory.
 
     Raises GateError when it cannot judge: cwd is not in a git work tree, base names no commit, there is no rules file,
-    the settings cannot be read as GateSettings.read says, a test or coverage report cannot be read, or git prints what
-    it cannot decode outside the paths and diffs it reads verbatim, such as a work tree whose own path is not UTF-8.
+    the settings cannot be read as GateSettings.read says, a test or coverage report cannot be read, a report a test
+    command names cannot be removed before it runs, or git prints what it cannot decode outside the paths and diffs it
+    reads verbatim, such as a work tree whose own path is not UTF-8. KeyboardInterrupt, from Ctrl-C during a test
+    command, comes through once the command's process group is killed.
     """
     proc = _git_run(cwd, "rev-parse", "--show-toplevel")
     if proc.returncode != 0:
@@ -1158,6 +1170,8 @@ def judge_change(cwd: str, base: str, checks: tuple[GateCheck, ...], *, rules: s
 
     change = GateChange.from_tree(root, base_sha, rules_path, rust_syntax, read_by)
     changed = change.changed
+    # Before any check, since surviving-mutants reads the test contexts a test command may write.
+    failing, coverage_reports, test_problems = _test_results(root, read_by.test_commands, tests, coverage)
     listed = [f for f in _git(root, "ls-files", "-z", verbatim=True).split("\0") if f]  # in git's order
     tracked = set(listed)
     conditions, findings = _mutmut_state_condition(change), []
@@ -1187,15 +1201,13 @@ def judge_change(cwd: str, base: str, checks: tuple[GateCheck, ...], *, rules: s
             issues += errors
             conditions.append(_check_condition(check.name, len(errors)))
 
-    failing: list[tuple[str, str]] | None = None
-    if tests:
-        failing = [failed for report in tests for failed in failing_tests(os.path.abspath(report))]
-        if failing:
-            conditions.append(f"{len(failing)} tests fail; each is listed below.")
+    conditions += test_problems
+    if failing:
+        conditions.append(f"{len(failing)} tests fail; each is listed below.")
 
     covered = None
-    if coverage:
-        covered = new_coverage([os.path.abspath(report) for report in coverage], root, changed)
+    if coverage_reports:
+        covered = new_coverage(coverage_reports, root, changed)
         if covered.lines >= GATE_MIN_NEW_LINES and covered.percent() < GATE_MIN_COVERAGE:
             conditions.append(f"Coverage of new code is {_floor_tenth(covered.percent())}%; the gate wants at "
                               f"least {GATE_MIN_COVERAGE:g}% once a change has {GATE_MIN_NEW_LINES} or more new "
@@ -1208,6 +1220,93 @@ def judge_change(cwd: str, base: str, checks: tuple[GateCheck, ...], *, rules: s
         clippy_config=clippy_config_files(change.diff, changed, _cargo_home_in(root)),
         rules_from=None if _tree_s_own(root, rules_path, "pyproject.toml") else f"`{rules}`",
         settings_from=settings_from, config_notes=read_by.build_config)
+
+
+def _test_results(root: str, commands: Sequence[TestCommand], tests: Sequence[str],
+                  coverage: Sequence[str]) -> tuple[list[tuple[str, str]] | None, list[str], list[str]]:
+    """What the gate judges of the tests of the work tree at root: the failing tests, as failing_tests gives them,
+    None when no JUnit report was read; the Cobertura reports to read, absolute paths; and the failed
+    conditions about commands, gate.toml's `[[test]]` entries, whose tests could not be judged.
+
+    tests and coverage, JUnit and Cobertura reports given on the command line, paths absolute or relative to the
+    process's working directory, replace commands when either is given: a CI that already ran the tests then reads
+    their reports. Otherwise run_test_commands runs commands. Raises GateError when one of tests cannot be read.
+    KeyboardInterrupt, from Ctrl-C during a command, comes through once the command's process group is killed.
+    """
+    if tests or coverage or not commands:
+        failing = [f for report in tests for f in failing_tests(os.path.abspath(report))] if tests else None
+        return failing, [os.path.abspath(report) for report in coverage], []
+    return run_test_commands(root, commands)
+
+
+def run_test_commands(root: str, commands: Sequence[TestCommand]) -> tuple[list[tuple[str, str]] | None, list[str],
+                                                                           list[str]]:
+    """Run each of commands, in order, at the top level of the work tree at root, with tool_env's environment and no
+    input, its output going to the gate's standard error; and give back what the reports of those whose tests could
+    be judged say: the failing tests of their JUnit reports, as failing_tests gives them, None when none of them
+    names a JUnit report; the absolute paths of their Cobertura reports; and a failed condition for each command whose
+    tests could not be judged, whose reports are not read.
+
+    Before a command runs, the reports it names are removed, so that one an earlier run left is never read. Its
+    tests could not be judged when it cannot start, when it leaves a report it names missing, or a JUnit report that
+    cannot be read, or when it exits non-zero while its JUnit reports list no failing test: then what failed was not
+    a test. A test failing is not such a failure; failing_tests lists it. A coverage report is read later, by
+    new_coverage, which raises GateError for one that cannot be read. The commands take as long as they take: no
+    time limit applies, nor do they count against a check's budget.
+
+    Raises GateError when a report cannot be removed. On KeyboardInterrupt, from Ctrl-C, the running command's
+    process group is killed before it comes through.
+    """
+    failing: list[tuple[str, str]] | None = None
+    coverage: list[str] = []
+    problems: list[str] = []
+    for command in commands:
+        for report in (*command.junit, *command.coverage):
+            try:
+                os.remove(os.path.join(root, report))
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                raise GateError(f"cannot remove {report}, which the test command {command.name} writes: {e}") from e
+        found, problem = _run_test_command(root, command)
+        if problem:
+            problems.append(f"The test command `{command.name}` {problem}, so its tests were not judged.")
+            continue
+        if command.junit:
+            failing = [*(failing or []), *found]
+        coverage += [os.path.join(root, report) for report in command.coverage]
+    return failing, coverage, problems
+
+
+def _run_test_command(root: str, command: TestCommand) -> tuple[list[tuple[str, str]], str | None]:
+    """Run command as run_test_commands says, and give back the failing tests of its JUnit reports, and why its tests
+    could not be judged, a clause after "The test command `name`", or None when they could; the tests are [] then."""
+    try:
+        # The argv is from the gate.toml the settings came from (_settings_for), the judged tree's own unless
+        # --config names another; run as a list, no shell reads it.
+        proc = subprocess.Popen(command.command, cwd=root, env=tool_env(), stdin=subprocess.DEVNULL,  # noqa: S603
+                                stdout=2, stderr=2, start_new_session=True)
+    except OSError as e:
+        return [], f"could not start: {e.strerror or e}"
+    try:
+        returncode = proc.wait()
+    finally:
+        _kill_group(proc)
+        # Reaped here, so that a command killed by Ctrl-C is not left a zombie for a later Popen to reap.
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            proc.wait(timeout=TOOL_KILL_WAIT)
+    for report in (*command.junit, *command.coverage):
+        if not os.path.isfile(os.path.join(root, report)):
+            return [], f"wrote no `{report}`, which gate.toml names as its report"
+    found = []
+    for report in command.junit:
+        try:
+            found += failing_tests(os.path.join(root, report))
+        except GateError:
+            return [], f"left `{report}`, which gate.toml names as its report, unreadable as JUnit"
+    if returncode != 0 and not found:
+        return [], f"exited {returncode}, but its JUnit reports list no failing test"
+    return found, None
 
 
 def _settings_for(root: str, rules_path: str, settings: str | None) -> tuple[GateSettings, str | None]:
@@ -6169,12 +6268,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--coverage", metavar="XML", action="append", default=[],
                         help="a Cobertura coverage report of the tree, such as pytest-cov's coverage.xml or "
                              "cargo-llvm-cov's --cobertura output; given more than once, the reports are merged by "
-                             "path and line, a line covered when any report covers it; without it, coverage is not "
-                             "judged")
+                             "path and line, a line covered when any report covers it. With --coverage or --tests, "
+                             "gate.toml's [[test]] commands do not run: these reports are what is judged")
     parser.add_argument("--tests", metavar="XML", action="append", default=[],
                         help="a JUnit report of the tree's tests, such as pytest's --junitxml or cargo-nextest's; "
-                             "given more than once, a failing test in any of them counts; without it, tests are not "
-                             "judged")
+                             "given more than once, a failing test in any of them counts. With --tests or --coverage, "
+                             "gate.toml's [[test]] commands do not run: these reports are what is judged")
     parser.add_argument("--out", metavar="FILE",
                         help="write the quality file here instead of to standard output, and quality.json beside it, "
                              "its name FILE's with the .md made .json, or with .json added")

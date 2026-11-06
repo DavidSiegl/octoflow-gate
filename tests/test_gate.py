@@ -31,6 +31,7 @@ from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
 import jsonschema
+import pytest
 from coverage import CoverageData
 from gitrepo import RepositoryTest, git
 from golden import assert_golden
@@ -885,6 +886,120 @@ class TestGate(RepositoryTest):
         self.assertEqual((status, stdout), (gate.EXIT_GATE_UNJUDGED, ""))
         self.assertIn("cannot read the test report", err)
 
+    def commit_test_command(self, code, junit=("junit.xml",), coverage=()):
+        """Commit a gate.toml whose one `[[test]]` entry, named "unit", runs code, a Python script, dedented, at the
+        tree's top level and names junit and coverage as its reports; return the file each run appends a line to."""
+        script, runs = os.path.join(self.outside, "run_tests.py"), os.path.join(self.outside, "runs")
+        with open(script, "w") as f:
+            f.write(f"import os, sys, time\nopen({runs!r}, 'a').write('ran\\n')\n" + textwrap.dedent(code))
+        self.commit({"gate.toml": f'[[test]]\nname = "unit"\ncommand = [{json.dumps(sys.executable)}, '
+                                  f'{json.dumps(script)}]\njunit = {json.dumps(list(junit))}\n'
+                                  f'coverage = {json.dumps(list(coverage))}\n'}, "test command")
+        return runs
+
+    # A test command's script that writes junit.xml with one failing test, t.T.test_x, and exits 1, as pytest does.
+    FAILING_TEST = ("open('junit.xml', 'w').write('<testsuites><testsuite><testcase classname=\"t.T\" name=\"test_x\">"
+                    "<failure message=\"boom\">trace</failure></testcase></testsuite></testsuites>')\nsys.exit(1)\n")
+
+    def test_gate_toml_s_test_commands_run_and_their_reports_are_judged(self):
+        self.commit_test_command("open('coverage.xml', 'w').write('<coverage><packages><package><classes>"
+                          "<class filename=\"f.py\"><lines><line number=\"4\" hits=\"0\"/></lines></class>"
+                          "</classes></package></packages></coverage>')\n" + self.FAILING_TEST,
+                          coverage=("coverage.xml",))
+        self.add_lines(1)
+        status, out, _ = self.gate()
+        self.assertEqual(status, 1)
+        self.assertIn("- 1 tests fail; each is listed below.\n", out)
+        self.assertIn("## Failing tests\n\n- `t.T.test_x`: boom\n", out)
+        self.assertIn("## Coverage on new code\n\n0.0% of 1 new lines to cover", out)
+        self.assertNotIn("The test command", out)
+
+    def test_a_test_command_that_cannot_start_is_a_failed_condition_and_its_reports_are_not_read(self):
+        self.commit({"gate.toml": '[[test]]\nname = "unit"\ncommand = ["no-such-test-runner"]\n'
+                                  'junit = ["junit.xml"]\ncoverage = ["coverage.xml"]\n'}, "test command")
+        self.add_lines(1)
+        status, out, _ = self.gate()
+        self.assertEqual(status, 1, out)
+        self.assertIn("- The test command `unit` could not start: ", out)
+        self.assertNotIn(gate.FAILING_TESTS, out)
+        self.assertNotIn("## Coverage on new code", out)
+
+    def test_a_test_command_that_leaves_its_coverage_report_missing_is_a_failed_condition(self):
+        self.commit_test_command("open('junit.xml', 'w').write('<testsuites/>')\n", coverage=("coverage.xml",))
+        self.add_lines(1)
+        status, out, _ = self.gate()
+        self.assertEqual(status, 1, out)
+        self.assertIn("- The test command `unit` wrote no `coverage.xml`, which gate.toml names as its report, so its "
+                      "tests were not judged.\n", out)
+        self.assertNotIn(gate.FAILING_TESTS, out)
+
+    def test_a_test_command_that_fails_with_no_failing_test_is_a_failed_condition(self):
+        self.commit_test_command("open('junit.xml', 'w').write('<testsuites/>')\nsys.exit(2)\n")
+        self.add_lines(1)
+        status, out, _ = self.gate()
+        self.assertEqual(status, 1)
+        self.assertIn("- The test command `unit` exited 2, but its JUnit reports list no failing test, so its tests "
+                      "were not judged.\n", out)
+
+    def test_a_test_command_s_unreadable_report_is_a_failed_condition(self):
+        self.commit_test_command("open('junit.xml', 'w').write('<testsuites')\n")
+        self.add_lines(1)
+        status, out, _ = self.gate()
+        self.assertEqual(status, 1)
+        self.assertIn("- The test command `unit` left `junit.xml`, which gate.toml names as its report, unreadable as "
+                      "JUnit, so its tests were not judged.\n", out)
+
+    def test_a_report_left_from_an_earlier_run_is_removed_before_the_test_command_runs(self):
+        self.commit_test_command("sys.exit(0)\n")
+        self.add_lines(1)
+        os.rename(os.path.join(self.repo, self.junit(("test_old", "stale"))), os.path.join(self.repo, "junit.xml"))
+        status, out, _ = self.gate()
+        self.assertEqual(status, 1)
+        self.assertIn("- The test command `unit` wrote no `junit.xml`, which gate.toml names as its report, so its "
+                      "tests were not judged.\n", out)
+        self.assertNotIn("test_old", out)
+        self.assertFalse(os.path.exists(os.path.join(self.repo, "junit.xml")))
+
+    def test_tests_or_coverage_on_the_command_line_replace_the_test_commands(self):
+        runs = self.commit_test_command(self.FAILING_TEST)
+        self.add_lines(1)
+        status, out, _ = self.gate()
+        self.assertEqual(status, 1)
+        self.assertIn("## Failing tests\n\n- `t.T.test_x`: boom\n", out)
+        os.remove(runs)
+        for args in (("--tests", self.junit()), ("--coverage", self.coverage({4: "1"}))):
+            with self.subTest(args=args):
+                status, out, _ = self.gate(*args)
+                self.assertEqual(status, 0, out)
+        self.assertFalse(os.path.exists(runs))
+
+    @pytest.mark.real_sleep
+    def test_ctrl_c_during_a_test_command_kills_its_process_group(self):
+        pid_file = os.path.join(self.outside, "pid")
+        self.commit_test_command(f"open({pid_file!r}, 'w').write(str(os.getpid()))\ntime.sleep(60)\n")
+        self.add_lines(1)
+
+        real_wait = gate.subprocess.Popen.wait
+        interrupted = []
+
+        # Ctrl-C arrives once, during the gate's first wait on the command once it is running.
+        def interrupted_wait(proc, timeout=None):
+            if interrupted or proc.args[-1] != os.path.join(self.outside, "run_tests.py"):
+                return real_wait(proc, timeout)
+            while not (os.path.exists(pid_file) and os.path.getsize(pid_file)):
+                time.sleep(0.01)
+            interrupted.append(proc)
+            raise KeyboardInterrupt
+
+        with patch.object(gate.subprocess.Popen, "wait", interrupted_wait):
+            status, stdout, _ = self.gate()
+        self.assertEqual((status, stdout), (gate.EXIT_INTERRUPTED, ""))
+        with open(pid_file) as f:
+            pid = int(f.read())
+        # Killed and reaped by the gate, not still in its minute's sleep, nor a zombie left for a later Popen to reap.
+        with self.assertRaises(ProcessLookupError):
+            os.kill(pid, 0)
+
     def test_added_suppressions_are_listed_not_failed(self):
         with open(os.path.join(self.repo, "f.py"), "a") as f:
             f.write("import os  # noqa: F401\n")
@@ -1115,6 +1230,9 @@ class TestGate(RepositoryTest):
                           ('[[test]]\nname = "t"\ncommand = []\n', "`test[0].command`"),
                           ('[[test]]\ncommand = ["pytest"]\n', "`test[0].name`"),
                           ('[[test]]\nname = "t"\n', "`test[0].command`"),
+                          ('[[test]]\nname = "t"\ncommand = ["pytest"]\njunit = ["/tmp/j.xml"]\n', "`test[0].junit`"),
+                          ('[[test]]\nname = "t"\ncommand = ["pytest"]\ncoverage = ["a/../../c.xml"]\n',
+                           "`test[0].coverage`"),
                           ('[test]\nname = "t"\n', "`test`")):
             with self.subTest(key):
                 self.put("gate.toml", text)

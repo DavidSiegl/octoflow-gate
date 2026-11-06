@@ -157,13 +157,7 @@ fn parse_args(argv: impl IntoIterator<Item = OsString>) -> Result<Asked, String>
     let (mut out, mut json) = (None, None);
     let mut unrecognized: Vec<String> = vec![];
     while let Some(arg) = argv.next() {
-        let (name, inline) = match arg.as_bytes().iter().position(|&b| b == b'=') {
-            Some(k) if arg.as_bytes().starts_with(b"--") => {
-                let (name, value) = arg.as_bytes().split_at(k);
-                (OsStr::from_bytes(name).to_os_string(), Some(OsString::from_vec(value[1..].to_vec())))
-            }
-            _ => (arg, None),
-        };
+        let (name, inline) = split_inline(arg);
         let Some(name) = name.to_str().map(str::to_string) else {
             unrecognized.push(text::path(&name));
             continue;
@@ -210,6 +204,18 @@ fn parse_args(argv: impl IntoIterator<Item = OsString>) -> Result<Asked, String>
         }
     }
     Ok(Asked::Run(Args { base, given, out, json }))
+}
+
+/// `arg` as an option's name and the value it carries after `=`, as in `--name=value`; the whole of `arg` and None
+/// when it carries none, as only a long option, one starting `--`, can.
+fn split_inline(arg: OsString) -> (OsString, Option<OsString>) {
+    let bytes = arg.as_bytes();
+    match bytes.iter().position(|&b| b == b'=') {
+        Some(k) if bytes.starts_with(b"--") => {
+            (OsStr::from_bytes(&bytes[..k]).to_os_string(), Some(OsStr::from_bytes(&bytes[k + 1..]).to_os_string()))
+        }
+        _ => (arg, None),
+    }
 }
 
 /// A time budget given on the command line, in whole seconds, at least 1; errs with why `text` is not one.
@@ -333,6 +339,7 @@ mod tests {
         let ignored = ["--mutation-budget", "5", "--rust-syntax", "x", "--test-contexts", "y"];
         assert!(parse(&[&["--base", "m"][..], &ignored].concat()).is_ok());
         assert_eq!(parse(&["--base", "m", "-x", "y"]).unwrap_err(), "unrecognized arguments: -x y");
+        assert_eq!(parse(&["--base", "m", "x=y"]).unwrap_err(), "unrecognized arguments: x=y");
         assert_eq!(parse(&["--bogus", "--help"]), Ok(Asked::Help));
     }
 

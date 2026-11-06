@@ -93,51 +93,14 @@ impl Settings {
             settings.complexity_exempt = Globs::new(&exempt);
         }
         for (name, note) in file.build_config.map(|n| n.0).unwrap_or_default() {
-            if BUILD_CONFIG_FILES.contains(&name.as_str()) || name == SETTINGS_FILE {
-                return Err(invalid(format!(
-                    "`build-config.{name}` is build configuration already, with a note of the gate's own"
-                )));
-            }
-            if crate::text::py_strip(&note).is_empty() {
-                return Err(invalid(format!(
-                    "`build-config.{name}` must be a sentence, the note the quality file gives the file"
-                )));
-            }
-            settings.build_config.push((name, note));
+            settings.build_config.push(build_config_entry(name, note).map_err(invalid)?);
         }
         for (name, globs) in file.linters.map(|l| l.0).unwrap_or_default() {
-            if !LINTER_NAMES.contains(&name.as_str()) {
-                return Err(invalid(format!("unknown key `linters.{name}`")));
-            }
-            // Clippy lints only the workspaces of the manifests among its files: globs that take in none would turn
-            // it off as silently as a typo would.
-            let last = |g: &String| g.rsplit('/').next().unwrap_or_default().to_string();
-            if name == "clippy"
-                && !globs.is_empty()
-                && !globs.iter().any(|g| Globs::new(&[last(g)]).matches(OsStr::new("Cargo.toml")))
-            {
-                return Err(invalid(format!(
-                    "`linters.{name}` must take in the Cargo.toml of each workspace clippy lints, or be [] to turn it \
-                     off"
-                )));
-            }
-            settings.linters.push((name, Globs::new(&globs)));
+            settings.linters.push(linter_entry(name, &globs).map_err(invalid)?);
         }
         if let Some(budgets) = file.budgets {
-            for (key, seconds, field) in [
-                ("mutation", budgets.mutation, &mut settings.mutation_budget),
-                ("base-run", budgets.base_run, &mut settings.base_run_budget),
-            ] {
-                match seconds {
-                    None => {}
-                    Some(n) if n >= 1 => *field = n as u64,
-                    Some(n) => {
-                        return Err(invalid(format!(
-                            "`budgets.{key}` must be a whole number of seconds, at least 1, not {n}"
-                        )))
-                    }
-                }
-            }
+            settings.mutation_budget = budget("mutation", budgets.mutation, settings.mutation_budget).map_err(invalid)?;
+            settings.base_run_budget = budget("base-run", budgets.base_run, settings.base_run_budget).map_err(invalid)?;
         }
         for (k, test) in file.test.unwrap_or_default().into_iter().enumerate() {
             settings.test_commands.push(test.command(k).map_err(invalid)?);
@@ -173,6 +136,50 @@ impl Settings {
     /// The globs gate.toml gives the linter `name`, None when it gives none and the linter reads its own.
     pub fn linter_globs(&self, name: &str) -> Option<&Globs> {
         self.linters.iter().find(|(linter, _)| linter == name).map(|(_, globs)| globs)
+    }
+}
+
+/// The `[build-config]` entry `name = note`, as [`Settings::build_config`] holds it; errs, with why, when `name` is
+/// build configuration already or `note` is blank.
+fn build_config_entry(name: String, note: String) -> Result<(String, String), String> {
+    if BUILD_CONFIG_FILES.contains(&name.as_str()) || name == SETTINGS_FILE {
+        return Err(format!("`build-config.{name}` is build configuration already, with a note of the gate's own"));
+    }
+    if crate::text::py_strip(&note).is_empty() {
+        return Err(format!("`build-config.{name}` must be a sentence, the note the quality file gives the file"));
+    }
+    Ok((name, note))
+}
+
+/// The `[linters]` entry `name = globs`, as [`Settings::linters`] holds it; errs, with why, when `name` is not among
+/// [`LINTER_NAMES`], or names clippy with globs that take in no Cargo.toml.
+fn linter_entry(name: String, globs: &[String]) -> Result<(String, Globs), String> {
+    if !LINTER_NAMES.contains(&name.as_str()) {
+        return Err(format!("unknown key `linters.{name}`"));
+    }
+    // Clippy lints only the workspaces of the manifests among its files: globs that take in none would turn it off
+    // as silently as a typo would.
+    let last = |g: &String| g.rsplit('/').next().unwrap_or_default().to_string();
+    if name == "clippy"
+        && !globs.is_empty()
+        && !globs.iter().any(|g| Globs::new(&[last(g)]).matches(OsStr::new("Cargo.toml")))
+    {
+        return Err(format!(
+            "`linters.{name}` must take in the Cargo.toml of each workspace clippy lints, or be [] to turn it off"
+        ));
+    }
+    Ok((name, Globs::new(globs)))
+}
+
+/// The seconds `budgets.{key}` gives, `default` when `seconds` is None as the key is left out; errs, with why, when
+/// it gives fewer than 1.
+fn budget(key: &str, seconds: Option<i64>, default: u64) -> Result<u64, String> {
+    match seconds {
+        None => Ok(default),
+        Some(n) => u64::try_from(n)
+            .ok()
+            .filter(|&n| n >= 1)
+            .ok_or_else(|| format!("`budgets.{key}` must be a whole number of seconds, at least 1, not {n}")),
     }
 }
 

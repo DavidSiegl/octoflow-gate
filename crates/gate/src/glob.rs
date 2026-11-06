@@ -101,45 +101,9 @@ fn translate_name(part: &str) -> String {
 /// The bracket expression whose members start at `chars[start]`, just past its `[`, as a regex class that never
 /// matches a slash, and the index past its `]`; None when no `]` closes it, so the `[` is itself.
 fn bracket(chars: &[char], start: usize) -> Option<(String, usize)> {
-    let mut j = start;
-    if chars.get(j) == Some(&'!') {
-        j += 1;
-    }
-    if chars.get(j) == Some(&']') {
-        j += 1;
-    }
-    while j < chars.len() && chars[j] != ']' {
-        j += 1;
-    }
-    if j >= chars.len() {
-        return None;
-    }
+    let j = closing_bracket(chars, start)?;
     let negated = chars[start] == '!';
-    // The members, split at each hyphen that makes a range: a chunk's last character and the next one's first are
-    // a range's ends. A hyphen first, after any `!`, or last is a member.
-    let mut chunks: Vec<Vec<char>> = Vec::new();
-    let mut i = start;
-    let mut k = if negated { start + 2 } else { start + 1 };
-    while let Some(at) = (k..j).find(|&at| chars[at] == '-') {
-        chunks.push(chars[i..at].to_vec());
-        i = at + 1;
-        k = at + 3;
-    }
-    let rest = chars[i..j].to_vec();
-    match chunks.last_mut() {
-        Some(last) if rest.is_empty() => last.push('-'),
-        _ => chunks.push(rest),
-    }
-    // A range whose ends are out of order matches nothing, as fnmatch drops it.
-    for k in (1..chunks.len()).rev() {
-        if let (Some(&end), Some(&next)) = (chunks[k - 1].last(), chunks[k].first()) {
-            if end > next {
-                let tail = chunks.remove(k);
-                chunks[k - 1].pop();
-                chunks[k - 1].extend_from_slice(&tail[1..]);
-            }
-        }
-    }
+    let mut chunks = range_chunks(chars, start, j, negated);
     if negated {
         chunks[0].remove(0);
     }
@@ -156,6 +120,49 @@ fn bracket(chars: &[char], start: usize) -> Option<(String, usize)> {
         (true, false) => format!("[^{members}/]"),
     };
     Some((class, j + 1))
+}
+
+/// The index of the `]` that closes the bracket expression whose members start at `chars[start]`, as fnmatch finds
+/// it: a `]` first, after any `!`, is a member. None when no `]` closes it.
+fn closing_bracket(chars: &[char], start: usize) -> Option<usize> {
+    let mut j = start;
+    if chars.get(j) == Some(&'!') {
+        j += 1;
+    }
+    if chars.get(j) == Some(&']') {
+        j += 1;
+    }
+    (j..chars.len()).find(|&j| chars[j] == ']')
+}
+
+/// The members `chars[start..end]` of a bracket expression, `!` included when `negated`, split at each hyphen that
+/// makes a range, as fnmatch splits them: a chunk's last character and the next one's first are a range's ends. A
+/// hyphen first, after any `!`, or last is a member. A range whose ends are out of order is dropped, as fnmatch drops
+/// it, so it matches nothing. Never empty.
+fn range_chunks(chars: &[char], start: usize, end: usize, negated: bool) -> Vec<Vec<char>> {
+    let mut chunks: Vec<Vec<char>> = Vec::new();
+    let mut i = start;
+    let mut k = if negated { start + 2 } else { start + 1 };
+    while let Some(at) = (k..end).find(|&at| chars[at] == '-') {
+        chunks.push(chars[i..at].to_vec());
+        i = at + 1;
+        k = at + 3;
+    }
+    let rest = chars[i..end].to_vec();
+    match chunks.last_mut() {
+        Some(last) if rest.is_empty() => last.push('-'),
+        _ => chunks.push(rest),
+    }
+    for k in (1..chunks.len()).rev() {
+        if let (Some(&last), Some(&next)) = (chunks[k - 1].last(), chunks[k].first()) {
+            if last > next {
+                let tail = chunks.remove(k);
+                chunks[k - 1].pop();
+                chunks[k - 1].extend_from_slice(&tail[1..]);
+            }
+        }
+    }
+    chunks
 }
 
 #[cfg(test)]

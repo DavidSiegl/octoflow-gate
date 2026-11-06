@@ -21,3 +21,5 @@ A change reaches users only when a merge into `main` raises the version in `pypr
 - Run the tests with SIGINT ignored, as Jenkins runs them (`trap '' INT` first), so that a local run sees what a
   build sees. Some tests run cargo-nextest, cargo-llvm-cov and cargo-mutants and fail without them on `PATH`;
   `ci/install-tools.sh <dir>` puts them in `<dir>`.
+
+@docs/agents/README.md

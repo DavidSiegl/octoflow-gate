@@ -1,0 +1,14 @@
+# Changes here will be overwritten by Copier; NEVER EDIT MANUALLY
+_commit: 64162e2
+_src_path: gh:DavidSiegl/agent-estate
+automerge: true
+ci: jenkins
+gate: own
+jenkins_agent_label: untrusted
+jenkins_notify_email: david.siegl95@gmail.com
+jenkins_status_login: davidsiegl-jenkins[bot]
+release: false
+repo: DavidSiegl/octoflow-gate
+review_gate: true
+ticket_sync: true
+tracker: scratch

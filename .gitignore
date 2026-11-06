@@ -13,7 +13,12 @@ dist/
 coverage.xml
 coverage-rust.xml
 test-results.xml
+test-results-rust.xml
 quality.md
+
+# The tools scripts/gate downloads when PATH lacks them, and its CARGO_HOME in a Jenkins build
+.tools/
+.cargo-home/
 
 # The build output of the gate-rust helper
 gate-rust/target/
@@ -26,3 +31,6 @@ mutants/
 # Agent working notes
 .scratch/
 TESTING.md
+
+# Claude Code's personal instructions for this repo
+CLAUDE.local.md

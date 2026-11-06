@@ -1,0 +1,76 @@
+# Merges a pull request into main, with a merge commit, once the quality gate has passed
+# on its head commit, so a pull request lands without a human. Any file may change, as in
+# octoflow-ai's auto-merge (decided by the owner on 2026-11-05). So an agent's pull request
+# is trusted not to loosen its own check, which CI runs from the pull request's own copy of
+# the files that configure it (CI's files, scripts/gate, conftest.py, pytest's, coverage's
+# and ruff's configuration, uv.lock), and not to loosen the check of every later one by
+# changing those files or this workflow on main. Held for a human: drafts, and pull
+# requests labelled no-automerge, from forks, or into another branch.
+#
+# GitHub runs this from main's copy for status events, so a pull request cannot change
+# these rules for itself. It trusts a success only from Jenkins's GitHub App
+# (davidsiegl-jenkins[bot]), which the agents' own token cannot post as.
+#
+# It acts with AUTOMERGE_TOKEN, a fine-grained personal access token of the repository's
+# owner limited to this repository, with contents, pull requests and workflows read and
+# write. Not github.token: GitHub refuses that token a merge that changes .github/workflows/,
+# and starts no workflow for the push to main that a merge made with it makes. When the
+# secret is missing or the token has expired, every run fails at its first gh call and
+# pull requests wait for a human until it is replaced.
+name: Auto-merge
+
+on:
+  status
+
+permissions: {}
+
+jobs:
+  merge:
+    if: >-
+      github.event.state == 'success' &&
+      github.event.context == 'continuous-integration/jenkins/pr-head' &&
+      github.event.sender.login == 'davidsiegl-jenkins[bot]'
+    runs-on: ubuntu-latest
+    # No concurrency group: one would cancel a queued run when a third arrives, leaving a
+    # passed pull request unmerged. gh pr merge --match-head-commit makes parallel runs safe.
+    steps:
+      - shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.AUTOMERGE_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          SHA: ${{ github.event.sha }}
+        run: |
+          # 1 when a pull request may have passed but was not merged: a merge or a lookup failed.
+          failed=0
+          # Every open pull request whose head is the commit that passed.
+          if ! prs=$(gh api "repos/$GH_REPO/commits/$SHA/pulls" --jq '.[] | select(.state == "open") | .number'); then
+            echo "::error::could not list the pull requests at $SHA"
+            exit 1
+          fi
+          for pr in $prs; do
+            if ! fields=$(gh pr view "$pr" \
+              --json headRefOid,headRefName,baseRefName,isDraft,isCrossRepository,labels \
+              --jq '[.headRefOid, .headRefName, .baseRefName, .isDraft, .isCrossRepository,
+                     any(.labels[]; .name == "no-automerge")] | @tsv'); then
+              echo "::error::#$pr: could not read it"
+              failed=1
+              continue
+            fi
+            IFS=$'\t' read -r head branch base draft fork held <<<"$fields"
+            if [ "$head" != "$SHA" ]; then
+              echo "#$pr: its head moved on from $SHA; that commit's own check decides"
+              continue
+            elif [ "$base" != main ] || [ "$draft" = true ] || [ "$fork" = true ] || [ "$held" = true ]; then
+              echo "#$pr: held (base $base, draft $draft, fork $fork, no-automerge $held)"
+              continue
+            fi
+            if ! gh pr merge "$pr" --merge --match-head-commit "$SHA"; then
+              echo "::error::#$pr: merge failed"
+              failed=1
+            else
+              echo "#$pr: merged"
+              gh api --method DELETE "repos/$GH_REPO/git/refs/heads/$branch" ||
+                echo "::warning::#$pr: merged, but its branch $branch was not deleted"
+            fi
+          done
+          exit "$failed"

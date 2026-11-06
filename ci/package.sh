@@ -1,35 +1,37 @@
 #!/usr/bin/env bash
-# Build the release of the version pyproject.toml holds into <dir>, made if missing, and print the tarball's path:
+# Build the release of HEAD into <dir>, made if missing, and print the tarball's path:
 #
-#   <dir>/octoflow-gate-<version>.tar.gz          gate.py, gate-rust-linux-x86_64, schema/, golden/ and README.md,
-#                                                 at the archive's top level
+#   <dir>/octoflow-gate-<version>.tar.gz          the files README.md's "Running the gate in a project" lists
 #   <dir>/octoflow-gate-<version>.tar.gz.sha256   its sha256, as `sha256sum -c` reads it in <dir>
 #
-# gate-rust-linux-x86_64 is the gate-rust helper, built here for the machine that runs this, which Jenkins's is;
-# golden/ holds tests/golden's quality files, the Markdown and JSON renderings of the same reports. Members are
-# sorted, owned by root and dated with HEAD's commit time, whoever checked the tree out when. Exits non-zero, cargo
-# or tar saying why, when the helper does not build or a file is missing. Jenkins's Package stage runs it on every
-# build, and ci/smoke-release.py then checks the tarball before the Release stage publishes it.
+# <version> is HEAD's pyproject.toml's. Every file, and the source the gate-rust helper is built from, comes from
+# HEAD's commit, never the working tree, so a tarball is the commit's whatever the checkout holds besides; the helper
+# is built for the machine that runs this, which on Jenkins is the agent. Members are sorted, owned by root, dated
+# with HEAD's commit time, and readable by all, writable by the owner alone. Exits non-zero, cargo or tar saying why,
+# when the helper does not build or HEAD lacks a file. Jenkins's Package stage runs it on every build, and
+# ci/smoke-release.py then checks the tarball before the Release stage publishes it.
 set -euo pipefail
 
 [ $# -eq 1 ] || { echo "usage: package.sh <dir>" >&2; exit 2; }
 mkdir -p "$1"
 dir=$(cd "$1" && pwd)
 
-top=$(git rev-parse --show-toplevel)
-cd "$top"
-version=$(uv version --short)
-name=octoflow-gate-$version.tar.gz
+cd "$(git rev-parse --show-toplevel)"
+src=$(mktemp -d)
 stage=$(mktemp -d)
-trap 'rm -rf "$stage"' EXIT
+trap 'rm -rf "$src" "$stage"' EXIT
+git archive HEAD gate.py README.md pyproject.toml schema tests/golden gate-rust | tar -x -C "$src"
+version=$(python3 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["project"]["version"])' \
+    "$src/pyproject.toml")
+name=octoflow-gate-$version.tar.gz
 
-cargo build --release --locked --manifest-path gate-rust/Cargo.toml
-cp gate.py README.md "$stage/"
-cp gate-rust/target/release/gate-rust "$stage/gate-rust-linux-x86_64"
-cp -R schema "$stage/schema"
-cp -R tests/golden "$stage/golden"
+cargo build --release --locked --manifest-path "$src/gate-rust/Cargo.toml" --target-dir "$src/target"
+mv "$src/gate.py" "$src/README.md" "$src/schema" "$stage/"
+mv "$src/tests/golden" "$stage/golden"
+mv "$src/target/release/gate-rust" "$stage/gate-rust-linux-x86_64"
 
-tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$(git log -1 --format=%ct)" -C "$stage" -cf - \
+tar --sort=name --owner=0 --group=0 --numeric-owner --mode=u+rw,go-w,a+rX \
+    --mtime="@$(git log -1 --format=%ct)" -C "$stage" -cf - \
     gate.py gate-rust-linux-x86_64 schema golden README.md | gzip -n >"$dir/$name"
 (cd "$dir" && sha256sum "$name" >"$name.sha256")
 echo "$dir/$name"

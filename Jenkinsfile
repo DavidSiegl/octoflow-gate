@@ -71,16 +71,19 @@ pipeline {
         }
 
         // The release tarball, built and checked on every build, so a pull request shows that its merge would
-        // release. CARGO_HOME and TMPDIR as scripts/gate sets them, for the reasons its header gives: the smoke
-        // check runs the helper it unpacks.
+        // release; RELEASE_TARBALL is its path, which the Release stage publishes. CARGO_HOME and TMPDIR as
+        // scripts/gate sets them, for the reasons its header gives: both scripts build and run Rust in TMPDIR.
         stage('Package') {
+            environment {
+                CARGO_HOME = "${env.WORKSPACE}/.cargo-home"
+                TMPDIR = "${env.WORKSPACE_TMP}/tmp"
+            }
             steps {
-                sh '''
-                    export CARGO_HOME="$WORKSPACE/.cargo-home" TMPDIR="$WORKSPACE_TMP/tmp"
-                    mkdir -p "$TMPDIR"
-                    tarball=$(ci/package.sh dist)
-                    uv run --frozen python ci/smoke-release.py "$tarball"
-                '''
+                script {
+                    env.RELEASE_TARBALL = sh(returnStdout: true,
+                                             script: 'mkdir -p "$TMPDIR" && ci/package.sh dist').trim()
+                }
+                sh 'uv run --frozen python ci/smoke-release.py "$RELEASE_TARBALL"'
             }
         }
 
@@ -92,28 +95,42 @@ pipeline {
             steps {
                 withCredentials([string(credentialsId: 'GitHub-Agents', variable: 'GH_TOKEN')]) {
                     sh '''
-                        version=$(uv version --short)
-                        tag="v$version"
-                        tarball="dist/octoflow-gate-$version.tar.gz"
-                        if gh release view "$tag" >/dev/null 2>gh-release-view.err; then
-                            echo "$tag is already released"
-                            exit 0
-                        fi
-                        # Anything but a missing release, e.g. a bad token, must fail rather than release twice.
-                        if ! grep -q 'release not found' gh-release-view.err; then
-                            cat gh-release-view.err >&2
+                        # Package built and checked it in this build; a restart from this stage has none.
+                        [ -f "${RELEASE_TARBALL:-}" ] || { echo "no release tarball; run the whole build" >&2; exit 1; }
+                        version=${RELEASE_TARBALL##*/octoflow-gate-}
+                        tag="v${version%.tar.gz}"
+                        if draft=$(gh release view "$tag" --json isDraft --jq .isDraft 2>&1); then
+                            if [ "$draft" = false ]; then
+                                echo "$tag is already released"
+                                exit 0
+                            fi
+                            # gh release create makes a draft, uploads the assets, then publishes it; a build stopped
+                            # in between leaves the draft, which only a person should publish or delete.
+                            echo "$tag is a draft release, as an interrupted Release stage leaves one: publish or" \\
+                                 "delete it on GitHub, then rebuild" >&2
                             exit 1
                         fi
-                        # Package built and checked them in this build; a restart from this stage has none.
-                        for f in "$tarball" "$tarball.sha256"; do
-                            [ -f "$f" ] || { echo "no $f; run the whole build" >&2; exit 1; }
-                        done
+                        # Anything but a missing release, e.g. a bad token, must fail rather than release twice.
+                        case $draft in
+                        *'release not found'*) ;;
+                        *) echo "$draft" >&2; exit 1 ;;
+                        esac
+                        # gh attaches the assets to a tag that already exists, ignoring --target: such a tag must not
+                        # take HEAD's tarball.
+                        if tagged=$(gh api "repos/{owner}/{repo}/git/ref/tags/$tag" 2>&1); then
+                            echo "the tag $tag exists without a release; it is not this build's to release" >&2
+                            exit 1
+                        fi
+                        case $tagged in
+                        *'(HTTP 404)'*) ;;
+                        *) echo "$tagged" >&2; exit 1 ;;
+                        esac
                         # A release's own words, docs/releases/v<version>.md, when there is such a file: GitHub puts
                         # them before the notes it generates from the pull requests.
                         notes=docs/releases/$tag.md
                         set --
                         [ ! -f "$notes" ] || set -- --notes-file "$notes"
-                        gh release create "$tag" "$@" "$tarball" "$tarball.sha256" \\
+                        gh release create "$tag" "$@" "$RELEASE_TARBALL" "$RELEASE_TARBALL.sha256" \\
                             --target "$(git rev-parse HEAD)" --title "$tag" --generate-notes
                     '''
                 }

@@ -5,18 +5,18 @@
 Unpacked into an empty directory, the release must:
 
 - answer `gate.py --help` with exit status 0;
-- hold a gate-rust helper whose output for a fixture of gate-rust's tests, gate-rust/tests/fixtures/fns.rs, the
-  release's own gate.py accepts: one JSON document of the schema it reads;
-- judge a fixture project, whose gate.toml lists one `[[test]]` command, GATE: OK with that command's test read, and
-  write a quality.json that the release's schema/quality-v1.json accepts.
+- judge a fixture project as a project runs it, `gate.py --rust-syntax gate-rust-linux-x86_64`: its gate.toml lists
+  one `[[test]]` command, and its change adds a Rust function over the cognitive-complexity limit. The gate must find
+  that function, which it can only through the helper's documents, read in full; read the command's JUnit report;
+  and write a quality.json that the release's schema/quality-v1.json accepts.
 
-Exits 0 when all hold; otherwise names the first that does not on standard error and exits 1. It runs gate.py with
-the Python that runs it, and needs jsonschema, a dev dependency, and git.
+The helper's output is checked only as gate.py reads it; its structure field by field is gate-rust/tests/schema.rs's,
+run on the same source by the build's Gate stage. Exits 0 when all hold; otherwise names the first that does not on
+standard error and exits 1. It runs gate.py with the Python that runs it, and needs jsonschema, a dev dependency,
+and git.
 """
 
-import importlib.util
 import json
-import os
 import subprocess
 import sys
 import tarfile
@@ -25,12 +25,33 @@ from pathlib import Path
 
 import jsonschema
 
-REPO = Path(__file__).resolve().parent.parent
-RUST_FIXTURE = REPO / "gate-rust" / "tests" / "fixtures" / "fns.rs"
-
 # The fixture project's one test command: it writes a JUnit report of one passing test and exits 0.
 TEST_COMMAND = ("open('junit.xml', 'w').write('<testsuites><testsuite><testcase classname=\"smoke\" name=\"test_ok\"/>"
                 "</testsuite></testsuites>')")
+
+# The fixture project's change: a new Rust function of cognitive complexity 21 (1 + 2 + ... + 6), over the limit of 15.
+TANGLED_RS = """\
+pub fn tangled(a: u32) -> u32 {
+    let mut n = 0;
+    if a > 0 {
+        if a > 1 {
+            if a > 2 {
+                if a > 3 {
+                    if a > 4 {
+                        if a > 5 {
+                            n += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    n
+}
+"""
+
+# What the gate must find in that change, as quality.json lists a finding.
+EXPECTED_FINDING = {"path": "tangled.rs", "line": 1, "check": "cognitive-complexity"}
 
 
 class SmokeFailure(Exception):
@@ -49,27 +70,9 @@ def check_help(release: Path) -> None:
         raise SmokeFailure(f"`gate.py --help` exited {proc.returncode}: {proc.stderr.strip()}")
 
 
-def check_rust_helper(release: Path) -> None:
-    """Fail unless the release's own gate.py, imported, reads its helper's output for RUST_FIXTURE as one document of
-    its schema, listing at least one fn: the same reader that judges a change's Rust."""
-    spec = importlib.util.spec_from_file_location("released_gate", release / "gate.py")
-    if spec is None or spec.loader is None:
-        raise SmokeFailure("the release's gate.py cannot be imported")
-    gate = importlib.util.module_from_spec(spec)
-    # Its dataclasses look their module up there while they are defined.
-    sys.modules[spec.name] = gate
-    spec.loader.exec_module(gate)
-    docs, why = gate._rust_documents(str(release / "gate-rust-linux-x86_64"), [str(RUST_FIXTURE)], str(release))
-    if why is not None:
-        raise SmokeFailure(f"gate.py rejects the helper's output for {RUST_FIXTURE.name}: {why}")
-    if not docs[0].get("fns"):
-        raise SmokeFailure(f"the helper found no fn in {RUST_FIXTURE.name}")
-
-
-def check_fixture_project(release: Path, project: Path) -> None:
-    """Fail unless the release's gate.py, run in project, an empty directory it makes a git repository of, judges a
-    change GATE: OK by gate.toml's one test command, TEST_COMMAND, and writes a quality.json that the release's schema
-    accepts and whose failing_tests is [], which it is only when that command's JUnit report was read."""
+def make_fixture_project(project: Path) -> str:
+    """Make project, an empty directory, a git repository whose one commit holds gate.toml with TEST_COMMAND, and
+    whose working tree adds tangled.rs; return that commit."""
     def git(*args):
         proc = run(["git", "-c", "user.name=smoke", "-c", "user.email=smoke@localhost", "-c", "commit.gpgSign=false",
                     *args], project)
@@ -84,24 +87,37 @@ def check_fixture_project(release: Path, project: Path) -> None:
     (project / ".gitignore").write_text("junit.xml\nquality.md\nquality.json\n")
     git("add", ".")
     git("commit", "--quiet", "-m", "base")
-    base = git("rev-parse", "HEAD")
-    (project / "notes.txt").write_text("a change\n")
-    git("add", "notes.txt")
+    (project / "tangled.rs").write_text(TANGLED_RS)
+    git("add", "tangled.rs")
+    return git("rev-parse", "HEAD")
 
-    proc = run([sys.executable, str(release / "gate.py"), "--base", base, "--out", "quality.md"], project)
-    if proc.returncode != 0:
-        raise SmokeFailure(f"the fixture project was judged with exit status {proc.returncode}, not 0 for GATE: OK: "
-                           f"{proc.stderr.strip() or proc.stdout.strip()}")
+
+def check_fixture_project(release: Path, project: Path) -> None:
+    """Fail unless the release's gate.py, with its helper, judges make_fixture_project's change GATE: ERROR for
+    EXPECTED_FINDING alone, with no failing test read from the test command's report, and writes a quality.json that
+    the release's schema accepts."""
+    base = make_fixture_project(project)
+    proc = run([sys.executable, str(release / "gate.py"), "--base", base,
+                "--rust-syntax", str(release / "gate-rust-linux-x86_64"), "--out", "quality.md"], project)
+    said = proc.stderr.strip() or proc.stdout.strip()
+    if proc.returncode != 1:
+        raise SmokeFailure(f"the fixture project was judged with exit status {proc.returncode}, not 1 for GATE: ERROR: "
+                           f"{said}")
     try:
         report = json.loads((project / "quality.json").read_text())
         schema = json.loads((release / "schema" / "quality-v1.json").read_text())
     except (OSError, ValueError) as e:
-        raise SmokeFailure(f"cannot read the fixture project's quality.json or the release's schema: {e}") from e
+        raise SmokeFailure(f"cannot read the fixture project's quality.json or the release's schema: {e}; gate.py "
+                           f"said: {said}") from e
     try:
         jsonschema.validate(report, schema, format_checker=jsonschema.Draft202012Validator.FORMAT_CHECKER)
     except jsonschema.ValidationError as e:
         raise SmokeFailure(f"the fixture project's quality.json does not follow schema/quality-v1.json: "
                            f"{e.message}") from e
+    found = [{key: f[key] for key in EXPECTED_FINDING} for f in report["findings"]]
+    if found != [EXPECTED_FINDING]:
+        raise SmokeFailure(f"the fixture project's findings are {json.dumps(found)}, not [{json.dumps(EXPECTED_FINDING)}]"
+                           f": the helper's output was not read as it should be")
     if report["failing_tests"] != []:
         raise SmokeFailure(f"the fixture project's test report was not read: failing_tests is "
                            f"{json.dumps(report['failing_tests'])}, not []")
@@ -119,7 +135,6 @@ def smoke(tarball: Path) -> None:
         except (OSError, tarfile.TarError) as e:
             raise SmokeFailure(f"cannot unpack {tarball}: {e}") from e
         check_help(release)
-        check_rust_helper(release)
         check_fixture_project(release, project)
 
 
@@ -133,7 +148,7 @@ def main() -> int:
     except SmokeFailure as e:
         print(f"smoke-release: {e}", file=sys.stderr)
         return 1
-    print(f"smoke-release: {os.path.basename(sys.argv[1])} passed")
+    print(f"smoke-release: {Path(sys.argv[1]).name} passed")
     return 0
 
 

@@ -8,6 +8,12 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
 
 ## Open issues
 
+- **The release's gate-rust helper needs the build agent's glibc or newer.** `ci/package.sh` builds it for the
+  default target, so it is linked against the Jenkins agent's GNU C library; as cross-review 07 put it (R1-2): "A
+  project on Debian 11 (2.31), Ubuntu 20.04 (2.31) or RHEL 8 (2.28) that follows the README gets 'GLIBC_2.34 not
+  found' from `--rust-syntax`, and every Rust check is not run." The README says so. Closes with the helper built for
+  `x86_64-unknown-linux-musl`, statically linked, once the agent image's rustup has that target (a build cannot add
+  it: the rustup home is root's).
 - **A `[[test]]` command cannot set its environment.** `TestCommand` in `gate.py` holds an argv alone, run with the
   gate's own environment (`tool_env`), so a command that needs a variable set takes it from whoever runs the gate.
   octoflow-ai's Rust test run sets `E2E_ENGINE` to an absolute path in the workspace and wraps cargo in

@@ -84,8 +84,9 @@ Python that runs `gate.py`, for the flaky-tests, passes-at-base and surviving-mu
 and clippy come from the machine, and only for a project that tracks shell scripts, GitHub workflows or Rust files.
 
 A change to Rust files is read with the [gate-rust helper](docs/quality-gate.md#reading-rust-the-gate-rust-helper),
-named with `--rust-syntax`: the release's, or, on another platform, one built from this repository's `gate-rust/` at
-the release's tag. A project without Rust needs neither:
+named with `--rust-syntax`. The release's is linked against the GNU C library of the Jenkins agent that built it, and
+does not start on a machine whose glibc is older; there, and on another platform, build one from this repository's
+`gate-rust/` at the release's tag. A project without Rust needs neither:
 
 ```bash
 cargo build --release --locked --manifest-path path/to/octoflow-gate/gate-rust/Cargo.toml

@@ -1011,9 +1011,7 @@ def judge_change(cwd: str, base: str, checks: tuple[GateCheck, ...], *, rules: s
     rules_path = os.path.abspath(rules) if rules else os.path.join(root, "pyproject.toml")
     if not os.path.isfile(rules_path):
         raise GateError(f"no rules: {rules_path} is not a file")
-    settings_path = os.path.abspath(settings) if settings else os.path.join(root, SETTINGS_FILE)
-    # A gate.toml that is there but no file, such as a dangling link, is an error to read, never the defaults.
-    read_by = GateSettings.read(settings_path) if settings or os.path.lexists(settings_path) else GateSettings()
+    read_by = _settings_for(root, settings)
 
     change = GateChange.from_tree(root, base_sha, rules_path, rust_syntax, read_by)
     changed = change.changed
@@ -1061,10 +1059,7 @@ def judge_change(cwd: str, base: str, checks: tuple[GateCheck, ...], *, rules: s
                               f"least {GATE_MIN_COVERAGE:g}% once a change has {GATE_MIN_NEW_LINES} or more new "
                               f"lines to cover.")
 
-    head = _git(root, "rev-parse", "HEAD").strip()
-    intro = (f"`gate.py` judged the working tree at `{head}` against the base `{base_sha}`"
-             + (f", by the rules in `{rules}`" if rules else "")
-             + (f", with the settings in `{settings}`" if settings else "") + ".")
+    intro = _intro(_git(root, "rev-parse", "HEAD").strip(), base_sha, rules, settings)
     text = quality_report(GATE_ERROR if conditions else GATE_OK, intro, conditions=conditions, issues=issues,
                           to_weigh=to_weigh, elsewhere=elsewhere, tests=failing, coverage=coverage_sentence,
                           suppressions=added_suppressions(root, changed),
@@ -1075,6 +1070,23 @@ def judge_change(cwd: str, base: str, checks: tuple[GateCheck, ...], *, rules: s
     # Paths and linter output come verbatim, so a name that is not UTF-8 holds lone surrogates, which no file or
     # terminal can take: give their bytes back, then write each byte that is not UTF-8 as \xNN.
     return text.encode("utf-8", "surrogateescape").decode("utf-8", "backslashreplace")
+
+
+def _settings_for(root: str, settings: str | None) -> GateSettings:
+    """The settings judge_change judges the work tree at root by: those of the gate.toml at settings, a path absolute
+    or relative to the process's working directory, when given; else those of root's own SETTINGS_FILE when there
+    is one, also when it is no file, such as a dangling link, which is then an error to read, never the defaults;
+    else the defaults. Raises GateError as GateSettings.read does."""
+    path = os.path.abspath(settings) if settings else os.path.join(root, SETTINGS_FILE)
+    return GateSettings.read(path) if settings or os.path.lexists(path) else GateSettings()
+
+
+def _intro(head: str, base_sha: str, rules: str | None, settings: str | None) -> str:
+    """The quality file's opening sentence: the gate judged the tree at commit head against base_sha, naming rules
+    and settings, judge_change's arguments, as given, each only when given."""
+    return (f"`gate.py` judged the working tree at `{head}` against the base `{base_sha}`"
+            + (f", by the rules in `{rules}`" if rules else "")
+            + (f", with the settings in `{settings}`" if settings else "") + ".")
 
 
 def _linted_files(tracked: list[str], tool: GateTool, settings: GateSettings) -> list[str]:

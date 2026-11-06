@@ -28,7 +28,7 @@
       "type": "string"
     },
     "failed_conditions": {
-      "description": "Each condition that failed the gate, a sentence as the quality file words it; empty when the gate is OK.",
+      "description": "Each condition that failed the gate, a sentence exactly as the quality file writes it, a line break in it written as an escape such as `\\x0a`; empty when the gate is OK.",
       "type": "array",
       "items": {"type": "string"}
     },
@@ -142,7 +142,7 @@
           "type": "boolean"
         },
         "fingerprint": {
-          "description": "16 hex digits naming the finding across runs: the start of the SHA-256 of path (empty for null), rule and message with its ASCII digits removed, joined by NUL characters, in UTF-8. A finding that moves to another line keeps it.",
+          "description": "16 hex digits naming the finding across runs: the start of the SHA-256 of path (empty for null), rule and message with its ASCII digits removed, joined by NUL characters, in UTF-8, each string as the quality file writes it, a line break written as an escape such as `\\x0a`, so a reader gets the same fingerprint from either rendering. A finding that moves to another line keeps it.",
           "type": "string",
           "pattern": "^[0-9a-f]{16}$"
         }

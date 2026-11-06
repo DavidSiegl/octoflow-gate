@@ -427,7 +427,7 @@ class QualityReport:
             "gate_version": GATE_VERSION,
             "base": self.base,
             "head": self.head,
-            "failed_conditions": list(self.conditions),
+            "failed_conditions": [one_line(c) for c in self.conditions],
             "findings": findings,
             "findings_total": len(findings),
             "failing_tests": None if self.failing_tests is None else [
@@ -475,19 +475,28 @@ class QualityReport:
 
 
 def _json_finding(finding: dict, fails: bool) -> dict:
-    """finding, as QualityReport holds it, as quality.json lists it: fails says whether it fails the gate."""
-    path = None if finding["path"] is None else _utf8(finding["path"])
-    rule, message = _utf8(finding["rule"]), _utf8(finding["message"])
+    """finding, as QualityReport holds it, as quality.json lists it, its strings still as the gate read them: fails
+    says whether it fails the gate."""
+    path, rule, message = finding["path"], finding["rule"], finding["message"]
     return {"path": path, "line": finding["line"], "severity": finding["severity"], "rule": rule,
             "check": rule.split(" ", 1)[0], "message": message, "fails": fails,
-            "fingerprint": finding_fingerprint(path, rule, message)}
+            "fingerprint": finding_fingerprint(None if path is None else _as_quality_file_writes(path),
+                                               _as_quality_file_writes(rule), _as_quality_file_writes(message))}
+
+
+def _as_quality_file_writes(text: str) -> str:
+    """text, as the gate read it, as the quality file writes it within one of its lines: one_line's escapes, and
+    _utf8's for a byte that is not UTF-8."""
+    return _utf8(one_line(text))
 
 
 def finding_fingerprint(path: str | None, rule: str, message: str) -> str:
-    """A finding's fingerprint in quality.json, 16 hex digits: the same for a finding that moved, or whose message
-    counts something else, and different for another finding on the same line. It is the start of the SHA-256 of
-    path ("" for None), rule and message without its ASCII digits, joined by NUL characters, as UTF-8; octoflow's
-    engine computes it the same way (engine/src/quality.rs, finding_fingerprint)."""
+    """A finding's fingerprint in quality.json, 16 hex digits, from its path (None for one about the whole change),
+    rule and message as the quality file writes them, since octoflow's engine fingerprints what it reads back from
+    the quality file: the same for a finding that moved, or whose message differs only in its ASCII digits, such as
+    one that counts something else, and different when the path, the rule or the rest of the message differs. It is
+    the start of the SHA-256 of path ("" for None), rule and message without its ASCII digits, joined by NUL
+    characters, as UTF-8; the engine computes it the same way (engine/src/quality.rs, finding_fingerprint)."""
     message = "".join(c for c in message if not ("0" <= c <= "9"))
     return hashlib.sha256("\0".join([path or "", rule, message]).encode("utf-8")).hexdigest()[:16]
 
@@ -498,15 +507,15 @@ def _utf8(text: str) -> str:
     return text.encode("utf-8", "surrogateescape").decode("utf-8", "backslashreplace")
 
 
-def _utf8_strings(value: Any) -> Any:
-    """value, a JSON document of dicts, lists and scalars, with _utf8 applied to every string in it, keys included."""
-    if isinstance(value, str):
-        return _utf8(value)
-    if isinstance(value, dict):
-        return {_utf8(k): _utf8_strings(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_utf8_strings(v) for v in value]
-    return value
+def _utf8_strings(node: Any) -> Any:
+    """node, a JSON document of dicts, lists and scalars, with _utf8 applied to every string in it, keys included."""
+    if isinstance(node, str):
+        return _utf8(node)
+    if isinstance(node, dict):
+        return {_utf8(k): _utf8_strings(v) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_utf8_strings(v) for v in node]
+    return node
 
 
 # The sections of QualityReport.markdown after its first, each as lines that start with a blank one.
@@ -6099,24 +6108,23 @@ def gate_command(base: str, rules: str | None, coverage: list[str], tests: list[
     settings as judge_change takes them, with gate_checks's checks and the gate-rust helper at rust_syntax, a path
     relative to the current directory or absolute.
 
-    The quality file goes to out, else to standard output; quality.json to json_out, else, with out, to out's path
-    with its `.md` made `.json`, or `.json` added when it has no `.md` (json_path_for), else nowhere. Returns 0 for
-    GATE: OK and 1 for GATE: ERROR; EXIT_GATE_UNJUDGED, having written nothing, when the change could not be judged or
-    a file could not be written.
+    The quality file goes to out, else to standard output; quality.json to json_out, else nowhere. out and json_out
+    must not name one file. Returns 0 for GATE: OK and 1 for GATE: ERROR; EXIT_GATE_UNJUDGED, having written nothing,
+    when the change could not be judged or a file could not be written.
     """
-    json_out = json_out or (json_path_for(out) if out else None)
     try:
         report = judge_change(os.getcwd(), base, gate_checks(mutation_budget, base_run_budget, test_contexts),
                               rules=rules, settings=settings, coverage=coverage, tests=tests,
                               rust_syntax=os.path.abspath(rust_syntax) if rust_syntax else None)
-        write_files([(path, text) for path, text in ((out, report.markdown()), (json_out, report.json())) if path])
+        markdown = report.markdown()
+        write_files(([(out, markdown)] if out else []) + ([(json_out, report.json())] if json_out else []))
     except GateError as e:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_GATE_UNJUDGED
     if written := [path for path in (out, json_out) if path]:
         print(f"GATE: {report.gate}, in {_series(written)}", file=sys.stderr)
     if not out:
-        print(report.markdown(), end="")
+        print(markdown, end="")
     return 0 if report.gate == GATE_OK else 1
 
 
@@ -6140,8 +6148,8 @@ def seconds_arg(text: str) -> int:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """The gate's command-line arguments argv, sys.argv[1:] by default, parsed: one attribute per option, as
     gate_command's parameters name them, but for --config, which sets rules or settings, each to one path or None. A
-    budget not given is None. Bad arguments and --help end the process through argparse's SystemExit, status 2 and
-    0."""
+    budget not given is None; json_out not given is, with --out, json_path_for(out). Bad arguments, among them --json
+    naming the file --out writes, and --help end the process through argparse's SystemExit, status 2 and 0."""
     parser = argparse.ArgumentParser(prog="gate.py", description=(
         f"Run ruff, mypy, pymarkdown, shellcheck, actionlint and clippy over the files the repository tracks and "
         f"write the quality file: GATE: OK or GATE: ERROR on its first line, then the failed conditions, the findings "
@@ -6196,6 +6204,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--config names at most one pyproject.toml and one file of settings")
     args.rules, args.settings = next(iter(rules), None), next(iter(settings), None)
     del args.config
+    if args.out:
+        args.json_out = args.json_out or json_path_for(args.out)
+        if os.path.realpath(args.json_out) == os.path.realpath(args.out):
+            parser.error("--json names the file --out writes")
     return args
 
 
@@ -6245,8 +6257,9 @@ def main(argv: list[str] | None = None) -> int:
         return gate_command(args.base, args.rules, args.coverage, args.tests, args.out, args.mutation_budget,
                             args.base_run_budget, args.test_contexts, args.rust_syntax, args.settings, args.json_out)
     except KeyboardInterrupt:
-        # write_files renames the files into place last, so each holds what it held before.
-        print("interrupted; no report was written", file=sys.stderr)
+        # write_files renames the files into place last, so Ctrl-C before that leaves each as it was; only Ctrl-C
+        # between its renames leaves the quality file new and quality.json old.
+        print("interrupted; the report was not written whole", file=sys.stderr)
         return EXIT_INTERRUPTED
 
 

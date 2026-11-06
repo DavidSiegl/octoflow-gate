@@ -199,7 +199,7 @@ def assert_report_agrees(test, markdown, doc):
     sections = {m.group(1): m.group(2) for m in re.finditer(r"^## (.+)\n\n((?:.+\n|\n(?!## ))*)", markdown, re.MULTILINE)}
     test.assertEqual(markdown.split("\n", 1)[0], f"GATE: {doc['gate']}")
     test.assertEqual(re.findall(r"^- (.*)$", sections.get("Failed conditions", ""), re.MULTILINE),
-                     [gate.one_line(c) for c in doc["failed_conditions"]])
+                     doc["failed_conditions"])
     issues, to_weigh = sections["Issues on changed lines"], sections.get("Findings to weigh", "")
     listed = [(int(k), True) for k in re.findall(r"^(\d+)\. ", issues, re.MULTILINE)]
     listed += [(int(k), False) for k in re.findall(r"^(\d+)\. ", to_weigh, re.MULTILINE)]
@@ -342,7 +342,17 @@ class TestQualityReport(unittest.TestCase):
                                                            "rule": "ruff E1", "message": "a b"}]).json())
         [finding] = doc["findings"]
         self.assertEqual((finding["path"], finding["message"], finding["check"]), ("g\\xff\rh.py", "a b", "ruff"))
-        self.assertEqual(finding["fingerprint"], gate.finding_fingerprint("g\\xff\rh.py", "ruff E1", "a b"))
+
+    def test_fingerprints_and_conditions_are_those_of_the_quality_file_s_text(self):
+        # The engine fingerprints what it reads back from the quality file, where one_line has escaped each line
+        # break, so a finding or a condition that holds one must read the same from either rendering.
+        r = report(conditions=["a\nb"], issues=[{"path": os.fsdecode(b"g\xff\rh.py"), "line": 2, "severity": "error",
+                                                 "rule": "ruff E1", "message": "x\u2028y"}])
+        doc = json.loads(r.json())
+        self.assertEqual(doc["failed_conditions"], ["a\\x0ab"])
+        self.assertEqual(doc["findings"][0]["fingerprint"],
+                         gate.finding_fingerprint("g\\xff\\x0dh.py", "ruff E1", "x\\u2028y"))
+        assert_report_agrees(self, r.markdown(), doc)
 
     def test_the_fingerprint_is_the_engine_s(self):
         # Cases and values from octoflow-ai's engine/tests/oracle/quality.json, which its finding_fingerprint
@@ -714,6 +724,21 @@ class TestGate(RepositoryTest):
         with open(out) as f:
             self.assertEqual(f.read(), "old\n")
         self.assertEqual([n for n in os.listdir(self.outside) if ".tmp." in n], [])
+
+    def test_json_naming_the_quality_file_is_refused_before_judging(self):
+        out = os.path.join(self.outside, "quality.md")
+        with open(out, "w") as f:
+            f.write("old\n")
+        os.symlink(out, os.path.join(self.outside, "link.md"))
+        for json_out in (out, os.path.join(self.outside, "link.md")):
+            err = io.StringIO()
+            with (self.subTest(json_out=json_out), patch.object(gate, "judge_change") as judge,
+                  contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as exit_):
+                gate.main(["--base", "HEAD", "--out", out, "--json", json_out])
+            self.assertEqual((exit_.exception.code, judge.called), (2, False))
+            self.assertIn("--json names the file --out writes", err.getvalue())
+        with open(out) as f:
+            self.assertEqual(f.read(), "old\n")
 
     def coverage(self, lines):
         """A Cobertura report of f.py: lines maps a line number to its hits, or to (hits, "covered/total" branches)."""

@@ -776,7 +776,9 @@ raised on any change a reader could notice; adding an optional field does not ra
 does not know. It holds everything the quality file shows, as data and without the file's limits: every finding, with
 `fails` saying whether it fails the gate and a `fingerprint` that stays the same when the finding moves to another
 line or its message counts something else; every failing test, with its whole detail; and the strings as the gate read
-them, line breaks included. A reader checks itself against the `tests/golden/*.json` files the gate's tests write,
+them, line breaks included. The failed conditions, and the text each fingerprint is taken over, are instead as the
+quality file writes them, a line break escaped, so that a reader gets the same condition and fingerprint from either
+file. A reader checks itself against the `tests/golden/*.json` files the gate's tests write,
 each validated against the schema and beside the quality file of the same report.
 
 The quality file is prose for the people and agents who answer it, and its wording and layout may change in any

@@ -5,7 +5,7 @@
 use std::ffi::{OsStr, OsString};
 use std::io::Read;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -66,40 +66,12 @@ pub fn tool_env() -> Vec<(OsString, OsString)> {
 /// Unlike gate.py, which starts a session, the group stays in the gate's session, so a tool that opens the terminal
 /// still can; neither gets the terminal's Ctrl-C, which is the gate's to pass on.
 pub fn run(argv: &[&OsStr], cwd: &Path, timeout: Duration) -> std::io::Result<Finished> {
-    use std::os::unix::process::{CommandExt, ExitStatusExt};
-
-    let (program, args) = argv.split_first().ok_or_else(|| std::io::Error::other("no program to run"))?;
-    let mut child = Command::new(program)
-        .args(args)
-        .current_dir(cwd)
-        .env_clear()
-        .envs(tool_env())
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0)
-        .spawn()?;
-    let group = Group(child.id());
+    let (mut child, group) = start(argv, cwd, Stdio::piped(), Stdio::piped())?;
     let stdout = Printed::read(child.stdout.take());
     let stderr = Printed::read(child.stderr.take());
-    // Until the process exits, read what it prints, so that a full pipe never blocks it, and look for its exit every
-    // POLL; at the deadline stop it.
-    let deadline = Instant::now() + timeout;
-    let mut stopped = false;
-    let mut status = loop {
-        if interrupted() {
-            drop(group);
-            exit_interrupted();
-        }
-        if let Some(status) = child.try_wait()? {
-            break Some(status);
-        }
-        if Instant::now() >= deadline {
-            stopped = true;
-            break None;
-        }
-        std::thread::sleep(POLL.min(deadline.saturating_duration_since(Instant::now())));
-    };
+    // Read on their threads while the process runs, so that a full pipe never blocks it.
+    let mut status = wait(&mut child, &group, Some(Instant::now() + timeout))?;
+    let stopped = status.is_none();
     group.kill();
     let end = Instant::now() + KILL_WAIT;
     while !(stdout.ended() && stderr.ended()) && Instant::now() < end {
@@ -112,8 +84,62 @@ pub fn run(argv: &[&OsStr], cwd: &Path, timeout: Duration) -> std::io::Result<Fi
             std::thread::sleep(POLL);
         }
     }
-    let status = status.map_or(-libc::SIGKILL, |s| s.code().unwrap_or_else(|| -s.signal().unwrap_or(libc::SIGKILL)));
-    Ok(Finished { status, stdout: stdout.take(), stderr: stderr.take(), stopped })
+    Ok(Finished { status: status_code(status), stdout: stdout.take(), stderr: stderr.take(), stopped })
+}
+
+/// `argv` run in `cwd` as [`run`] runs it, but with no time limit and what it prints going to the gate's standard
+/// error; its exit status, as [`Finished::status`] gives one. Errs when `argv` cannot be started.
+pub fn run_to_stderr(argv: &[&OsStr], cwd: &Path) -> std::io::Result<i32> {
+    use std::os::fd::AsFd;
+    let stdout = Stdio::from(std::io::stderr().as_fd().try_clone_to_owned()?);
+    let (mut child, group) = start(argv, cwd, stdout, Stdio::inherit())?;
+    let status = wait(&mut child, &group, None)?;
+    group.kill();
+    Ok(status_code(status))
+}
+
+/// `argv` started in `cwd` with [`tool_env`] as its whole environment, no input and the given output, in a process
+/// group of its own, which the second value kills when dropped.
+fn start(argv: &[&OsStr], cwd: &Path, stdout: Stdio, stderr: Stdio) -> std::io::Result<(Child, Group)> {
+    use std::os::unix::process::CommandExt;
+    let (program, args) = argv.split_first().ok_or_else(|| std::io::Error::other("no program to run"))?;
+    let child = Command::new(program)
+        .args(args)
+        .current_dir(cwd)
+        .env_clear()
+        .envs(tool_env())
+        .stdin(Stdio::null())
+        .stdout(stdout)
+        .stderr(stderr)
+        .process_group(0)
+        .spawn()?;
+    let group = Group(child.id());
+    Ok((child, group))
+}
+
+/// How `child` exited, looking every [`POLL`]; None when it was still running at `deadline`. When Ctrl-C reaches
+/// the gate meanwhile, kills `group` and exits through [`exit_interrupted`].
+fn wait(child: &mut Child, group: &Group, deadline: Option<Instant>) -> std::io::Result<Option<ExitStatus>> {
+    loop {
+        if interrupted() {
+            group.kill();
+            exit_interrupted();
+        }
+        if let Some(status) = child.try_wait()? {
+            return Ok(Some(status));
+        }
+        let left = deadline.map(|d| d.saturating_duration_since(Instant::now()));
+        if left == Some(Duration::ZERO) {
+            return Ok(None);
+        }
+        std::thread::sleep(left.map_or(POLL, |left| POLL.min(left)));
+    }
+}
+
+/// An exit status as [`Finished::status`] gives it.
+fn status_code(status: Option<ExitStatus>) -> i32 {
+    use std::os::unix::process::ExitStatusExt;
+    status.map_or(-libc::SIGKILL, |s| s.code().unwrap_or_else(|| -s.signal().unwrap_or(libc::SIGKILL)))
 }
 
 /// A started process's group, killed when dropped, so that no exit from [`run`], an error's included, leaves a

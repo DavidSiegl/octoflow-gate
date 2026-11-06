@@ -3,12 +3,19 @@
 //! (report.rs). gate.py stays the judge until the cutover (gate-standalone/18); until then this judges only what has
 //! been ported, as each module says, and `cargo xtask compare` checks it against gate.py.
 
+pub mod config_edits;
 pub mod coverage;
 pub mod diff;
 pub mod git;
+pub mod glob;
+pub mod junit;
+pub mod linters;
 pub mod paths;
 pub mod process;
 pub mod report;
+pub mod settings;
+pub mod suppressions;
+pub mod test_commands;
 pub mod text;
 pub mod xml;
 

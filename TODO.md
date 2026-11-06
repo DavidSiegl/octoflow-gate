@@ -20,12 +20,23 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   once, rather than the settings that decide it.
 
 - **`gate.py` and docs/quality-gate.md still speak in octoflow's words.** The quality file is written for the
-  Builder to answer and the Reviewer to judge (`quality_report`'s docstring, `TO_WEIGH_NOTE`'s comment, the
-  suppressions' comment), `FAILED_CONDITIONS`' comment and `one_line`'s docstring name the orchestrator as the reader,
-  and docs/quality-gate.md cites octoflow's pull requests, its Python engine and its `QUALITY_TIMEOUT` where a decision
-  was measured; docs/quality-gate.md's intro says so. Found by gate-standalone/02 (2026-11-05), which moved the gate
-  here and stripped only the assumptions its ticket named. Closes with the comments naming "the quality file's
-  reader", and the measurements read as history, once `quality.json` (gate-standalone/04) settles who reads what.
+  Builder to answer and the Reviewer to judge (`TO_WEIGH_NOTE`'s comment, the suppressions' comment),
+  `FAILED_CONDITIONS`' comment and `one_line`'s docstring name the orchestrator as the reader, and docs/quality-gate.md
+  cites octoflow's pull requests, its Python engine and its `QUALITY_TIMEOUT` where a decision was measured;
+  docs/quality-gate.md's intro says so. Found by gate-standalone/02 (2026-11-05), which moved the gate here and
+  stripped only the assumptions its ticket named. `quality.json` (gate-standalone/04) settled who reads what: a
+  program reads the JSON, people and agents the Markdown; but octoflow's orchestrator reads the Markdown until
+  octoflow-ai's gate-standalone/08, so those comments still hold. Closes after 08, with them naming the quality
+  file's reader, and the measurements read as history.
+- **The quality file's intro no longer names a `--config` that is the tree's own `pyproject.toml`.** As cross-review
+  04 put it (F5, 2026-11-06): "the quality file's opening sentence used to name `--config` whenever one was given;
+  now it names it only when it is not the tree's own `pyproject.toml` … a quality.md change no ticket names, which
+  ticket 07's before/after diff will show if octoflow ever passes the tree's own file." It does: octoflow-ai's
+  Jenkinsfile passes `--config pyproject.toml` on a build of `main`. The intro is outside the quality file's contract
+  and no reader parses it. Closes when octoflow-ai's gate-standalone/07 has taken that line's change as expected.
+- **agent-estate's Jenkinsfile template archives only `quality.md`.** This repo's Jenkinsfile archives
+  `quality.json` too (gate-standalone/04), an edit to the rendered file that a `copier update` must merge. Closes
+  with the template archiving `quality.json` beside `quality.md` for every repo whose gate writes it.
 - **Test code outside the places the spec names is judged as code.** The spec of the Rust checks (requirement 2)
   places Rust's tests in a `tests/` directory, a `tests.rs` and an inline `#[cfg(test)]` module; `_in_rust_tests` and
   `GateSettings.rust_test` in `gate.py`, which both Rust checks read, follow it by default (test-integrity's side of this is the

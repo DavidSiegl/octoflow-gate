@@ -15,6 +15,7 @@ coverage-rust.xml
 test-results.xml
 test-results-rust.xml
 quality.md
+quality.json
 
 # The tools scripts/gate downloads when PATH lacks them, and its CARGO_HOME in a Jenkins build
 .tools/

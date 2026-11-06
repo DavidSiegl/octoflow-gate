@@ -7,8 +7,10 @@ A change reaches users only when a merge into `main` raises the version in `pypr
 
 - A change to `gate.py`, `gate-rust/` or what a release ships raises the version with `uv version --bump <level>`, which
   also updates `uv.lock`: `patch` for a fix, `minor` for a new check, finding or flag, and, while the version is 0.x,
-  `minor` too for a change that breaks existing flags, exit statuses or the quality file's contract
-  (docs/quality-gate.md, "The quality file as a contract"). `major` makes it 1.0.0, a deliberate release decision.
+  `minor` too for a change that breaks existing flags, exit statuses or quality.json's contract
+  (docs/quality-gate.md, "The report as a contract"). `major` makes it 1.0.0, a deliberate release decision.
+- The bump also sets `GATE_VERSION` in `gate.py` to the new version, which quality.json names;
+  `tests/test_invariants.py` fails while the two differ.
 - Changes only to docs, tests, CI or repository tooling raise nothing.
 - Jenkins creates tags and releases after the merge.
 

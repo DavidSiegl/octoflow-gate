@@ -8,6 +8,7 @@ pub mod coverage;
 pub mod diff;
 pub mod git;
 pub mod glob;
+pub mod judge;
 pub mod junit;
 pub mod linters;
 pub mod paths;

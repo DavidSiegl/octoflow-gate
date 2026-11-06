@@ -12,6 +12,7 @@ use std::time::Duration;
 use regex::bytes::Regex;
 
 use crate::glob::Globs;
+use crate::judge::under_mutmut_state;
 use crate::process;
 use crate::report::Finding;
 use crate::settings::Settings;
@@ -137,7 +138,7 @@ impl Linter {
         tracked
             .listed
             .iter()
-            .filter(|f| f.as_bytes() != b"mutants" && !f.as_bytes().starts_with(b"mutants/"))
+            .filter(|f| !under_mutmut_state(f))
             .filter(|f| self.reads(settings, f))
             .cloned()
             .collect()

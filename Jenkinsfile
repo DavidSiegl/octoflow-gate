@@ -72,7 +72,8 @@ pipeline {
 
         // The release tarball, built and checked on every build, so a pull request shows that its merge would
         // release; RELEASE_TARBALL is its path, which the Release stage publishes. CARGO_HOME and TMPDIR as
-        // scripts/gate sets them, for the reasons its header gives: both scripts build and run Rust in TMPDIR.
+        // scripts/gate sets them, for the reasons its header gives: package.sh builds Rust in TMPDIR, and the smoke
+        // check runs the helper and clippy there.
         stage('Package') {
             environment {
                 CARGO_HOME = "${env.WORKSPACE}/.cargo-home"

@@ -21,8 +21,7 @@ src=$(mktemp -d)
 stage=$(mktemp -d)
 trap 'rm -rf "$src" "$stage"' EXIT
 git archive HEAD gate.py README.md pyproject.toml schema tests/golden gate-rust | tar -x -C "$src"
-version=$(python3 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["project"]["version"])' \
-    "$src/pyproject.toml")
+version=$(uv version --short --directory "$src")
 name=octoflow-gate-$version.tar.gz
 
 cargo build --release --locked --manifest-path "$src/gate-rust/Cargo.toml" --target-dir "$src/target"

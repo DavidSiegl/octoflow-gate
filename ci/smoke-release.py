@@ -7,8 +7,8 @@ Unpacked into an empty directory, the release must:
 - answer `gate.py --help` with exit status 0;
 - judge a fixture project as a project runs it, `gate.py --rust-syntax gate-rust-linux-x86_64`: its gate.toml lists
   one `[[test]]` command, and its change adds a Rust function over the cognitive-complexity limit. The gate must find
-  that function, which it can only through the helper's documents, read in full; read the command's JUnit report;
-  and write a quality.json that the release's schema/quality-v1.json accepts.
+  that function, which it can only through the helper's documents, read in full, and fail on that alone; read the
+  command's JUnit report; and write a quality.json that the release's schema/quality-v1.json accepts.
 
 The helper's output is checked only as gate.py reads it; its structure field by field is gate-rust/tests/schema.rs's,
 run on the same source by the build's Gate stage. Exits 0 when all hold; otherwise names the first that does not on
@@ -52,6 +52,9 @@ pub fn tangled(a: u32) -> u32 {
 
 # What the gate must find in that change, as quality.json lists a finding.
 EXPECTED_FINDING = {"path": "tangled.rs", "line": 1, "check": "cognitive-complexity"}
+# The one failed condition the fixture project's change must raise, in gate.py's words for a check's findings; any
+# other, such as a check that could not run, fails the smoke check.
+EXPECTED_CONDITION = "1 findings of the `cognitive-complexity` check; each is listed below."
 
 
 class SmokeFailure(Exception):
@@ -118,6 +121,9 @@ def check_fixture_project(release: Path, project: Path) -> None:
     if found != [EXPECTED_FINDING]:
         raise SmokeFailure(f"the fixture project's findings are {json.dumps(found)}, not [{json.dumps(EXPECTED_FINDING)}]"
                            f": the helper's output was not read as it should be")
+    if report["failed_conditions"] != [EXPECTED_CONDITION]:
+        raise SmokeFailure(f"the fixture project's failed conditions are {json.dumps(report['failed_conditions'])}, "
+                           f"not [{json.dumps(EXPECTED_CONDITION)}]")
     if report["failing_tests"] != []:
         raise SmokeFailure(f"the fixture project's test report was not read: failing_tests is "
                            f"{json.dumps(report['failing_tests'])}, not []")

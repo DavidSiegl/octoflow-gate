@@ -41,6 +41,27 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   per-file boolean as `_rust_attribute_place` already takes `test_file`, would keep the signatures." Left for the Rust
   port (gate-standalone/12–14), which rewrites these helpers. Closes with the checks given which files are Rust tests
   once, rather than the settings that decide it.
+- **The Rust gate's quality file says `gate.py` judged the tree.** `QualityReport`'s `intro`
+  (`crates/gate/src/report.rs`) keeps gate.py's sentence so that the Rust gate reproduces gate.py's golden files byte
+  for byte (gate-standalone/12, 2026-11-06). Closes at the cutover (gate-standalone/18), with the intro naming `gate`
+  and the golden files rewritten.
+- **The Rust gate words some failures and accepts some arguments differently from gate.py.** Found while porting
+  (gate-standalone/12, 2026-11-06), all outside quality.json's contract:
+  - an OS error reads as Rust prints it (`Permission denied (os error 13)`), not as Python does (`[Errno 13]
+    Permission denied: '…'`), in "could not be started", "cannot write" and the like;
+  - a linter's first line, which a "failed" condition quotes up to 200 characters, counts a byte that is not UTF-8,
+    written `\xNN`, as four characters, where gate.py counts one;
+  - a git command past its minute ends "did not finish within 60 seconds" where gate.py's ends with Python's
+    `TimeoutExpired` text ("timed out after 60 seconds");
+  - `crates/gate/src/main.rs`'s `parse_args` takes no abbreviation of an option (`--cov` for `--coverage`), as
+    argparse does, and takes a value that starts with `-`, which argparse refuses;
+  - the linters and test commands run in a process group of the gate's session, not a session of their own
+    (`process::run`'s comment says why).
+  Closes at the cutover, with each kept or matched on purpose.
+- **`cargo xtask compare` tells gate.py's ported conditions by their wording.** `ported_condition` in
+  `xtask/src/main.rs` matches the start or end of each failed-condition sentence; a condition gate.py rewords drops
+  out of the comparison without a word, and the Rust gate's then shows as one gate.py lacks. Closes with the
+  cutover, which retires gate.py and the comparison.
 
 - **`gate.py` and docs/quality-gate.md still speak in octoflow's words.** The quality file is written for the
   Builder to answer and the Reviewer to judge (`TO_WEIGH_NOTE`'s comment, the suppressions' comment),

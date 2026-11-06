@@ -350,7 +350,7 @@ function. Run over this repository's whole suite, those runs alone took longer t
 - pytest collects in the copy, run with `--collect-only` and the selection and `pytest_add_cli_args` that mutmut's own
   runs get, so pytest itself applies their paths, `--ignore`, `--deselect` and the rest.
 
-The Jenkinsfile's Test stage writes the file, `.coverage`, with `--cov-context=test`, and the Gate stage passes it.
+This repository's `scripts/gate` writes the file, `.coverage`, with `--cov-context=test`, and passes it.
 mutmut then runs those tests three times. For PR #113's change, 253 mutants of 7 functions of the Python engine, that is
 312 tests of 1351, and mutmut took 77 seconds instead of 709 on the build host, with the same verdicts, mutant by
 mutant. The cost grows with the tests that reach the change, not with the suite: a change to a function nearly every
@@ -563,20 +563,20 @@ first, at most 50 in all, then a count:
 - **Build configuration**: an edit to `pyproject.toml` or `uv.lock` (`BUILD_CONFIG_FILES`) is noted, since each can
   change how the change was judged, as is one to a file anywhere in the tree that clippy takes its rules or its toolchain from
   (`Cargo.toml`, `clippy.toml`, `rust-toolchain.toml`, `.cargo/config.toml`; `CLIPPY_CONFIG_NAMES` in `gate.py`),
-  and cargo's `config.toml` in the `CARGO_HOME` clippy runs with when that lies inside the tree, as the Jenkinsfile's
-  `.cargo-home` does.
+  and cargo's `config.toml` in the `CARGO_HOME` clippy runs with when that lies inside the tree, as `scripts/gate`'s
+  `.cargo-home` does in a Jenkins build.
 
 ### Rust tests and coverage
 
 The Rust tests run with [cargo-nextest](https://nexte.st/), under
 [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov), which builds them with rustc's `-C instrument-coverage`
 and turns what they ran into a Cobertura report with the toolchain's own `llvm-profdata` and `llvm-cov`, from rustup's
-`llvm-tools-preview` component. This repository's Jenkins Test stage runs them in its one Cargo workspace,
+`llvm-tools-preview` component. This repository's `scripts/gate` runs them in its one Cargo workspace,
 `gate-rust/`:
 
 ```bash
 cargo llvm-cov nextest --locked --manifest-path gate-rust/Cargo.toml --ignore-run-fail --profile ci \
-    --config-file "$WORKSPACE/ci/nextest.toml" --cobertura --output-path "$WORKSPACE/coverage-rust.xml"
+    --config-file "$PWD/ci/nextest.toml" --cobertura --output-path "$PWD/coverage-rust.xml"
 ```
 
 - **What it measures** is lines, not branches: branch coverage of Rust needs a nightly compiler. Each line of the
@@ -589,10 +589,10 @@ cargo llvm-cov nextest --locked --manifest-path gate-rust/Cargo.toml --ignore-ru
   long as the report was written in the tree the gate judges; an absolute path stands as it is.
 - **Failing tests** do not stop the build, as pytest's do not: `--ignore-run-fail` runs every test and writes the
   report whatever fails, and the `ci` profile of `ci/nextest.toml` writes their JUnit report to
-  `target/nextest/ci/junit.xml` in the workspace, here `gate-rust/target/nextest/ci/junit.xml`, which the Gate stage passes as another `--tests`. A workspace that
+  `target/nextest/ci/junit.xml` in the workspace, here `gate-rust/target/nextest/ci/junit.xml`, which `scripts/gate` passes as another `--tests`. A workspace that
   does not compile stops the build there, and so does a run that leaves no JUnit report, since `--ignore-run-fail`
   also passes a nextest that ran no test. `--config-file` replaces the workspace's own `.config/nextest.toml`, so a
-  change cannot configure how its tests run in Jenkins.
+  change cannot configure how its tests run in the gate.
 - **Doctests** do not run: cargo-nextest has none, and cargo-llvm-cov runs them only on a nightly toolchain
   (`TODO.md`).
 - **Where the tools come from**: `ci/install-tools.sh` downloads cargo-llvm-cov and cargo-nextest, each pinned by

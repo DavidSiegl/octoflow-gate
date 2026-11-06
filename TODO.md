@@ -8,11 +8,6 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
 
 ## Open issues
 
-- **The Gate stage still falls back for a main without this repository's layout.** The Jenkinsfile's Gate stage
-  takes the change's own `pyproject.toml` when main has none, and builds the helper from `ci/gate-rust` when main has
-  no `gate-rust`, since main was octoflow-ai's filtered history until gate-standalone/02 merged. Found by
-  gate-standalone/02 (2026-11-05). Closes with both fallbacks deleted in the first change after that merge, such as
-  gate-standalone/03.
 - **`gate.py` and docs/quality-gate.md still speak in octoflow's words.** The quality file is written for the
   Builder to answer and the Reviewer to judge (`quality_report`'s docstring, `TO_WEIGH_NOTE`'s comment, the
   suppressions' comment), `FAILED_CONDITIONS`' comment and `one_line`'s docstring name the orchestrator as the reader,
@@ -300,7 +295,7 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   whole functions (a time budget shared with the reruns was decided against, "flaky-tests' reruns get one time limit a
   run", above). On PR #113 (2026-10-27) mutmut was stopped at 600 s after trying 0 of 253 mutants: its three runs of the
   whole suite before the first mutant took the budget. Narrowed (2026-10-28, gate-open-decisions ticket 06): the
-  Jenkinsfile's Test stage records a coverage context per test, and `gate.py --test-contexts` has mutmut run only the
+  test run records a coverage context per test (`scripts/gate`), and `gate.py --test-contexts` has mutmut run only the
   tests that reach the changed functions and its selection collects (`_recorded_tests`, `_narrowed_table`); replayed
   locally, PR #113's change took mutmut 77 s instead of 709 s, with the same verdicts. Still open: a change to a
   function nearly every test reaches, such as `tool_env`, still costs about the whole suite three times, and a large

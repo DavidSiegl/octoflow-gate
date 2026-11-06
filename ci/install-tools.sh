@@ -1,9 +1,9 @@
 #!/bin/sh
 # Put the pinned releases below into <dir> and exit 0; exit non-zero, saying why on standard error, when one cannot be
-# downloaded or its archive does not match its pinned sha256. Jenkins's Install stage runs it with a directory the
-# Jenkinsfile puts first on PATH, for tools the agent image does not provide:
+# downloaded or its archive does not match its pinned sha256. scripts/gate runs it, with .tools/bin, which it then puts
+# first on PATH, when one of them is not on PATH, as on the Jenkins agent, whose image does not provide them:
 #
-# - cargo-llvm-cov and cargo-nextest, with which the Test stage runs the gate-rust helper's tests and measures their
+# - cargo-llvm-cov and cargo-nextest, with which scripts/gate runs the gate-rust helper's tests and measures their
 #   coverage, and which gate.py's passes-at-base check runs a change's Rust tests with. cargo-llvm-cov also needs
 #   rustup's llvm-tools component, which the agent image provides.
 # - cargo-mutants, with which gate.py's surviving-mutants check mutation-tests the Rust a change edits. The tests of

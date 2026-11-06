@@ -79,6 +79,7 @@ uv sync
 ci/install-tools.sh <dir on PATH>   # cargo-nextest, cargo-llvm-cov, cargo-mutants, which some tests run
 uv run pytest
 cargo test --manifest-path gate-rust/Cargo.toml
+scripts/gate main                    # what Jenkins runs: both test suites, then main's gate on the change since main
 ```
 
 ## License

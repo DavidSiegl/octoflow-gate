@@ -25,8 +25,8 @@ dev = [
     "ruff>=0.17.2",
 ]
 
-# The rules `gate.py` judges a change by. In the Gate stage the gate reads them from main's copy of this file
-# (--config), so a change cannot loosen the rules it is judged by. Only findings on lines a change adds count, so the
+# The rules `gate.py` judges a change by. scripts/gate has the gate read them from the base's copy of this file
+# (--config), main's for a pull request, so a change cannot loosen the rules it is judged by. Only findings on lines a change adds count, so the
 # findings already on main do not block.
 
 [tool.ruff.lint]
@@ -68,7 +68,7 @@ also_copy = ["gate-rust/src/", "gate-rust/Cargo.toml", "gate-rust/Cargo.lock"]
 do_not_mutate_patterns = ['\bhelp=', '\bdescription=']
 
 [tool.coverage.run]
-# The C tracer, which the Jenkinsfile's Test stage records a context per test with (--cov-context=test), for gate.py
+# The C tracer, which scripts/gate's test run records a context per test with (--cov-context=test), for gate.py
 # --test-contexts to pick the tests mutmut runs. Under Python 3.14, coverage's default core, sys.monitoring, records
 # each line for only the first few tests to run it, without a warning, so mutmut would leave out tests that kill its
 # mutants and report them as survivors.

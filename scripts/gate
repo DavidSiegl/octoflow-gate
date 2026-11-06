@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+# Judge the change this working tree makes since BASE with the gate itself: install what the
+# tests need, run gate-rust's tests and gate.py's with coverage, then run BASE's gate.py, with
+# BASE's rules (pyproject.toml) and BASE's gate-rust helper, so that a change cannot loosen
+# how it is itself judged (docs/quality-gate.md says what each check means).
+#
+#   scripts/gate [BASE]     BASE is any git revision; default main.
+#
+# Jenkins runs it on every pull request (from its merge base with main) and on main (from
+# the last passing build), and judges by its exit status alone: 0 for GATE: OK, 1 for
+# GATE: ERROR (quality.md says why), 2 when the change could not be judged (a tool missing,
+# BASE not a commit or without a gate.py, the tests unable to run, gate.py ending without a
+# verdict), and 130 when gate.py was interrupted. A failing test does not stop the run; the
+# gate reports it. It leaves at the repo root quality.md, the tests' JUnit reports
+# test-results.xml (pytest) and test-results-rust.xml (cargo-nextest), which Jenkins
+# publishes, and the coverage reports the gate read.
+#
+# In a Jenkins build (WORKSPACE set), crates are fetched into the workspace (CARGO_HOME), so
+# no build compiles sources an earlier one left, and temporary files go under WORKSPACE_TMP
+# rather than /tmp: the tests and the gate build Rust in temporary directories and run what
+# they build, and on the agent /tmp is the container's writable layer, where Falco reports
+# every program run from a file written there ("Drop and execute new binary in container").
+# The test run then takes Hypothesis's `ci` profile (tests/conftest.py).
+#
+# cargo-llvm-cov, cargo-nextest and cargo-mutants are taken from PATH when all three are
+# there, else downloaded by ci/install-tools.sh into .tools/bin, pinned; rustup's clippy and
+# llvm-tools components must be installed, since a build cannot add to the agent's rustup
+# home, which is root's.
+set -euo pipefail
+# Any failure before gate.py runs is "could not judge", whatever the command's status.
+trap 'exit 2' ERR
+export UV_NO_PROGRESS=1
+# Relative, in the tree: set to an absolute path elsewhere, the file vanished during a run and
+# over 2300 tests errored (octoflow-ai, where this script's steps began as Jenkins stages).
+export COVERAGE_FILE=.coverage
+
+top=$(git rev-parse --show-toplevel)
+cd "$top"
+# Resolved before the tests run, which could move a ref.
+if ! base=$(git rev-parse --verify --quiet "${1:-main}^{commit}"); then
+	echo "gate: ${1:-main} is not a commit" >&2
+	exit 2
+fi
+if ! git cat-file -e "$base:gate.py" 2>/dev/null; then
+	echo "gate: ${1:-main} has no gate.py to judge with" >&2
+	exit 2
+fi
+# The reports and the verdict are gitignored and outlive a run: removed, so a step that
+# writes none cannot leave gate.py the last run's, nor a run that ends early the last verdict.
+rm -f quality.md test-results.xml test-results-rust.xml coverage.xml coverage-rust.xml "$COVERAGE_FILE"
+
+if [[ -n ${WORKSPACE:-} ]]; then
+	export CARGO_HOME="$WORKSPACE/.cargo-home"
+	# tests/conftest.py's larger profile, for the test run alone: mutmut's runs keep the default.
+	hypothesis_profile=ci
+	# Python's tempfile silently takes /tmp for a TMPDIR that does not exist, so it is
+	# created. What an earlier build left there goes first: on the volume, unlike in /tmp, it
+	# would stay. The chmod is for a directory a killed test left without write permission; a
+	# clear-out that still fails only warns, since failing would fail every later build of
+	# this workspace until someone cleaned the volume by hand.
+	if [[ -z ${WORKSPACE_TMP:-} ]]; then
+		echo "gate: WORKSPACE is set but WORKSPACE_TMP is not, as no Jenkins build leaves it" >&2
+		exit 2
+	fi
+	export TMPDIR="$WORKSPACE_TMP/tmp"
+	if [[ -e $TMPDIR ]]; then
+		{ chmod -R u+rwX "$TMPDIR" && rm -rf "$TMPDIR"; } ||
+			echo "gate: could not empty $TMPDIR; what an earlier build left there stays" >&2
+	fi
+	mkdir -p "$TMPDIR"
+fi
+
+installed=$(rustup component list --installed)
+for component in clippy llvm-tools; do
+	if ! grep -q "^$component-" <<<"$installed"; then
+		echo "gate: rustup's $component component is not installed; the agent image must add it" >&2
+		exit 2
+	fi
+done
+# command -v succeeds when any one of several names is found, so each is asked alone.
+for tool in cargo-llvm-cov cargo-nextest cargo-mutants; do
+	if ! command -v "$tool" >/dev/null; then
+		ci/install-tools.sh "$top/.tools/bin"
+		export PATH="$top/.tools/bin:$PATH"
+		break
+	fi
+done
+uv sync --frozen
+
+# gate-rust's tests, with line coverage. --ignore-run-fail writes the coverage report whatever
+# tests fail and exits 0 for them, so a non-zero status is a build that did not compile or a
+# tool that could not run; it also passes a nextest that ran no test, so the JUnit report,
+# which ci/nextest.toml's ci profile writes, must be there after.
+junit=gate-rust/target/nextest/ci/junit.xml
+rm -f "$junit"
+cargo llvm-cov nextest --locked --manifest-path gate-rust/Cargo.toml --ignore-run-fail \
+	--profile ci --config-file "$top/ci/nextest.toml" \
+	--cobertura --output-path "$top/coverage-rust.xml"
+if [[ ! -f $junit ]]; then
+	echo "gate: cargo-nextest wrote no $junit, so gate-rust's tests did not run" >&2
+	exit 2
+fi
+cp "$junit" test-results-rust.xml
+
+# --cov-context=test records which tests run each line, for gate.py's --test-contexts: mutmut
+# then runs only the tests that reach the changed functions. pytest exits 1 when tests failed,
+# which the gate judges; anything else means they did not run
+# (https://docs.pytest.org/en/stable/reference/exit-codes.html).
+status=0
+HYPOTHESIS_PROFILE=${hypothesis_profile:-default} uv run --frozen pytest --cov=gate --cov-branch --cov-context=test --cov-report=xml \
+	--junitxml=test-results.xml || status=$?
+if ((status > 1)); then
+	echo "gate: pytest exited $status, so the tests did not run" >&2
+	exit 2
+fi
+
+# BASE's gate.py, rules and helper, copied only now that the tests have run. A helper that
+# does not build is one the gate cannot run, which each check that reads Rust reports as not
+# run on a change to Rust, so it only warns.
+rm -f quality.md
+judge=$(mktemp -d)
+trap 'rm -rf "$judge"' EXIT
+git archive "$base" gate.py pyproject.toml gate-rust | tar -x -C "$judge"
+cargo build --release --locked --manifest-path "$judge/gate-rust/Cargo.toml" --target-dir "$judge/target" ||
+	echo "gate: ${1:-main}'s gate-rust helper did not build; gate.py reports Rust as not run" >&2
+
+trap - ERR
+status=0
+uv run --frozen python "$judge/gate.py" --base "$base" --config "$judge/pyproject.toml" \
+	--tests test-results-rust.xml --tests test-results.xml \
+	--coverage coverage-rust.xml --coverage coverage.xml \
+	--test-contexts "$COVERAGE_FILE" --rust-syntax "$judge/target/release/gate-rust" \
+	--out quality.md || status=$?
+case $status in
+0 | 130) ;;
+1)
+	# gate.py exits 1 for GATE: ERROR, but so does Python on an uncaught exception.
+	if [[ $(head -n 1 quality.md 2>/dev/null) != "GATE: ERROR" ]]; then
+		echo "gate: gate.py exited 1 without writing a verdict" >&2
+		status=2
+	fi
+	;;
+*) status=2 ;;
+esac
+exit "$status"

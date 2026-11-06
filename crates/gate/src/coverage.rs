@@ -95,7 +95,8 @@ impl NewCoverage {
 ///
 /// Errs when a report cannot be read or parsed: when it is not XML or LCOV, as an empty or truncated one is not; when
 /// a Cobertura line of a file the change adds lines to has a number, or on a changed line hits, that is not a whole
-/// number; when an LCOV entry of such a file's changed line cannot be read.
+/// number; when a DA or BRDA entry of such a file in an LCOV report has a line number that is not a whole number, or
+/// on a changed line other fields that cannot be read.
 pub fn new_coverage(
     reports: &[PathBuf],
     root: &Path,
@@ -227,7 +228,8 @@ fn py_int(text: &str) -> Result<i128, String> {
 /// each `DA:<line>,<hits>` of each `SF:` record whose file, taken from the current directory, the change adds lines
 /// to, with the `BRDA:<line>,<block>,<branch>,<taken>` entries of its line as its branch outcomes, a taken of `-` or
 /// 0 one not taken. Errs, with why, when the report holds no record, when an entry is outside a record or a record
-/// has no `end_of_record`, as in a truncated report, or on a DA or BRDA entry of a changed line it cannot read.
+/// has no `end_of_record`, as in a truncated report, or on a DA or BRDA entry whose line number it cannot read, or,
+/// on a changed line, the rest of whose fields it cannot read.
 fn lcov_lines(
     report: &[u8],
     real_root: &Path,
@@ -279,26 +281,27 @@ struct LcovRecord<'a> {
 }
 
 impl LcovRecord<'_> {
-    /// Adds `line`, an entry of the record, when it is a DA or BRDA entry of an added line; errs, with why, when it
-    /// is one whose fields cannot be read.
+    /// Adds `line`, an entry of the record, when it is a DA or BRDA entry of an added line; errs, with why, on a DA
+    /// or BRDA entry whose line number cannot be read, or, on an added line, the rest of whose fields cannot be.
     fn read(&mut self, line: &[u8]) -> Result<(), String> {
         let Some((_, added)) = self.file else { return Ok(()) };
-        if let Some(fields) = line.strip_prefix(b"DA:") {
-            let fields = std::str::from_utf8(fields).map_err(|e| e.to_string())?;
-            let (number, count) = fields.split_once(',').ok_or("no hit count")?;
-            if let Some(number) = changed_line(number, added)? {
-                let count = py_int(count.split(',').next().unwrap_or_default())?;
-                *self.hits.entry(number).or_default() |= count > 0;
-            }
-        } else if let Some(fields) = line.strip_prefix(b"BRDA:") {
-            let fields = std::str::from_utf8(fields).map_err(|e| e.to_string())?;
-            let parts: Vec<&str> = fields.split(',').collect();
-            let [number, _, _, taken] = parts[..] else { return Err("not 4 fields".into()) };
-            if let Some(number) = changed_line(number, added)? {
-                let was = self.branches.entry(number).or_default();
-                was.1 += 1;
-                was.0 += usize::from(!matches!(taken.trim(), "-" | "0"));
-            }
+        let (is_da, fields) = match (line.strip_prefix(b"DA:"), line.strip_prefix(b"BRDA:")) {
+            (Some(fields), _) => (true, fields),
+            (_, Some(fields)) => (false, fields),
+            _ => return Ok(()),
+        };
+        let fields = std::str::from_utf8(fields).map_err(|e| e.to_string())?;
+        // The line's number comes first; the other fields are read only on a changed line.
+        let mut fields = fields.split(',');
+        let Some(number) = changed_line(fields.next().unwrap_or_default(), added)? else { return Ok(()) };
+        if is_da {
+            let count = fields.next().ok_or("no hit count")?;
+            *self.hits.entry(number).or_default() |= py_int(count)? > 0;
+        } else {
+            let [_, _, taken] = fields.collect::<Vec<_>>()[..] else { return Err("not 4 fields".into()) };
+            let was = self.branches.entry(number).or_default();
+            was.1 += 1;
+            was.0 += usize::from(!matches!(taken.trim(), "-" | "0"));
         }
         Ok(())
     }
@@ -460,6 +463,19 @@ mod tests {
         for bad in ["", "_1", "1_", "1__0", "1.0", "x", "+"] {
             assert!(py_int(bad).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn lcov_entries_of_unchanged_lines_are_not_read_past_their_number() {
+        let root = std::env::temp_dir().join(format!("gate-coverage-unchanged-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let file = root.join("a.py");
+        let a = changed(&[("a.py", &[1])]);
+        let text = format!("SF:{}\nDA:7\nBRDA:7,0,a,b,1\nDA:1,1\nend_of_record\n", file.display());
+        let got = new_coverage(&[scratch("unchanged.info", &text)], &root, &a).unwrap();
+        assert_eq!((got.lines, got.covered_lines), (1, 1));
+        let text = format!("SF:{}\nDA:1\nend_of_record\n", file.display());
+        assert!(new_coverage(&[scratch("changed.info", &text)], &root, &a).is_err());
     }
 
     #[test]

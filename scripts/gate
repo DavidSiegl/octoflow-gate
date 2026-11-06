@@ -135,6 +135,35 @@ else
 	helper=$judge_dir/target/release/gate-rust
 fi
 
+# Once merged, the change's gate.toml is read by the gate the change pins, and that gate.py
+# refuses a key it does not know: a gate.toml ahead of its pin would leave every later change
+# unjudgeable, the one that raises the pin included. So the change's gate.toml must load under
+# the release the change's ci/gate.pin names, fetched with the judge's ci/fetch-gate.sh; a
+# change may raise the pin and use what the new release reads in one go. A change without a
+# pin is judged next by its own gate.py, which its tests cover.
+if [[ -e ci/gate.pin ]]; then
+	if cmp -s ci/gate.pin "$judge_dir/ci/gate.pin" 2>/dev/null; then
+		next_gate=$judge_dir/release
+	else
+		next_gate=$judge_dir/next-release
+		"$judge_dir/ci/fetch-gate.sh" ci/gate.pin "$next_gate" >/dev/null
+	fi
+	# GateSettings.read is gate.py's own reader of gate.toml (no release has a public one).
+	if ! uv run --no-project python -I - "$next_gate/gate.py" gate.toml <<-'EOF'; then
+		import importlib.util, sys
+		spec = importlib.util.spec_from_file_location("released_gate", sys.argv[1])
+		gate = importlib.util.module_from_spec(spec)
+		sys.modules[spec.name] = gate
+		spec.loader.exec_module(gate)
+		try:
+		    gate.GateSettings.read(sys.argv[2])
+		except gate.GateError as e:
+		    sys.exit(f"gate: {e}; the release ci/gate.pin pins would refuse it, so raise the pin first")
+	EOF
+		exit 2
+	fi
+fi
+
 installed=$(rustup component list --installed)
 for component in clippy llvm-tools; do
 	if ! grep -q "^$component-" <<<"$installed"; then

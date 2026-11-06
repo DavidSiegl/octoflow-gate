@@ -62,3 +62,31 @@ class TestGateScript(RepositoryTest):
                      "gate.toml": '[[test]]\nname = "t"\ncommand = ["true"]\n'}, "a judge that pins a release")
         self.put(fetch, "#!/bin/sh\necho 'fetched by the change' >&2\nexit 1\n")
         self.assertEqual(self.gate(), (2, "fetched by the judge\n"))
+
+    def test_a_change_whose_gate_toml_its_pinned_release_refuses_is_not_judged(self):
+        # Merged, it would be read by that release's gate.py, which refuses a key it does not know: every later change,
+        # the one raising the pin included, would then go unjudged.
+        fetch = "ci/fetch-gate.sh"
+        self.put(fetch, '#!/bin/sh\nmkdir -p "$2"\ncat > "$2/gate.py" <<\'EOF\'\n' + RELEASED_GATE_PY + "EOF\necho 0.5.0\n")
+        os.chmod(os.path.join(self.repo, fetch), 0o755)  # noqa: S103
+        gate_toml = '[[test]]\nname = "t"\ncommand = ["true"]\n'
+        self.commit({"ci/gate.pin": f"0.5.0 {'0' * 64}\n", "pyproject.toml": "", "gate.toml": gate_toml},
+                    "a judge that pins a release")
+        self.put("gate.toml", "new_key = 1\n" + gate_toml)
+        status, stderr = self.gate()
+        self.assertEqual(status, 2)
+        self.assertIn("gate: gate.toml: unknown key `new_key`; the release ci/gate.pin pins would refuse it", stderr)
+
+
+# The part of a released gate.py that reads gate.toml, as the fetch stub above unpacks it: it refuses any key but test.
+RELEASED_GATE_PY = """import tomllib
+class GateError(Exception):
+    pass
+class GateSettings:
+    @classmethod
+    def read(cls, path):
+        with open(path, "rb") as f:
+            for key in tomllib.load(f):
+                if key != "test":
+                    raise GateError(f"{path}: unknown key `{key}`")
+"""

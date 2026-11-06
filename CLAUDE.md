@@ -11,7 +11,11 @@ as GitHub release `v<version>`, whose assets `ci/package.sh` builds (Jenkinsfile
   (docs/quality-gate.md, "The report as a contract"). `major` makes it 1.0.0, a deliberate release decision.
 - The bump also sets `GATE_VERSION` in `gate.py` to the new version, which quality.json names;
   `tests/test_invariants.py` fails while the two differ.
-- Changes only to docs, tests, CI or repository tooling raise nothing.
+- Changes only to docs, tests, CI or repository tooling raise nothing, a shipped doc such as README.md included: its
+  edit goes out with the next release.
+- `ci/gate.pin` names the release that judges this repo's changes. Raise it only to a release that exists, with the
+  sha256 of its downloaded tarball; `scripts/gate` refuses a `gate.toml` the pinned release would not read, so a new
+  key lands with or after the raise.
 - Jenkins creates tags and releases after the merge.
 
 ## Work

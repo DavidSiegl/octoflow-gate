@@ -8,6 +8,11 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
 
 ## Open issues
 
+- **`scripts/gate` checks a change's `gate.toml` through a private class of the released `gate.py`.** It loads the
+  release the change pins and calls `GateSettings.read`, since no release has a public way to check settings; a
+  release that renames or reshapes it makes every change that pins it fail the check (exit 2). Chosen by the user
+  over a new public flag (cross-review 08 F1, 2026-11-06). Closes with a public `--check-settings` (or similar) in
+  `gate.py`, released, pinned, and called instead.
 - **The release's gate-rust helper needs the build agent's glibc or newer.** `ci/package.sh` builds it for the
   default target, so it is linked against the Jenkins agent's GNU C library; as cross-review 07 put it (R1-2): "A
   project on Debian 11 (2.31), Ubuntu 20.04 (2.31) or RHEL 8 (2.28) that follows the README gets 'GLIBC_2.34 not

@@ -4,7 +4,10 @@
 //! been ported, as each module says, and `cargo xtask compare` checks it against gate.py.
 
 pub mod coverage;
+pub mod diff;
+pub mod git;
 pub mod paths;
+pub mod process;
 pub mod report;
 pub mod text;
 pub mod xml;

@@ -56,7 +56,7 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   - `crates/gate/src/main.rs`'s `parse_args` takes no abbreviation of an option (`--cov` for `--coverage`), as
     argparse does, and takes a value that starts with `-`, which argparse refuses.
   Closes at the cutover, with each kept or matched on purpose.
-- **`cargo xtask compare` tells gate.py's ported conditions by their wording.** `ported_condition` in
+- **`cargo xtask compare` tells gate.py's ported conditions by their wording.** `ported_condition_of_python` in
   `xtask/src/main.rs` matches the start or end of each failed-condition sentence; a condition gate.py rewords drops
   out of the comparison without a word, and the Rust gate's then shows as one gate.py lacks. Closes with the
   cutover, which retires gate.py and the comparison.

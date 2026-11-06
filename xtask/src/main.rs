@@ -2,6 +2,7 @@
 //!
 //! ```text
 //! cargo xtask compare [--repo DIR] [BASE] [-- GATE_ARGS...]
+//! cargo xtask fixture DIR
 //! ```
 //!
 //! `compare` judges the change the git working tree at DIR (default the current directory) makes since BASE (default
@@ -14,6 +15,10 @@
 //! `--tests` or `--coverage`; `-- --mutation-budget 1 --base-run-budget 1` keeps gate.py's mutation and base runs,
 //! which the Rust gate does not port yet, short. A change between two commits is compared with the later one checked
 //! out.
+//!
+//! `fixture` makes DIR, which must not exist, a git repository whose working tree holds a change since its branch
+//! `main` that gives every part ported so far something to report ([`fixture`]), for `cargo xtask compare --repo DIR
+//! -- --mutation-budget 1 --base-run-budget 1`. It exits 0 once DIR is made, and 2 when it cannot make it.
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -21,13 +26,19 @@ use std::process::{Command, ExitCode};
 
 use serde_json::{json, Value};
 
-const USAGE: &str = "usage: cargo xtask compare [--repo DIR] [BASE] [-- GATE_ARGS...]";
+mod fixture;
+
+const USAGE: &str = "usage: cargo xtask compare [--repo DIR] [BASE] [-- GATE_ARGS...]\n       cargo xtask fixture DIR";
 
 fn main() -> ExitCode {
     let mut args = std::env::args_os().skip(1);
     let task = args.next();
     let done = match task.as_ref().and_then(|t| t.to_str()) {
         Some("compare") => compare(args.collect()),
+        Some("fixture") => match (args.next(), args.next()) {
+            (Some(dir), None) => fixture::make(Path::new(&dir)).map(|()| true),
+            _ => Err(USAGE.into()),
+        },
         _ => Err(USAGE.into()),
     };
     match done {

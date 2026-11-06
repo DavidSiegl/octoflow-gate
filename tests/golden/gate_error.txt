@@ -1,6 +1,6 @@
 GATE: ERROR
 
-`orchestrator.py gate` judged the working tree at `<head>` against the base `<base>`.
+`gate.py` judged the working tree at `<head>` against the base `<base>`.
 
 ## Failed conditions
 

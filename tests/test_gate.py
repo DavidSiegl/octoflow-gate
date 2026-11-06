@@ -1,8 +1,8 @@
 """The quality gate, gate.py: each of its checks, the quality file it writes, and the program over a real git
 repository.
 
-The tests that read what the gate writes with the orchestrator's own reader, or compare the two modules' copies of
-a piece of the quality file's format, are in tests/test_orchestrator.py and tests/test_properties.py.
+The property tests of the diff reading are in tests/test_properties.py. The golden files under tests/golden/ hold the
+quality file's format, which programs that integrate the gate read (README.md).
 """
 
 import ast
@@ -29,7 +29,6 @@ import unittest
 from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
-import conftest
 from coverage import CoverageData
 from gitrepo import RepositoryTest, git
 from golden import assert_golden
@@ -55,11 +54,11 @@ CARGO = shutil.which("cargo")
 
 @functools.cache
 def gate_rust():
-    """The path of the gate-rust helper built from ci/gate-rust beside these tests, for the tests that read real Rust:
+    """The path of the gate-rust helper built from gate-rust beside these tests, for the tests that read real Rust:
     built once per run, a debug build, wherever CARGO_TARGET_DIR puts it. Under mutmut that is its copy of the crate's
     sources (pyproject.toml's also_copy). A machine without cargo fails these tests rather than skipping them, as the
     e2e scenarios fail without their tools (TODO.md, "The e2e scenarios: what they do not record")."""
-    manifest = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "ci", "gate-rust", "Cargo.toml")
+    manifest = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "gate-rust", "Cargo.toml")
     if CARGO is None:
         raise AssertionError("cargo, which builds the gate-rust helper, is not on PATH")
     build = [CARGO, "build", "--locked", "--quiet", "--message-format=json", "--manifest-path", manifest]
@@ -137,11 +136,20 @@ class TestChangedLines(unittest.TestCase):
                 self.assertEqual(gate._cargo_home_in(root), inside)
 
     def test_build_config_edits(self):
+        # A CI's own file, such as a Jenkinsfile, is no build configuration of the gate's: the gate knows no CI.
         diff = ("diff --git a/Jenkinsfile b/Jenkinsfile\n--- a/Jenkinsfile\n+++ b/Jenkinsfile\n@@ -1 +1 @@\n-a\n+b\n"
                 "diff --git a/uv.lock b/uv.lock\ndeleted file mode 100644\n"
                 "--- a/uv.lock\n+++ /dev/null\n@@ -1 +0,0 @@\n-x\n")
-        self.assertEqual(gate.edited_config(diff, changed_lines(diff)), ["Jenkinsfile", "uv.lock"])
+        self.assertEqual(gate.edited_config(diff, changed_lines(diff)), ["uv.lock"])
         self.assertEqual(gate.edited_config("", {}), [])
+
+    def test_the_tools_get_no_credentials_by_their_names_and_keep_the_rest(self):
+        credentials = {"JENKINS_TOKEN": "t", "GITHUB_TOKEN": "g", "DB_PASSWORD": "p", "APP_SECRET": "s",
+                       "ANTHROPIC_API_KEY": "k"}
+        kept = {"DATABASE_URL": "postgres://localhost/test", "JENKINS_URL": "http://ci", "TOKENIZER": "fast"}
+        with patch.dict(os.environ, {**credentials, **kept, "UPDATE_GOLDEN": "1"}):
+            env = gate.tool_env()
+        self.assertEqual({k for k in [*credentials, *kept, "UPDATE_GOLDEN"] if k in env}, set(kept))
 
     def test_clippy_config_edits_anywhere_in_the_tree(self):
         diff = ("diff --git a/ui/Cargo.toml b/ui/Cargo.toml\n--- a/ui/Cargo.toml\n+++ b/ui/Cargo.toml\n@@ -1 +1 @@\n"
@@ -153,28 +161,6 @@ class TestChangedLines(unittest.TestCase):
         self.assertEqual(gate.clippy_config_files(diff, changed_lines(diff)),
                          ["clippy.toml", "ui/.cargo/config.toml", "ui/Cargo.toml"])
         self.assertEqual(gate.edited_config(diff, changed_lines(diff)), [])
-
-
-class TestQualityFileContract(unittest.TestCase):
-    """The quality file is the one interface between the gate and the engine, and each keeps its own copy of its
-    format: the gate's here, the engine's in engine/src/quality.rs, whose tests read the golden files this suite holds
-    quality_report and the gate to (the_engine_reads_what_the_gate_writes). This holds the engine's copies of the
-    format's words to the gate's, read from the Rust source."""
-
-    def engine_constant(self, name):
-        source = (conftest.REPO / "engine" / "src" / "quality.rs").read_text()
-        m = re.search(rf"^pub const {name}: [^=]+= (.+);$", source, re.MULTILINE)
-        self.assertIsNotNone(m, f"engine/src/quality.rs has no const {name}")
-        return int(m.group(1)) if m.group(1).isdigit() else json.loads(m.group(1))
-
-    def test_the_engine_s_copies_match_the_gate_s(self):
-        for engine, ours in [("QUALITY_OK", gate.GATE_OK), ("QUALITY_ERROR", gate.GATE_ERROR),
-                             ("QUALITY_FAILED_CONDITIONS", gate.FAILED_CONDITIONS),
-                             ("QUALITY_FAILING_TESTS", gate.FAILING_TESTS),
-                             ("QUALITY_TO_WEIGH_NOTE", gate.TO_WEIGH_NOTE),
-                             ("QUALITY_FINDINGS_LIMIT", gate.QUALITY_ISSUE_LIMIT)]:
-            with self.subTest(engine):
-                self.assertEqual(self.engine_constant(engine), ours)
 
 
 class TestQualityReport(unittest.TestCase):
@@ -256,9 +242,7 @@ class TestQualityReport(unittest.TestCase):
         self.assertNotIn(f"test_{gate.QUALITY_ISSUE_LIMIT}`", text)
 
     def test_build_config_edits_are_named(self):
-        text = quality_report("OK", "i", tests=[], edited=["Jenkinsfile", "uv.lock"])
-        self.assertIn("The change edits `Jenkinsfile`. The quality job reads it from `main`", text)
-        for only, other in (("Jenkinsfile", "uv.lock"), ("uv.lock", "Jenkinsfile")):
+        for only, other in (("pyproject.toml", "uv.lock"), ("uv.lock", "pyproject.toml")):
             with self.subTest(only=only):
                 text = quality_report("OK", "i", tests=[], edited=[only])
                 self.assertIn(f"The change edits `{only}`", text)
@@ -299,7 +283,7 @@ class TestQualityReport(unittest.TestCase):
             tests=[("t.T.test_x", "AssertionError: 3 != 2\ntraceback"), ("t.T.test_y", "")],
             coverage="50.0% of 20 new lines to cover; 10 lines are not covered.",
             suppressions=[("f.py", 3, "x = 1  # noqa: F401"), ("g\rh.py", 1, "# noqa")],
-            edited=["Jenkinsfile", "pyproject.toml", "uv.lock"],
+            edited=["pyproject.toml", "uv.lock"],
             clippy_config=[f"c{k}/Cargo.toml" for k in range(7)])
         assert_golden("quality_report_error", text)
 
@@ -1291,7 +1275,7 @@ class TestRustFiles(RepositoryTest):
         self.touch_rust()
         named = f"the gate-rust helper `{os.path.join(self.outside, 'gate-rust')}`"
         rebuild = "where this gate.py reads schema 2; build the helper from the tree this gate.py comes from, its " \
-                  "`ci/gate-rust`"
+                  "`gate-rust`"
         undecodable = "'utf-8' codec can't decode byte 0xff in position 0: invalid start byte"
         cases = [
             ('print("boom", file=sys.stderr)\nsys.exit(3)', f"{named} failed with exit status 3: boom"),
@@ -1359,7 +1343,7 @@ class TestRustFiles(RepositoryTest):
         with patch.object(gate, "RUST_SYNTAX_SCHEMA", 1):
             self.assertEqual(self.rust_files(helper), ([], self.not_run(
                 f"the gate-rust helper `{helper}` printed a document of schema true, where this gate.py reads schema "
-                f"1; build the helper from the tree this gate.py comes from, its `ci/gate-rust`")))
+                f"1; build the helper from the tree this gate.py comes from, its `gate-rust`")))
 
 
 class TestTestIntegrityCheck(unittest.TestCase):
@@ -1883,7 +1867,7 @@ class TestWeakenedTests(RepositoryTest):
 
 
 class TestRustWeakenedTests(RepositoryTest):
-    """The test-integrity check on Rust tests, read by the real gate-rust helper, built from this tree's ci/gate-rust
+    """The test-integrity check on Rust tests, read by the real gate-rust helper, built from this tree's gate-rust
     once for the class, over a Cargo package with unit tests in an inline module and integration tests under tests/."""
 
     LIB = (

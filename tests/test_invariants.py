@@ -60,21 +60,13 @@ class TestInvariants(unittest.TestCase):
     def test_the_gate_imports_only_the_standard_library(self):
         others = imported_modules(ast.parse(GATE_SOURCE.read_text())) - set(sys.stdlib_module_names)
         self.assertEqual(others, set(), "gate.py is stdlib-only, so that the one file is the gate, for another project "
-                                        "to run (docs/quality-gate.md; docs/ui-options.md, C1)")
+                                        "to run (README.md)")
 
     def test_the_project_has_no_runtime_dependencies(self):
         with open(ROOT / "pyproject.toml", "rb") as f:
             project = tomllib.load(f)["project"]
         self.assertEqual(project["dependencies"], [], "gate.py has no runtime dependencies "
-                                                      "(pyproject.toml, [project]; docs/ui-options.md, C1)")
-
-    def test_the_engine_s_version_is_the_release_s(self):
-        with open(ROOT / "pyproject.toml", "rb") as f:
-            release = tomllib.load(f)["project"]["version"]
-        with open(ROOT / "engine" / "Cargo.toml", "rb") as f:
-            engine = tomllib.load(f)["package"]["version"]
-        self.assertEqual(engine, release, "the engine's version is the release's, which the Jenkinsfile's Release "
-                                          "stage reads from pyproject.toml (docs/architecture.md, Tooling)")
+                                                      "(pyproject.toml, [project])")
 
     def test_coverage_records_with_the_c_tracer(self):
         with open(ROOT / "pyproject.toml", "rb") as f:
@@ -84,8 +76,7 @@ class TestInvariants(unittest.TestCase):
                                                     "leave out tests (pyproject.toml, [tool.coverage.run])")
 
     def test_the_gate_sets_no_authorization_header(self):
-        rule = ("gate.py sends no credentials; only the engine talks to Jenkins, its token in the Authorization header "
-                "alone (docs/quality-gate.md, Credentials and permissions)")
+        rule = "gate.py sends no credentials: it reads only the working tree and the reports it is given (README.md)"
         self.assertEqual(authorization_uses(ast.parse(GATE_SOURCE.read_text())), [], rule)
 
     def test_no_test_sleeps_for_real(self):

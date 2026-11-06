@@ -21,9 +21,10 @@ import pytest
 from guard_errors import NetworkUsed, RealSleep
 from hypothesis import HealthCheck, settings
 
-# How many examples each property test tries. `default` keeps a local `uv run pytest` fast; scripts/gate, in a
-# Jenkins build, sets HYPOTHESIS_PROFILE=ci for its test run, ten times as many. No deadline: the tests that run git or
-# sh for each example take tens of milliseconds an example, and their speed is not what they test.
+# How many examples each property test tries. `default` keeps a local `uv run pytest` fast; the gate's pytest command
+# (gate.toml) takes `ci`, ten times as many, with --hypothesis-profile, which wins over HYPOTHESIS_PROFILE. No
+# deadline: the tests that run git or sh for each example take tens of milliseconds an example, and their speed is not
+# what they test.
 # differing_executors is off because the gate's mutmut runs the tests more than once in one process, and unittest
 # makes a new TestCase for each run, so the second calls each @given method on another self. The check guards against
 # state kept on self from one example to the next, and the @given methods of tests/test_properties.py keep none: they

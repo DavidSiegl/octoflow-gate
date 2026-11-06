@@ -8,12 +8,11 @@ dist/
 # Virtual environments
 .venv
 
-# What `uv run pytest --cov ...` and `gate.py --out` write
+# What the test commands of gate.toml and `gate.py --out` write
 .coverage
 coverage.xml
 coverage-rust.xml
 test-results.xml
-test-results-rust.xml
 quality.md
 quality.json
 

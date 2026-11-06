@@ -73,12 +73,12 @@ pipeline {
     post {
         always {
             archiveArtifacts artifacts: 'quality.md, quality.json', allowEmptyArchive: true
-            // The JUnit reports of the tests scripts/gate ran, which it leaves at the repo root,
-            // shown as the build's test results and never judged: neither the build's result nor
-            // a GitHub check (skipPublishingChecks) comes from them, so a failing test leaves the
-            // result to the gate. None is no error.
+            // The JUnit reports the gate's test commands wrote (gate.toml's [[test]]), shown as the
+            // build's test results and never judged: neither the build's result nor a GitHub check
+            // (skipPublishingChecks) comes from them, so a failing test leaves the result to the
+            // gate. None is no error.
             junit allowEmptyResults: true, skipMarkingBuildUnstable: true, skipPublishingChecks: true,
-                  testResults: 'test-results*.xml'
+                  testResults: 'test-results.xml, gate-rust/target/nextest/ci/junit.xml'
         }
         // Mail on every build that did not pass (failed, unstable or aborted), and on the first
         // passing build after one, never on a build that merely passed again.

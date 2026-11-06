@@ -8,13 +8,6 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
 
 ## Open issues
 
-- **This repository's CI does not run its own `[[test]]` commands yet.** As cross-review 05 put it (R1-2,
-  2026-11-06): "`scripts/gate` … still runs both suites itself and calls gate.py with `--tests … --coverage …`.
-  Either flag replaces every `[[test]]` entry, so the new entries in `gate.toml` never run in CI." Left for a
-  follow-up to gate-standalone/05 because a build is judged by `main`'s `gate.py`: until one that runs `[[test]]` is
-  on `main`, dropping the flags would judge no tests at all. Closes with `scripts/gate` no longer running cargo-nextest
-  and pytest nor passing `--tests`/`--coverage` (keeping `--test-contexts`, `COVERAGE_FILE` and the
-  `HYPOTHESIS_PROFILE` the commands inherit), and the Jenkinsfile publishing the JUnit reports the commands write.
 - **A `[[test]]` command cannot set its environment.** `TestCommand` in `gate.py` holds an argv alone, run with the
   gate's own environment (`tool_env`), so a command that needs a variable set takes it from whoever runs the gate.
   octoflow-ai's Rust test run sets `E2E_ENGINE` to an absolute path in the workspace and wraps cargo in
@@ -47,9 +40,14 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   ticket 07's before/after diff will show if octoflow ever passes the tree's own file." It does: octoflow-ai's
   Jenkinsfile passes `--config pyproject.toml` on a build of `main`. The intro is outside the quality file's contract
   and no reader parses it. Closes when octoflow-ai's gate-standalone/07 has taken that line's change as expected.
-- **agent-estate's Jenkinsfile template archives only `quality.md`.** This repo's Jenkinsfile archives
-  `quality.json` too (gate-standalone/04), an edit to the rendered file that a `copier update` must merge. Closes
-  with the template archiving `quality.json` beside `quality.md` for every repo whose gate writes it.
+- **This repo's Jenkinsfile departs from agent-estate's template in two places.** It archives `quality.json` beside
+  `quality.md` (gate-standalone/04), and it publishes the JUnit reports the gate's `[[test]]` commands write,
+  `test-results.xml` and `gate-rust/target/nextest/ci/junit.xml`, where the template publishes `test-results*.xml`
+  (gate-standalone/05, 2026-11-06). Both are edits to the rendered file that a `copier update` must merge. And the
+  paths repeat `gate.toml`'s `junit` lists, as cross-review 06 put it (R1-4): "A change to a `junit` path in gate.toml
+  without the Jenkinsfile silently stops publishing"; display only, never the verdict. Closes
+  with the template archiving `quality.json` for every repo whose gate writes it, and taking its JUnit paths from the
+  repo's `gate.toml` or an answer.
 - **Test code outside the places the spec names is judged as code.** The spec of the Rust checks (requirement 2)
   places Rust's tests in a `tests/` directory, a `tests.rs` and an inline `#[cfg(test)]` module; `_in_rust_tests` and
   `GateSettings.rust_test` in `gate.py`, which both Rust checks read, follow it by default (test-integrity's side of this is the
@@ -334,7 +332,7 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   whole functions (a time budget shared with the reruns was decided against, "flaky-tests' reruns get one time limit a
   run", above). On PR #113 (2026-10-27) mutmut was stopped at 600 s after trying 0 of 253 mutants: its three runs of the
   whole suite before the first mutant took the budget. Narrowed (2026-10-28, gate-open-decisions ticket 06): the
-  test run records a coverage context per test (`scripts/gate`), and `gate.py --test-contexts` has mutmut run only the
+  test run records a coverage context per test (the pytest command of `gate.toml`), and `gate.py --test-contexts` has mutmut run only the
   tests that reach the changed functions and its selection collects (`_recorded_tests`, `_narrowed_table`); replayed
   locally, PR #113's change took mutmut 77 s instead of 709 s, with the same verdicts. Still open: a change to a
   function nearly every test reaches, such as `tool_env`, still costs about the whole suite three times, and a large

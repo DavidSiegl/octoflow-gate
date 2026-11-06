@@ -69,10 +69,10 @@ also_copy = ["gate-rust/src/", "gate-rust/Cargo.toml", "gate-rust/Cargo.lock"]
 do_not_mutate_patterns = ['\bhelp=', '\bdescription=']
 
 [tool.coverage.run]
-# The C tracer, which scripts/gate's test run records a context per test with (--cov-context=test), for gate.py
-# --test-contexts to pick the tests mutmut runs. Under Python 3.14, coverage's default core, sys.monitoring, records
-# each line for only the first few tests to run it, without a warning, so mutmut would leave out tests that kill its
-# mutants and report them as survivors.
+# The C tracer, which the gate's pytest command (gate.toml) records a context per test with (--cov-context=test), for
+# gate.py --test-contexts to pick the tests mutmut runs. Under Python 3.14, coverage's default core, sys.monitoring,
+# records each line for only the first few tests to run it, without a warning, so mutmut would leave out tests that
+# kill its mutants and report them as survivors.
 core = "ctrace"
 
 [tool.pymarkdown]

@@ -30,3 +30,6 @@ mutants/
 # Agent working notes
 .scratch/
 TESTING.md
+
+# Claude Code's personal instructions for this repo
+CLAUDE.local.md

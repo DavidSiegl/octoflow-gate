@@ -1279,7 +1279,7 @@ def _run_test_command(root: str, command: TestCommand, failing: list[tuple[str, 
     except OSError as e:
         return f"could not start: {e.strerror or e}"
     try:
-        status = proc.wait()
+        returncode = proc.wait()
     finally:
         _kill_group(proc)
     for report in (*command.junit, *command.coverage):
@@ -1292,8 +1292,8 @@ def _run_test_command(root: str, command: TestCommand, failing: list[tuple[str, 
         except GateError:
             return f"left `{report}`, which gate.toml names as its report, unreadable as JUnit"
     failing += found
-    if status != 0 and not found:
-        return f"exited {status}, but its JUnit reports list no failing test"
+    if returncode != 0 and not found:
+        return f"exited {returncode}, but its JUnit reports list no failing test"
     return None
 
 

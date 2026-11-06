@@ -951,6 +951,10 @@ class TestGate(RepositoryTest):
     def test_tests_or_coverage_on_the_command_line_replace_the_test_commands(self):
         runs = self.commit_test_command(self.FAILING_TEST)
         self.add_lines(1)
+        status, out, _ = self.gate()
+        self.assertEqual(status, 1)
+        self.assertIn("## Failing tests\n\n- `t.T.test_x`: boom\n", out)
+        os.remove(runs)
         for args in (("--tests", self.junit()), ("--coverage", self.coverage({4: "1"}))):
             with self.subTest(args=args):
                 status, out, _ = self.gate(*args)

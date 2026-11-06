@@ -85,12 +85,13 @@ impl NewCoverage {
 /// from the coverage `reports`, merged by path and line: a line is coverable when any report lists it, and covered
 /// when any report covers it; its branch outcomes are the most any report counts, and the most any report covers.
 ///
-/// A report is LCOV unless its first character past any whitespace is `<`, Cobertura then. A Cobertura report's
-/// paths are relative to its `<source>` directories, or to `root`, the tree's top, when it lists none; an LCOV
-/// report's are as its `SF:` lines give them. A relative path, or source, is taken from the current directory; each
-/// is matched to the tree's paths through its real path, so cargo-llvm-cov's report, whose source is its workspace's
-/// directory, maps to the tree's paths as long as the tree is where the report was written. A changed line no report
-/// lists is not coverable, like a comment. Only the entries of the files the change adds lines to are read.
+/// A report is LCOV unless its first character past a byte-order mark and any whitespace is `<`, Cobertura then. A
+/// Cobertura report's paths are relative to its `<source>` directories, or to `root`, the tree's top, when it lists
+/// none; an LCOV report's are as its `SF:` lines give them. A relative path, or source, is taken from the current
+/// directory; each is matched to the tree's paths through its real path, so cargo-llvm-cov's report, whose source is
+/// its workspace's directory, maps to the tree's paths as long as the tree is where the report was written. A changed
+/// line no report lists is not coverable, like a comment. Only the entries of the files the change adds lines to are
+/// read.
 ///
 /// Errs when a report cannot be read or parsed: when it is not XML or LCOV, as an empty or truncated one is not; when
 /// a Cobertura line of a file the change adds lines to has a number, or on a changed line hits, that is not a whole
@@ -137,7 +138,9 @@ fn changed_line_coverage(
 ) -> Result<Vec<LineCoverage>, Unjudged> {
     let cannot = |why: String| Unjudged(format!("cannot read the coverage report {}: {why}", report.display()));
     let bytes = std::fs::read(report).map_err(|e| cannot(e.to_string()))?;
-    if bytes.trim_ascii_start().starts_with(b"<") {
+    // A byte-order mark may open an XML document (https://www.w3.org/TR/xml/#sec-guessing).
+    let start = bytes.strip_prefix("\u{feff}".as_bytes()).unwrap_or(&bytes);
+    if start.trim_ascii_start().starts_with(b"<") {
         let doc = xml::parse(&String::from_utf8(bytes).map_err(|e| cannot(e.to_string()))?).map_err(cannot)?;
         cobertura_lines(&doc, root, real_root, changed)
             .map_err(|e| Unjudged(format!("the coverage report {} has a line it cannot read: {e}", report.display())))
@@ -388,6 +391,23 @@ mod tests {
             got,
             NewCoverage { lines: 3, covered_lines: 2, conditions: 2, covered_conditions: 1, unmeasured: vec![] }
         );
+    }
+
+    #[test]
+    fn a_cobertura_report_may_start_with_a_byte_order_mark() {
+        let root = std::env::temp_dir().join(format!("gate-coverage-bom-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let report = scratch(
+            "bom.xml",
+            &format!(
+                "\u{feff}<?xml version='1.0'?><coverage><sources><source>{}</source></sources><packages><package>\
+                 <classes><class filename='a.py'><lines><line number='1' hits='1'/></lines></class></classes>\
+                 </package></packages></coverage>",
+                root.display()
+            ),
+        );
+        let got = new_coverage(&[report], &root, &changed(&[("a.py", &[1])])).unwrap();
+        assert_eq!((got.lines, got.covered_lines), (1, 1));
     }
 
     #[test]

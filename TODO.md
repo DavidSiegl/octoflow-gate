@@ -140,6 +140,16 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   Seen 2026-10-25 on `main` at `9448612`. On such a machine it also fails mutmut's stats run, which runs every test,
   so `surviving-mutants` is `not-run` there, "failed to collect stats" (2026-10-27). Closes with `PATH` holding a
   directory with only a link to `git`. Moved from octoflow-ai on 2026-11-05.
+- **A branch build from a root commit cannot be judged.** As cross-review 01 put it (F2, 2026-11-06): "The
+  root-commit branch of the Change stage sets GATE_BASE to a commit of the empty tree. `scripts/gate` exits 2 for any
+  base without gate.py, so a build on that path always fails with 'the gate could not judge the change (exit status
+  2)'." Reachable only for a branch build whose HEAD is an orphan commit with no earlier successful build. The
+  Jenkinsfile is the agent-estate template's, whose root-commit base suits a gate that does not judge with the base's
+  own code. Closes with `scripts/gate` deciding what judges a change that has no gate before it.
+- **`scripts/gate` takes any `WORKSPACE` for a Jenkins build.** As cross-review 01 put it (F5, 2026-11-06): "In a dev
+  container that exports `WORKSPACE` but not `WORKSPACE_TMP`, a local run exits 2. If both are set, it moves
+  CARGO_HOME, empties `$WORKSPACE_TMP/tmp` and switches to the `ci` Hypothesis profile." Closes with a variable only
+  a Jenkins build sets deciding it, once one is confirmed on the agent.
 - **Under the gate's `--cap-lints warn`, an `#[allow]` overrides a workspace's `forbid`.** `Clippy._lint_workspace` in
   `gate.py` caps every lint at warn so that a lint at deny cannot stop cargo before a compile error in a later crate
   (cross-review 66, F1); rustc's cap also lowers `forbid`, so an added `#[allow(unsafe_code)]` under `unsafe_code =

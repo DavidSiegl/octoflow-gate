@@ -589,10 +589,11 @@ cargo llvm-cov nextest --locked --manifest-path gate-rust/Cargo.toml --ignore-ru
   long as the report was written in the tree the gate judges; an absolute path stands as it is.
 - **Failing tests** do not stop the build, as pytest's do not: `--ignore-run-fail` runs every test and writes the
   report whatever fails, and the `ci` profile of `ci/nextest.toml` writes their JUnit report to
-  `target/nextest/ci/junit.xml` in the workspace, here `gate-rust/target/nextest/ci/junit.xml`, which `scripts/gate` passes as another `--tests`. A workspace that
-  does not compile stops the build there, and so does a run that leaves no JUnit report, since `--ignore-run-fail`
-  also passes a nextest that ran no test. `--config-file` replaces the workspace's own `.config/nextest.toml`, so a
-  change cannot configure how its tests run in the gate.
+  `target/nextest/ci/junit.xml` in the workspace, here `gate-rust/target/nextest/ci/junit.xml`, which `scripts/gate`
+  copies to `test-results-rust.xml` and passes as another `--tests`. A workspace that does not compile stops the build
+  there, and so does a run that leaves no JUnit report, since `--ignore-run-fail` also passes a nextest that ran no
+  test. `--config-file` replaces the workspace's own `.config/nextest.toml`, so a change cannot configure how its tests
+  run in the gate.
 - **Doctests** do not run: cargo-nextest has none, and cargo-llvm-cov runs them only on a nightly toolchain
   (`TODO.md`).
 - **Where the tools come from**: `ci/install-tools.sh` downloads cargo-llvm-cov and cargo-nextest, each pinned by

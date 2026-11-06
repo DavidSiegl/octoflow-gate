@@ -16,8 +16,9 @@ test-results.xml
 test-results-rust.xml
 quality.md
 
-# The tools scripts/gate downloads when PATH lacks them
+# The tools scripts/gate downloads when PATH lacks them, and its CARGO_HOME in a Jenkins build
 .tools/
+.cargo-home/
 
 # The build output of the gate-rust helper
 gate-rust/target/

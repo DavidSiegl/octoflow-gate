@@ -1,19 +1,25 @@
 #!/usr/bin/env bash
 # Judge the change this working tree makes since BASE with the gate itself: install what the
-# tests need, run gate-rust's tests and gate.py's with coverage, then run BASE's gate.py, with
-# BASE's rules (pyproject.toml) and BASE's gate-rust helper, so that a change cannot loosen
-# how it is itself judged (docs/quality-gate.md says what each check means).
+# tests need, run gate-rust's tests and gate.py's with coverage, then run the judge's gate.py,
+# with the judge's rules (pyproject.toml) and its gate-rust helper, so that a change cannot
+# loosen how it is itself judged (docs/quality-gate.md says what each check means).
 #
 #   scripts/gate [BASE]     BASE is any git revision; default main.
+#
+# The judge is BASE's commit, except in a Jenkins build of a pull request (CHANGE_TARGET set),
+# where it is the target branch's tip, origin/$CHANGE_TARGET, as the Jenkinsfile's Change
+# stage fetched it: a rule tightened on main after the branch left it then judges the pull
+# request before auto-merge takes it, instead of first failing main's next build.
 #
 # Jenkins runs it on every pull request (from its merge base with main) and on main (from
 # the last passing build), and judges by its exit status alone: 0 for GATE: OK, 1 for
 # GATE: ERROR (quality.md says why), 2 when the change could not be judged (a tool missing,
-# BASE not a commit or without a gate.py, the tests unable to run, gate.py ending without a
-# verdict), and 130 when gate.py was interrupted. A failing test does not stop the run; the
-# gate reports it. It leaves at the repo root quality.md, the tests' JUnit reports
-# test-results.xml (pytest) and test-results-rust.xml (cargo-nextest), which Jenkins
-# publishes, and the coverage reports the gate read.
+# BASE or the judge not a commit, the judge without gate.py, pyproject.toml or gate-rust/,
+# the tests unable to run, gate.py ending without a verdict), and 130 when gate.py was
+# interrupted. A failing test does not stop the run; the gate reports it. It leaves at the
+# repo root quality.md, the tests' JUnit reports test-results.xml (pytest) and
+# test-results-rust.xml (cargo-nextest), which Jenkins publishes, and the coverage reports
+# the gate read.
 #
 # In a Jenkins build (WORKSPACE set), crates are fetched into the workspace (CARGO_HOME), so
 # no build compiles sources an earlier one left, and temporary files go under WORKSPACE_TMP
@@ -41,10 +47,18 @@ if ! base=$(git rev-parse --verify --quiet "${1:-main}^{commit}"); then
 	echo "gate: ${1:-main} is not a commit" >&2
 	exit 2
 fi
-if ! git cat-file -e "$base:gate.py" 2>/dev/null; then
-	echo "gate: ${1:-main} has no gate.py to judge with" >&2
+judge_rev=${CHANGE_TARGET:+origin/$CHANGE_TARGET}
+judge_rev=${judge_rev:-${1:-main}}
+if ! judge=$(git rev-parse --verify --quiet "$judge_rev^{commit}"); then
+	echo "gate: the judge $judge_rev is not a commit" >&2
 	exit 2
 fi
+for path in gate.py pyproject.toml gate-rust/Cargo.toml; do
+	if ! git cat-file -e "$judge:$path" 2>/dev/null; then
+		echo "gate: $judge_rev has no $path to judge with" >&2
+		exit 2
+	fi
+done
 # The reports and the verdict are gitignored and outlive a run: removed, so a step that
 # writes none cannot leave gate.py the last run's, nor a run that ends early the last verdict.
 rm -f quality.md test-results.xml test-results-rust.xml coverage.xml coverage-rust.xml "$COVERAGE_FILE"
@@ -77,11 +91,12 @@ for component in clippy llvm-tools; do
 		exit 2
 	fi
 done
-# command -v succeeds when any one of several names is found, so each is asked alone.
+# On PATH first, so a run finds what an earlier one downloaded. command -v succeeds when any
+# one of several names is found, so each is asked alone.
+export PATH="$top/.tools/bin:$PATH"
 for tool in cargo-llvm-cov cargo-nextest cargo-mutants; do
 	if ! command -v "$tool" >/dev/null; then
 		ci/install-tools.sh "$top/.tools/bin"
-		export PATH="$top/.tools/bin:$PATH"
 		break
 	fi
 done
@@ -107,29 +122,28 @@ cp "$junit" test-results-rust.xml
 # which the gate judges; anything else means they did not run
 # (https://docs.pytest.org/en/stable/reference/exit-codes.html).
 status=0
-HYPOTHESIS_PROFILE=${hypothesis_profile:-default} uv run --frozen pytest --cov=gate --cov-branch --cov-context=test --cov-report=xml \
-	--junitxml=test-results.xml || status=$?
+HYPOTHESIS_PROFILE=${hypothesis_profile:-default} uv run --frozen pytest --cov=gate --cov-branch \
+	--cov-context=test --cov-report=xml --junitxml=test-results.xml || status=$?
 if ((status > 1)); then
 	echo "gate: pytest exited $status, so the tests did not run" >&2
 	exit 2
 fi
 
-# BASE's gate.py, rules and helper, copied only now that the tests have run. A helper that
-# does not build is one the gate cannot run, which each check that reads Rust reports as not
-# run on a change to Rust, so it only warns.
-rm -f quality.md
-judge=$(mktemp -d)
-trap 'rm -rf "$judge"' EXIT
-git archive "$base" gate.py pyproject.toml gate-rust | tar -x -C "$judge"
-cargo build --release --locked --manifest-path "$judge/gate-rust/Cargo.toml" --target-dir "$judge/target" ||
-	echo "gate: ${1:-main}'s gate-rust helper did not build; gate.py reports Rust as not run" >&2
+# The judge's gate.py, rules and helper, copied only now that the tests have run. A helper
+# that does not build is one the gate cannot run, which each check that reads Rust reports as
+# not run on a change to Rust, so it only warns.
+judge_dir=$(mktemp -d)
+trap 'rm -rf "$judge_dir"' EXIT
+git archive "$judge" gate.py pyproject.toml gate-rust | tar -x -C "$judge_dir"
+cargo build --release --locked --manifest-path "$judge_dir/gate-rust/Cargo.toml" --target-dir "$judge_dir/target" ||
+	echo "gate: $judge_rev's gate-rust helper did not build; gate.py reports Rust as not run" >&2
 
 trap - ERR
 status=0
-uv run --frozen python "$judge/gate.py" --base "$base" --config "$judge/pyproject.toml" \
+uv run --frozen python "$judge_dir/gate.py" --base "$base" --config "$judge_dir/pyproject.toml" \
 	--tests test-results-rust.xml --tests test-results.xml \
 	--coverage coverage-rust.xml --coverage coverage.xml \
-	--test-contexts "$COVERAGE_FILE" --rust-syntax "$judge/target/release/gate-rust" \
+	--test-contexts "$COVERAGE_FILE" --rust-syntax "$judge_dir/target/release/gate-rust" \
 	--out quality.md || status=$?
 case $status in
 0 | 130) ;;

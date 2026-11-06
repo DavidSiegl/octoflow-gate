@@ -8,6 +8,17 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
 
 ## Open issues
 
+- **A project with `gate.toml` still needs a `pyproject.toml`.** `judge_change` refuses to judge without the rules file
+  (`no rules: ... is not a file`), though a Rust-only project's linter, clippy, takes its rules from Cargo's files.
+  Found with gate-standalone/03 (2026-11-06). Closes with the rules file optional when no linter that reads it runs.
+- **The Rust helpers take the whole `GateSettings` to ask one question of it.** `_rust_tests`, `_rust_skips`,
+  `_rust_swallowed_errors`, `_rust_test_documents`, `_touched_rust_tests`, `_rust_scored_functions` and the helpers
+  around them in `gate.py` take `settings` only to pass it down to `_in_rust_tests`. Raised by cross-review 02 of
+  octoflow-gate (F6, 2026-11-06): "A pass-through parameter by deep-modules' rule; a `rust_test` predicate, or the
+  per-file boolean as `_rust_attribute_place` already takes `test_file`, would keep the signatures." Left for the Rust
+  port (gate-standalone/12–14), which rewrites these helpers. Closes with the checks given which files are Rust tests
+  once, rather than the settings that decide it.
+
 - **`gate.py` and docs/quality-gate.md still speak in octoflow's words.** The quality file is written for the
   Builder to answer and the Reviewer to judge (`quality_report`'s docstring, `TO_WEIGH_NOTE`'s comment, the
   suppressions' comment), `FAILED_CONDITIONS`' comment and `one_line`'s docstring name the orchestrator as the reader,
@@ -17,7 +28,7 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   reader", and the measurements read as history, once `quality.json` (gate-standalone/04) settles who reads what.
 - **Test code outside the places the spec names is judged as code.** The spec of the Rust checks (requirement 2)
   places Rust's tests in a `tests/` directory, a `tests.rs` and an inline `#[cfg(test)]` module; `_in_rust_tests` and
-  `_rust_test_path` in `gate.py`, which both Rust checks read, follow it (test-integrity's side of this is the
+  `GateSettings.rust_test` in `gate.py`, which both Rust checks read, follow it by default (test-integrity's side of this is the
   out-of-line `mod name;` item in its list below). So `cognitive-complexity` judges a file that a parent takes in
   with `#[cfg(test)] mod name;`, as the engine keeps its fakes and `test_support.rs` (`engine/src/host.rs:24` on
   rust-engine): at rust-engine `476b770`, 3 of the 21 engine functions over the limit are theirs (`FakeState::git`,
@@ -25,8 +36,8 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   108 put it (F4): "A file-level `#[cfg(test)] fn` or `#[cfg(test)] impl`, or a `#[test]` fn outside the places
   requirement 2 names, is judged against 15." Closes with the user's ruling on the spec's definition, and, if those
   are tests, the helper listing each out-of-line `mod name;` with its `cfg_test`, so that the gate can follow a
-  declaration to its file, and a `cfg_test` of each fn's own and its impl's attributes.
-  Moved from octoflow-ai on 2026-11-05.
+  declaration to its file, and a `cfg_test` of each fn's own and its impl's attributes. Until then a project can name
+  such files in its `gate.toml`'s `test-files.rust` and `complexity.exempt`. Moved from octoflow-ai on 2026-11-05.
 - **A macro whose arguments are no expressions separated by commas adds nothing to a Rust fn's score.** The helper's
   `flow` reads a macro's arguments only where they parse that way (`FlowWalker::visit_macro` in
   `gate-rust/src/main.rs`), as its `asserts` do. Raised by cross-review 108 (F3, 2026-10-30): "A macro whose
@@ -106,13 +117,6 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
     which reads as a fewer-assertions or a changed literal on it, or as nothing, rather than as a removed test. Raised
     by cross-review 107 (round 2, not recorded). Closes with namesakes matched by their `cfg` attributes, or by body
     first as removed tests are. Moved from octoflow-ai on 2026-11-05.
-- **`test-integrity` knows golden files only by this repository's layout.** `_golden_file` (`gate.py`) takes a
-  golden file to be one under a `golden` directory inside a `tests` directory, as `tests/golden.py` keeps them, so
-  another project's expected output under another name, such as `__snapshots__/`, rewritten alongside the code it
-  pins gets no `expected-value-changed` finding. Left by `_changed_golden_files` (2026-10-28), which
-  gave golden files that finding. Closes with the golden directory a setting, beside the test-file patterns of
-  `.scratch/gate-split/issues/04-configurable-test-files.md`, which does not name it yet.
-  Moved from octoflow-ai on 2026-11-05.
 - **`BUILD_CONFIG_FILES` does not list `gate.py`.** A pull request or main build runs its own tree's `gate.py`, so a
   change that loosens the gate gets no "Build configuration" notice in its quality file; `orchestrator.py`, which
   held the gate, was not listed either. Raised by cross-review 61 (F7, 2026-10-27). Closes with `gate.py` listed,
@@ -170,8 +174,9 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   equality misses sign, type and structure changes"; the constant path compares `_tree_fingerprint`s instead.
   Closes with the inline path comparing typed literals and pairing a unary minus with its operand.
   Moved from octoflow-ai on 2026-11-05.
-- **The gate's intro writes the rules path (`--config`) as it is.** `judge_change`'s intro names the rules file without
-  `one_line` (`gate.py`, `intro = ...` in `judge_change`), so a rules path holding a line breaker splits the
+- **The gate's intro writes the rules and settings paths (`--config`) as they are.** `judge_change`'s intro names the
+  rules file and the settings file without `one_line` (`gate.py`, `_intro`), so a path
+  holding a line breaker splits the
   quality file's third line, and `docs/quality-gate.md`'s "wherever it appears in a list item or a name" says more
   than holds for it. `gate_failures` does not read the intro, so no round is misjudged. Raised by cross-review 38
   (round 3, 2026-10-26). Closes with the intro written through `one_line`, or with each quality-file writer escaping

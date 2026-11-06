@@ -26,7 +26,7 @@ against it.
 ## Running it
 
 ```bash
-python gate.py --base REV [--config PYPROJECT] [--tests JUNIT]... [--coverage XML]... [--out FILE]
+python gate.py --base REV [--config PYPROJECT] [--config GATE_TOML] [--tests JUNIT]... [--coverage XML]... [--out FILE]
                [--mutation-budget SECONDS] [--base-run-budget SECONDS] [--test-contexts COVERAGE]
                [--rust-syntax PATH]
 ```
@@ -68,9 +68,34 @@ cargo build --release --locked --manifest-path path/to/octoflow-gate/gate-rust/C
 A linter that is missing is a failed condition naming it, and for clippy that is a `cargo clippy --version` that
 fails, as it does where rustup's `clippy` component is not installed; a check that cannot run is one of its own
 findings. The rules come from the project's `pyproject.toml`, or the one `--config` names, as [whose rules judge a
-change](docs/quality-gate.md#whose-rules-judge-a-change) says. Which files the test-integrity check takes for tests is
-fixed for now: `tests/**`, `test_*.py` and `*_test.py`, and Rust's as [the gate](docs/quality-gate.md#the-gate)
-says.
+change](docs/quality-gate.md#whose-rules-judge-a-change) says.
+
+## Settings: `gate.toml`
+
+Which files are tests, which go with them, which hold expected output, which the complexity check leaves alone, which
+further files are build configuration, which files each linter reads, the checks' time budgets and the commands that
+run the tests: a `gate.toml` at the project's top level says each, or the file `--config` names. Every key has a
+default, so a project without one is judged as the gate always judged; [the gate's
+settings](docs/quality-gate.md#the-gates-settings) lists them. An unknown key or a value of the wrong kind exits 2.
+
+octoflow's, for example:
+
+```toml
+# Its tests are where the defaults look: Python's under tests/, Rust's under engine/tests/, in tests.rs files and in
+# #[cfg(test)] modules, its golden files under tests/golden/.
+
+[build-config]
+Jenkinsfile = "The quality job reads it from `main`, so this analysis ran without the edit."
+
+# The defaults, written out: a quality round's timeout is sized for them.
+[budgets]
+mutation = 600
+base-run = 120
+```
+
+A CI that passes `main`'s `pyproject.toml` with `--config` judges by the `gate.toml` beside it, or by the defaults
+where there is none, never by the change's own, so a change cannot loosen its own settings: put `main`'s `gate.toml`
+beside `main`'s `pyproject.toml`.
 
 ## Developing it
 

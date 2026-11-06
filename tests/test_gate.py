@@ -897,10 +897,15 @@ class TestGate(RepositoryTest):
             self.gate("--test-contexts", ".coverage")
         self.assertEqual(files, [None, ".coverage"])
 
+    def main_rules(self):
+        """The path of a pyproject.toml outside the tree, as a CI passes main's."""
+        os.mkdir(os.path.join(self.stubs, "main"))
+        return os.path.join(self.stubs, "main", "pyproject.toml")
+
     def test_the_checks_are_told_whose_rules_judge_the_change(self):
         seen = []
         self.checks(gate.GateCheck("rules", fails=False, find=lambda change: seen.append(change.rules) or []))
-        main_rules = os.path.join(self.stubs, "main.toml")
+        main_rules = self.main_rules()
         with open(main_rules, "w") as f:
             f.write("[tool.ruff]\n")
         self.gate()
@@ -911,7 +916,7 @@ class TestGate(RepositoryTest):
         self.put("pyproject.toml", "[tool.ruff]\nline-length = 1\n")
         self.gate()
         self.assertIn(os.path.join(self.repo, "pyproject.toml"), self.argv("ruff"))
-        main_rules = os.path.join(self.stubs, "main.toml")
+        main_rules = self.main_rules()
         with open(main_rules, "w") as f:
             f.write("[tool.ruff]\n")
         _, out, _ = self.gate("--config", main_rules)
@@ -919,11 +924,154 @@ class TestGate(RepositoryTest):
             with self.subTest(tool=tool):
                 if tool != "pymarkdown":
                     self.assertIn(main_rules, self.argv(tool))
-        self.assertIn(f"by the rules in `{main_rules}`.", out)
+        self.assertIn(f"by the rules in `{main_rules}`, with the settings from the defaults", out)
         self.assertIn(f"The gate took its rules from `{main_rules}`, so the edit did not change", out)
 
+    # gate.toml, the gate's settings (GateSettings), as the program reads them.
+
+    def test_an_unknown_key_in_gate_toml_writes_nothing_and_names_the_key(self):
+        out = os.path.join(self.outside, "quality.md")
+        for text, key in (('[test-files]\npyhton = ["spec/**"]\n', "`test-files.pyhton`"),
+                          ("[budget]\nmutation = 60\n", "`budget`"),
+                          ('[linters]\nflake8 = ["**/*.py"]\n', "`linters.flake8`"),
+                          ('[[test]]\nname = "t"\ncommand = ["pytest"]\njunt = []\n', "`test[0].junt`")):
+            with self.subTest(key):
+                self.put("gate.toml", text)
+                status, _, err = self.gate("--out", out)
+                self.assertEqual(status, gate.EXIT_GATE_UNJUDGED)
+                self.assertIn(f"unknown key {key}", err)
+                self.assertFalse(os.path.exists(out))
+
+    def test_a_value_of_the_wrong_kind_in_gate_toml_writes_nothing_and_names_the_key(self):
+        for text, key in (('[test-files]\npython = "spec/**"\n', "`test-files.python`"),
+                          ('[budgets]\nmutation = "600"\n', "`budgets.mutation`"),
+                          ("[budgets]\nbase-run = 0\n", "`budgets.base-run`"),
+                          ("[budgets]\nbase-run = true\n", "`budgets.base-run`"),
+                          ("[build-config]\nJenkinsfile = 1\n", "`build-config.Jenkinsfile`"),
+                          ('[build-config]\n"uv.lock" = "Pins."\n', "`build-config.uv.lock`"),
+                          ("linters = 1\n", "`linters`"),
+                          ('[linters]\nclippy = ["engine/**/*.rs"]\n', "`linters.clippy`"),
+                          ('[[test]]\nname = "t"\ncommand = []\n', "`test[0].command`"),
+                          ('[[test]]\ncommand = ["pytest"]\n', "`test[0].name`"),
+                          ('[[test]]\nname = "t"\n', "`test[0].command`"),
+                          ('[test]\nname = "t"\n', "`test`")):
+            with self.subTest(key):
+                self.put("gate.toml", text)
+                status, _, err = self.gate()
+                self.assertEqual(status, gate.EXIT_GATE_UNJUDGED)
+                self.assertIn(key, err)
+
+    def test_a_gate_toml_that_is_not_toml_or_not_a_file_writes_nothing(self):
+        self.put("gate.toml", "[test-files\n")
+        status, _, err = self.gate()
+        self.assertEqual(status, gate.EXIT_GATE_UNJUDGED)
+        self.assertIn("cannot read the gate's settings", err)
+        os.remove(os.path.join(self.repo, "gate.toml"))
+        os.symlink("nowhere.toml", os.path.join(self.repo, "gate.toml"))
+        self.assertEqual(self.gate()[0], gate.EXIT_GATE_UNJUDGED)
+
+    def test_the_checks_read_the_change_by_the_tree_s_gate_toml_or_the_one_config_names(self):
+        seen = []
+        self.checks(gate.GateCheck("settings", fails=False, find=lambda change: seen.append(change.settings) or []))
+        self.gate()
+        self.put("gate.toml", '[test-files]\npython = ["spec/**/*.py"]\n')
+        self.gate()
+        main_settings = os.path.join(self.stubs, "gate.toml")
+        with open(main_settings, "w") as f:
+            f.write('[test-files]\npython = ["checks/**/*.py"]\n')
+        _, out, _ = self.gate("--config", main_settings)
+        self.assertEqual([s.python_tests for s in seen],
+                         [gate.GateSettings().python_tests, ("spec/**/*.py",), ("checks/**/*.py",)])
+        self.assertIn(f"against the base `{self.base}`, with the settings from `{main_settings}`.", out)
+
+    def test_config_s_rules_bring_the_settings_beside_them_never_the_tree_s(self):
+        # A CI passes main's rules; the change's own gate.toml must not loosen how it is judged.
+        seen = []
+        self.checks(gate.GateCheck("settings", fails=False, find=lambda change: seen.append(change.settings) or []))
+        self.commit({"gate.toml": ""}, "settings")
+        self.put("gate.toml", '[linters]\nruff = []\n[test-files]\npython = ["spec/**/*.py"]\n')
+        main_rules = self.main_rules()
+        with open(main_rules, "w") as f:
+            f.write("[tool.ruff]\n")
+        main_settings = os.path.join(os.path.dirname(main_rules), "gate.toml")
+        _, out, _ = self.gate("--config", main_rules)
+        self.assertIn(main_rules, self.argv("ruff"))
+        self.assertIn(f", with the settings from the defaults (there is no `{main_settings}`).", out)
+        self.assertIn(f"- The change edits `gate.toml`. The gate took its settings from the defaults (there is no "
+                      f"`{main_settings}`), so the edit did not change how the change was judged.\n", out)
+        with open(main_settings, "w") as f:
+            f.write('[test-files]\npython = ["checks/**/*.py"]\n')
+        _, out, _ = self.gate("--config", main_rules)
+        self.assertEqual([s.python_tests for s in seen], [gate.GateSettings().python_tests, ("checks/**/*.py",)])
+        self.assertIn(f", with the settings from `{main_settings}`.", out)
+
+    def test_config_naming_the_tree_s_own_files_judges_by_the_edits(self):
+        self.commit({"gate.toml": ""}, "settings")
+        self.put("gate.toml", "[budgets]\nmutation = 45\n")
+        self.put("pyproject.toml", "[tool.ruff]\nline-length = 100\n")
+        _, out, _ = self.gate("--config", os.path.join(self.repo, "gate.toml"),
+                              "--config", os.path.join(self.repo, "pyproject.toml"))
+        self.assertIn("- The change edits `pyproject.toml`, which holds the gate's rules; the change was judged by "
+                      "the edited rules.\n", out)
+        self.assertIn("- The change edits `gate.toml`, which holds the gate's settings; the change was judged by the "
+                      "edited settings.\n", out)
+
+    def test_config_given_twice_takes_rules_from_one_and_settings_from_the_other(self):
+        seen = []
+        self.checks(gate.GateCheck("both", fails=False,
+                                   find=lambda change: seen.append((change.rules, change.settings.golden)) or []))
+        main_rules, main_settings = self.main_rules(), os.path.join(self.stubs, "settings.toml")
+        with open(main_rules, "w") as f:
+            f.write("[tool.ruff]\n")
+        with open(main_settings, "w") as f:
+            f.write('[test-files]\ngolden = ["snapshots/**"]\n')
+        _, out, _ = self.gate("--config", main_settings, "--config", main_rules)
+        self.assertEqual(seen, [(main_rules, ("snapshots/**",))])
+        self.assertIn(f", by the rules in `{main_rules}`, with the settings from `{main_settings}`.", out)
+        for twice in ((main_rules, main_rules), (main_settings, main_settings)):
+            with self.subTest(twice), self.assertRaises(SystemExit), patch("sys.stderr"):
+                self.gate("--config", twice[0], "--config", twice[1])
+
+    def test_gate_toml_chooses_the_files_each_linter_reads(self):
+        self.put("src/a.py", "a = 1\n")
+        self.put("gen/b.py", "b = 1\n")
+        self.git("add", "src/a.py", "gen/b.py")
+        self.add_lines(1)
+        self.gate()
+        self.assertTrue({"f.py", "src/a.py", "gen/b.py"} <= set(self.argv("ruff")), self.argv("ruff"))
+        self.put("gate.toml", '[linters]\nruff = ["src/**/*.py", "f.py"]\nmypy = []\n')
+        os.remove(os.path.join(self.stubs, "mypy.argv"))
+        self.gate()
+        self.assertEqual([a for a in self.argv("ruff") if a.endswith(".py")], ["f.py", "src/a.py"])
+        self.assertFalse(os.path.exists(os.path.join(self.stubs, "mypy.argv")), "mypy ran with no globs")
+
+    def test_gate_toml_s_budgets_bound_the_checks_unless_the_command_line_gives_one(self):
+        budgets = []
+        self.add_lines(1)
+        self.put("gate.toml", "[budgets]\nmutation = 45\nbase-run = 7\n")
+        with (patch.object(gate, "surviving_mutants", lambda change, budget, test_contexts: budgets.append(budget) or []),
+              patch.object(gate, "passes_at_base", lambda change, budget: budgets.append(budget) or [])):
+            self.gate()
+            self.gate("--mutation-budget", "9", "--base-run-budget", "3")
+        self.assertEqual(budgets, [45, 7, 9, 3])
+
+    def test_an_edited_gate_toml_and_the_files_it_adds_are_build_configuration(self):
+        self.commit({"gate.toml": "", "Jenkinsfile": "pipeline {}\n"}, "settings")
+        self.put("gate.toml", '[build-config]\nJenkinsfile = "The quality job reads it from `main`."\n')
+        self.put("Jenkinsfile", "pipeline { agent any }\n")
+        _, out, _ = self.gate()
+        self.assertIn("- The change edits `gate.toml`, which holds the gate's settings; the change was judged by the "
+                      "edited settings.\n- The change edits `Jenkinsfile`. The quality job reads it from `main`.\n", out)
+        main_settings = os.path.join(self.stubs, "gate.toml")
+        with open(main_settings, "w") as f:
+            f.write("")
+        _, out, _ = self.gate("--config", main_settings)
+        self.assertIn(f"- The change edits `gate.toml`. The gate took its settings from `{main_settings}`, so the edit "
+                      f"did not change how the change was judged.\n", out)
+        self.assertNotIn("`Jenkinsfile`", out)
+
     def test_no_rules_file_writes_nothing(self):
-        status, _, err = self.gate("--config", "missing.toml")
+        status, _, err = self.gate("--config", "missing/pyproject.toml")
         self.assertEqual(status, gate.EXIT_GATE_UNJUDGED)
         self.assertIn("is not a file", err)
 
@@ -3329,7 +3477,8 @@ class TestPassesAtBase(RepositoryTest):
 
     def test_its_budget_is_a_whole_number_of_seconds_from_1(self):
         self.assertEqual(gate.parse_args(["--base", "main", "--base-run-budget", "7"]).base_run_budget, 7)
-        self.assertEqual(gate.parse_args(["--base", "main"]).base_run_budget, gate.BASE_RUN_BUDGET)
+        # Not given, it is gate.toml's (GateSettings.base_run_budget).
+        self.assertIsNone(gate.parse_args(["--base", "main"]).base_run_budget)
         for flag in ("--base-run-budget", "--mutation-budget"):
             for value, error in (("0", "must be at least 1, not 0"), ("1.5", "expected a whole number of seconds")):
                 with self.subTest(flag=flag, value=value), patch("sys.stderr", new_callable=io.StringIO) as err:
@@ -6086,7 +6235,8 @@ def rust_scores(source):
         f.write(textwrap.dedent(source))
         f.flush()
         printed = subprocess.run([gate_rust(), f.name], capture_output=True, text=True, check=True).stdout  # noqa: S603
-    return {scored.name: scored.score for scored in gate._rust_scored_functions("src/lib.rs", json.loads(printed))}
+    return {scored.name: scored.score for scored in gate._rust_scored_functions(gate.GateSettings(), "src/lib.rs",
+                                                                                   json.loads(printed))}
 
 
 def rust_score(source):
@@ -6387,18 +6537,155 @@ class TestRustCognitiveComplexity(unittest.TestCase):
 
 
 class TestComplexityExempt(unittest.TestCase):
-    """_complexity_exempt: where the tests are, whose functions the check never judges."""
+    """GateSettings.complexity_exempted by default: where the tests are, whose functions the check never judges."""
 
     def test_python_s_tests_are_under_tests(self):
-        self.assertTrue(gate._complexity_exempt("tests/test_gate.py"))
-        self.assertFalse(gate._complexity_exempt("gate.py"))
-        self.assertFalse(gate._complexity_exempt("evals/tests/check.py"))
+        exempted = gate.GateSettings().complexity_exempted
+        self.assertTrue(exempted("tests/test_gate.py"))
+        self.assertFalse(exempted("gate.py"))
+        self.assertFalse(exempted("evals/tests/check.py"))
 
     def test_rust_s_tests_are_in_a_tests_directory_at_any_depth_or_a_tests_rs(self):
+        exempted = gate.GateSettings().complexity_exempted
         for path in ["tests/cli.rs", "engine/tests/cli.rs", "engine/src/checks/tests.rs", "tests.rs"]:
-            self.assertTrue(gate._complexity_exempt(path), path)
+            self.assertTrue(exempted(path), path)
         for path in ["engine/src/lib.rs", "engine/src/tests_util.rs", "engine/src/my_tests.rs", "build.rs"]:
-            self.assertFalse(gate._complexity_exempt(path), path)
+            self.assertFalse(exempted(path), path)
+
+
+class TestGateSettings(unittest.TestCase):
+    """GateSettings: the defaults, which judge a project without gate.toml as the gate did before it had one, and the
+    settings a gate.toml gives."""
+
+    # Paths each predicate is tried on: tests, fixtures and code, at the top level and deeper, in each language.
+    PATHS = ["f.py", "tests/test_f.py", "tests/helpers.py", "a/tests/b/c.py", "test_x.py", "a/test_x.py", "x_test.py",
+             "a/test_d/x.py", "testsuite/x.py", "tests.py", "conftest.py", "a/conftest.py", "tests/data/in.json",
+             "tests/golden/out.md", "a/tests/b/golden/c/d.txt", "golden/x.md", "tests/goldens/x.md", "src/lib.rs",
+             "tests/cli.rs", "engine/tests/cli.rs", "engine/src/tests.rs", "tests.rs", "src/my_tests.rs",
+             "evals/tests/check.py", "spec/calc_spec.py", ".hidden/tests/t.py"]
+
+    def test_the_defaults_read_paths_as_the_gate_did_before_gate_toml(self):
+        # The predicates as they stood before gate.toml (gate.py at 966f5b4), restated.
+        def python_test(path):
+            *dirs, name = path.split("/")
+            return name.endswith(".py") and ("tests" in dirs or name.startswith("test_") or name.endswith("_test.py"))
+
+        def rust_test(path):
+            *dirs, name = path.split("/")
+            return name.endswith(".rs") and ("tests" in dirs or name == "tests.rs")
+
+        def beside_tests(path):
+            *dirs, name = path.split("/")
+            return python_test(path) or name == "conftest.py" or "tests" in dirs
+
+        def golden(path):
+            *dirs, _ = path.split("/")
+            return "golden" in dirs and "tests" in dirs[:dirs.index("golden")]
+
+        def exempt(path):
+            return rust_test(path) if path.endswith(".rs") else path.startswith("tests/")
+
+        settings = gate.GateSettings()
+        for path in self.PATHS:
+            with self.subTest(path):
+                self.assertEqual(settings.python_test(path), python_test(path))
+                self.assertEqual(settings.rust_test(path), rust_test(path))
+                self.assertEqual(settings.python_test(path) or settings.supports_tests(path), beside_tests(path))
+                self.assertEqual(settings.golden_file(path), golden(path))
+                if path.endswith((".py", ".rs")):
+                    self.assertEqual(settings.complexity_exempted(path), exempt(path))
+
+    def test_the_linters_read_by_default_what_their_pathspecs_matched_before(self):
+        settings = gate.GateSettings()
+        tools = {t.name: t for t in gate.GATE_TOOLS}
+        for name, path, reads in [("ruff", "a/b.py", True), ("ruff", "b.pyi", False), ("pymarkdown", "docs/x.md", True),
+                                  ("shellcheck", "ci/x.sh", True), ("actionlint", ".github/workflows/ci.yml", True),
+                                  ("actionlint", ".github/workflows/ci.yaml", True), ("actionlint", "ci.yml", False),
+                                  ("clippy", "engine/src/lib.rs", True), ("clippy", "engine/Cargo.toml", True),
+                                  ("clippy", "Cargo.toml", True), ("clippy", "Cargo.lock", False)]:
+            with self.subTest(name=name, path=path):
+                self.assertEqual(settings.lints(tools[name], path), reads)
+
+    def read(self, text):
+        with tempfile.NamedTemporaryFile("w", suffix=".toml", delete=False) as f:
+            f.write(text)
+        self.addCleanup(os.remove, f.name)
+        return gate.GateSettings.read(f.name)
+
+    def test_a_bracket_expression_never_matches_a_slash(self):
+        # As in git's `:(glob)` pathspecs, where wildmatch runs with WM_PATHNAME.
+        settings = self.read('[test-files]\ngolden = ["a[!b]c", "d[.-0]e", "f[]x]g"]\n')
+        for path, golden in (("axc", True), ("a/c", False), ("d.e", True), ("d/e", False), ("f]g", True),
+                             ("fxg", True), ("f/g", False)):
+            with self.subTest(path):
+                self.assertEqual(settings.golden_file(path), golden)
+
+    def test_a_star_matches_nothing_before_a_slash(self):
+        settings = self.read('[test-files]\ngolden = ["a*/b", "src/test*/x.py", "c/*"]\n')
+        for path, golden in (("a/b", True), ("ax/b", True), ("ax/y/b", False), ("src/test/x.py", True),
+                             ("c/d", True), ("c/", False), ("c/d/e", False)):
+            with self.subTest(path):
+                self.assertEqual(settings.golden_file(path), golden)
+
+    def test_an_empty_gate_toml_is_the_defaults(self):
+        self.assertEqual(self.read(""), gate.GateSettings())
+
+    def test_a_gate_toml_sets_what_it_names_and_leaves_the_rest_at_the_defaults(self):
+        settings = self.read(textwrap.dedent("""\
+            [test-files]
+            python = ["spec/**/*_spec.py"]
+            golden = ["spec/snapshots/**"]
+
+            [complexity]
+            exempt = ["spec/**"]
+
+            [build-config]
+            Jenkinsfile = "The quality job reads it from `main`."
+
+            [linters]
+            actionlint = []
+
+            [budgets]
+            base-run = 30
+
+            [[test]]
+            name = "pytest"
+            command = ["uv", "run", "pytest", "--junitxml=junit.xml"]
+            junit = ["junit.xml"]
+            """))
+        self.assertTrue(settings.python_test("spec/calc_spec.py"))
+        self.assertFalse(settings.python_test("tests/test_calc.py"))
+        self.assertTrue(settings.golden_file("spec/snapshots/a/out.txt"))
+        self.assertTrue(settings.complexity_exempted("spec/calc_spec.py"))
+        self.assertFalse(settings.complexity_exempted("tests/test_calc.py"))
+        self.assertEqual(settings.rust_tests, gate.GateSettings().rust_tests)
+        self.assertEqual(settings.build_config, (("Jenkinsfile", "The quality job reads it from `main`."),))
+        actionlint = next(t for t in gate.GATE_TOOLS if t.name == "actionlint")
+        self.assertFalse(settings.lints(actionlint, ".github/workflows/ci.yml"))
+        self.assertEqual((settings.mutation_budget, settings.base_run_budget), (gate.MUTATION_BUDGET, 30))
+        self.assertEqual(settings.test_commands,
+                         (gate.TestCommand("pytest", ("uv", "run", "pytest", "--junitxml=junit.xml"), ("junit.xml",)),))
+
+
+class TestSettingsJudgeTheTests(RepositoryTest):
+    """A project that keeps its tests under spec/, judged by test-integrity through its gate.toml."""
+
+    BASE_FILES = {"spec/calc_spec.py": "def test_add():\n    assert add(1, 2) == 3\n\n\ndef test_zero():\n    assert add(0, 0) == 0\n",
+                  "spec/snapshots/add.txt": "3\n",
+                  "calc.py": "def add(a, b):\n    return a + b\n"}
+
+    def found(self, settings=None):
+        change = gate.GateChange.from_tree(self.repo, self.base, settings=settings)
+        return [(f["path"], f["rule"]) for f in gate.weakened_tests(change)]
+
+    def test_a_removed_test_and_a_changed_snapshot_are_found_by_the_settings_and_not_without_them(self):
+        self.put("spec/calc_spec.py", "def test_add():\n    assert add(1, 2) == 3\n")
+        self.put("spec/snapshots/add.txt", "4\n")
+        self.edit("calc.py", "a + b", "b + a")
+        settings = gate.GateSettings(python_tests=("spec/**/*_spec.py",), golden=("spec/snapshots/**",))
+        self.assertEqual(self.found(settings), [("spec/snapshots/add.txt", "expected-value-changed"),
+                                                ("spec/calc_spec.py", "removed-test")])
+        self.assertEqual(self.found(), [])
 
 
 def rust_flat(name, n):

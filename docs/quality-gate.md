@@ -33,15 +33,16 @@ which `--rust-syntax` names.
 It runs six linters over the files git tracks outside `mutants/` (below), each over the files it reads, and keeps
 only the findings on lines the change adds, and the lineless ones on files it touches. Findings on older lines are
 counted, never listed and never held against the change, so the gate judges the change rather than the codebase.
+The files in the table are each linter's default, which a project's [settings](#the-gates-settings) can replace.
 
 | Linter | Files | Rules |
 |---|---|---|
-| ruff | `*.py` | `[tool.ruff.lint]` in `pyproject.toml` |
+| ruff | `**/*.py` | `[tool.ruff.lint]` in `pyproject.toml` |
 | mypy | `[tool.mypy] files`, here `gate.py` | `[tool.mypy]` |
-| pymarkdown | `*.md` | `[tool.pymarkdown]` |
-| shellcheck | `*.sh` | its defaults |
-| actionlint | `.github/workflows/*.yml` | its defaults |
-| clippy | `*.rs`, in each Cargo workspace, here `gate-rust/` | the workspace's `[lints]` and `clippy.toml` |
+| pymarkdown | `**/*.md` | `[tool.pymarkdown]` |
+| shellcheck | `**/*.sh` | its defaults |
+| actionlint | `.github/workflows/*.yml`, `*.yaml` | its defaults |
+| clippy | `**/*.rs` and `**/Cargo.toml`, in each Cargo workspace, here `gate-rust/` | the workspace's `[lints]` and `clippy.toml` |
 
 ruff's rules include the coding rules the agents are given as prose that a linter can apply, so that every harness
 gets them, every time: a docstring on every public module, class, method and function (`D100`-`D104`, `D106`,
@@ -88,7 +89,7 @@ Deleting such files is no fault.
 
 | Check | Fails? | Finds |
 |---|---|---|
-| `test-integrity` | yes, but for removed tests, fewer assertions, changed expected values and Rust tests left out on other platforms | tests the change weakened, in test files (`tests/**`, `test_*.py`, `*_test.py`; Rust's below) |
+| `test-integrity` | yes, but for removed tests, fewer assertions, changed expected values and Rust tests left out on other platforms | tests the change weakened, in test files (by default `tests/**`, `test_*.py`, `*_test.py`; Rust's below) |
 | `cognitive-complexity` | yes | functions the change edits or adds that it takes over a cognitive complexity of 15 |
 | `flaky-tests` | no | tests the change adds or edits that pass in one order and fail in another |
 | `surviving-mutants` | no | changes to the functions the change edits that no test notices |
@@ -122,8 +123,8 @@ change cannot weaken its tests unseen. Each of these is a finding:
   assignment of one name, bound nowhere else in the module's scope, to an expression with no call in it. One the
   change adds, one imported from another module or computed by a call, one reached through a local or a helper, an
   edit to another constant one is built from, and a fixture's return value do not count. It is one to weigh, like
-  `removed-test`, since the spec may ask for the new value. A golden file, under a `golden` directory inside a
-  `tests` directory as `tests/golden.py` keeps them, is an expected value too, one that `UPDATE_GOLDEN=1` rewrites
+  `removed-test`, since the spec may ask for the new value. A golden file, by default one under a `golden` directory
+  inside a `tests` directory as `tests/golden.py` keeps them, is an expected value too, one that `UPDATE_GOLDEN=1` rewrites
   to whatever the code now writes: a change that edits or deletes one and also edits code outside the tests gets
   one such finding per file, on the whole file, also to weigh. A golden file added, or renamed unedited, is none.
 
@@ -132,7 +133,7 @@ beside those in `WEAKENED_TESTS_DETECTORS`.
 
 **Rust tests** it reads with the [gate-rust helper](#reading-rust-the-gate-rust-helper). A Rust test is a `fn` with an
 attribute whose path ends in the segment `test`, as `#[test]` and `#[tokio::test]` (not `#[rstest]`), in a `.rs` file
-under a `tests` directory or named `tests.rs`, or anywhere inside an inline module that the helper marks `cfg_test`
+of Rust's test files, by default under a `tests` directory or named `tests.rs`, or anywhere inside an inline module that the helper marks `cfg_test`
 (`#[cfg(test)] mod tests { ... }`) in any other `.rs` file, on either side of the change. A file with such a module
 holds both: the check compares the items of its test modules, and the rest of the file is code. Rust code outside
 the tests is any other `.rs` file in a directory that holds a `Cargo.toml`, or below one, `build.rs` included, and a
@@ -186,8 +187,8 @@ order. Each finding reads the helper's JSON as Python's reads the syntax tree:
 
 **Cognitive complexity** scores the functions the change edits, so that a change cannot pile branches into the
 function it is editing rather than split it. A function counts when the change adds a line to it, decorators
-included, in a Python file, a `.py` file or a script whose `#!` line names python, outside `tests/`, which is exempt
-as it is from ruff's `C901`: any function that no other function holds, a method of a nested class and a function
+included, in a Python file, a `.py` file or a script whose `#!` line names python, outside the files the settings
+exempt, by default `tests/`, as it is from ruff's `C901`: any function that no other function holds, a method of a nested class and a function
 under a module-level `if` or `try` included. A function nested in another is part of that one. Files are read as
 Python reads them, by their byte order mark or coding cookie. Its score is G. Ann Campbell's
 [cognitive complexity](https://www.sonarsource.com/docs/CognitiveComplexity.pdf), which SonarQube's rule S3776
@@ -201,8 +202,8 @@ Rust is judged the same way, with the same limit, base and findings, read throug
 helper](#reading-rust-the-gate-rust-helper). A function is a `fn` with a body that no other `fn` holds, in an `impl`, a
 `trait` or an inline module or not, named by them as `checks::Workflow<T>::poll`; a `fn` or closure inside it is part of
 it. Its lines start at its first outer attribute, doc comments included. Rust's tests are exempt as Python's are, where
-the spec of the Rust checks places them: every file in a directory named `tests`, at any depth, or named `tests.rs`, and
-every `fn` in an inline module marked `#[cfg(test)]`. Nothing else is: a `#[test]` or `#[cfg(test)]` `fn` outside those,
+the spec of the Rust checks places them: by default every file in a directory named `tests`, at any depth, or named
+`tests.rs`, and every `fn` in an inline module marked `#[cfg(test)]`. Nothing else is: a `#[test]` or `#[cfg(test)]` `fn` outside those,
 and a file that a `#[cfg(test)] mod name;` takes in, are judged (`TODO.md`). Each `if`, `else if`, `else`, `if let`,
 `match`, `loop`, `while`, `while let`, `for` and `let ... else` scores as Python's branches do; a `match` arm adds
 nothing, as a `switch`'s case does not in the paper; a run of `&&` and `||` is a sequence of boolean operators, a
@@ -367,7 +368,7 @@ it is recorded for at least a tenth of the tests it records, as that core writes
 selection fails or does not finish. Without `--test-contexts`, as in a local run, mutmut runs the whole selection.
 Tests that reach a function only in a subprocess count neither in mutmut's own record nor in the file.
 
-`--mutation-budget SECONDS`, 600 by default, bounds mutmut's run. Stopping it takes at most 15 seconds more: SIGINT,
+`--mutation-budget SECONDS`, else the settings' `budgets.mutation`, 600 by default, bounds mutmut's run. Stopping it takes at most 15 seconds more: SIGINT,
 10 seconds to exit, a kill of its process group, and 5 seconds to read what it printed. Listing its results and showing
 the survivors then take at most 60 seconds, each call's stop included. Before mutmut starts, reading `--test-contexts`
 takes at most 35, and collecting the selection 35 more. So the check takes at most the budget and 145 seconds, and the
@@ -411,7 +412,8 @@ since a test that passes without the change cannot be what shows the change work
 surviving-mutants sees only the functions the change edits, and test integrity only tests getting weaker. For a bug
 fix, a test that fails at the base is the proof the bug was reproduced. The check runs only when the change edits,
 adds or deletes Python source outside the tests: a `.py` file, or a script whose `#!` names python in the working
-tree or at the base, that is not a test file (as for test integrity), a `conftest.py` or under a `tests` directory.
+tree or at the base, that is not a test file (as for test integrity) or a file that goes with the tests, by default a
+`conftest.py` or one under a `tests` directory.
 A change to the tests alone, or to the tests and the docs, has no "without the change" a test could see. The base
 is the files git tracked at `--base`, as `git archive` writes them, with every one of the change's files that belong
 with the tests (those three kinds) taken from the working tree, or removed where the change removed it, so the
@@ -429,7 +431,7 @@ the changed tests it collected, all within the one time limit:
   because it reaches for what the change adds (such a `conftest.py` hides only the tests under it, and the others are
   collected in one more run), and a `test_*` method of a class pytest does not take for a test class. A refactor that
   keeps behaviour gives these findings rightly: the Builder says it is one, and the Reviewer judges;
-- `budget-reached`: `--base-run-budget SECONDS`, 120 by default, shared by the collection and the run, ran out; the
+- `budget-reached`: `--base-run-budget SECONDS`, else the settings' `budgets.base-run`, 120 by default, shared by the collection and the run, ran out; the
   finding says when, and how many of its test cases the run had run. pytest runs in a session of its own, and is
   killed with every process it started;
 - `not-run`: pytest could not start, stopped before it collected (as for a plugin a `conftest.py` names that cannot be
@@ -452,7 +454,8 @@ edits Rust code outside the tests: a `.rs` file of a Cargo package that is not a
 integrity), edited outside its inline `#[cfg(test)]` modules, added, deleted or renamed. The changed tests are the
 tests, read through the gate-rust helper as test integrity reads them, whose lines, attributes included, the change
 adds to or removes from. They run in a copy of the base made as above, with these files taken from the working tree:
-any file under a `tests` directory, a `tests.rs`, and a `.rs` file the change edits only inside its `#[cfg(test)]`
+Rust's test files, the files that go with the tests (by default any file under a `tests` directory), and a `.rs` file
+the change edits only inside its `#[cfg(test)]`
 modules. A test in a `#[cfg(test)]` module of a file the change also edits outside it cannot be separated from the
 code it tests, and is a `not-run` finding at its `fn`. Each Cargo target the changed tests are in is built and run on
 its own, with `cargo nextest run --locked --no-fail-fast`, filtered to its tests (`-E 'test(=path::name)'`), in the
@@ -498,7 +501,7 @@ The gate is `GATE: ERROR` when any of these holds, and `GATE: OK` otherwise:
 - a finding on a line the change adds, or a finding of a failing check that it does not weigh;
 - a linter that is missing, fails, or exits "found something" with nothing the gate can read, or a Cargo workspace
   that clippy cannot compile. A gate that cannot run a check never reports it as passed;
-- a file a linter reads, by the pathspecs in the table above, with a character that linter ends a line at and git does
+- a file a linter reads, by the globs in the table above or the settings', with a character that linter ends a line at and git does
   not, on any line up to the last one the change adds to it, whichever commit put it there. For every linter but clippy
   that is a carriage return not followed by a newline; actionlint also ends a line at NEL (U+0085), U+2028 and U+2029,
   though YAML 1.2 does not (see the comment on its `GateTool.line_ends`). rustc numbers lines at a newline alone, so
@@ -560,8 +563,9 @@ first, at most 50 in all, then a count:
   a string or a docstring are not one; `# shellcheck disable` in a `.sh` file or a workflow under
   `.github/workflows/`; in Markdown, a `<!-- pyml disable` pragma that is a line of its own, from its first column,
   as pymarkdown reads one; the attributes in Rust. Any other file has none.
-- **Build configuration**: an edit to `pyproject.toml` or `uv.lock` (`BUILD_CONFIG_FILES`) is noted, since each can
-  change how the change was judged, as is one to a file anywhere in the tree that clippy takes its rules or its toolchain from
+- **Build configuration**: an edit to `pyproject.toml` or `uv.lock` (`BUILD_CONFIG_FILES`), to the `gate.toml` at the
+  top level, or to a file the settings add with a note of their own is noted, since each can change how the change was
+  judged, as is one to a file anywhere in the tree that clippy takes its rules or its toolchain from
   (`Cargo.toml`, `clippy.toml`, `rust-toolchain.toml`, `.cargo/config.toml`; `CLIPPY_CONFIG_NAMES` in `gate.py`),
   and cargo's `config.toml` in the `CARGO_HOME` clippy runs with when that lies inside the tree, as `scripts/gate`'s
   `.cargo-home` does in a Jenkins build.
@@ -707,9 +711,42 @@ as git numbers them. Each document is an object:
   macro's tokens are listed only where `asserts` looks inside one, so not a capture in a `matches!` pattern, which is
   no expression; the `fn` a binding is in is the innermost of `fns` whose lines hold its line.
 
+### The gate's settings
+
+Which files are tests and the like is the project's to say, in a `gate.toml` at its top level, or in the file
+`--config` names when that ends in `.toml` and is not called `pyproject.toml` (`GateSettings` in `gate.py`). When
+`--config` names only a `pyproject.toml`, the settings are those of the `gate.toml` beside it, or the defaults where
+there is none, never the tree's own (`_settings_for`). Each key
+has the gate's default, so a project without the file, or a key the file leaves out, is judged as by the defaults
+below. A key the gate does not know, or a value of the wrong kind, stops it with exit status 2, naming the key: a
+misspelt key never judges by the default. A glob reads as git's `:(glob)` pathspecs do, against the path from the top
+level: `*`, `?` and a bracket expression stop at a slash, `**/` stands for any directories, none included, and a
+trailing `/**` for all below.
+
+| Key | Default | What it says |
+|---|---|---|
+| `test-files.python` | `**/tests/**/*.py`, `**/test_*.py`, `**/*_test.py` | Python's test files |
+| `test-files.rust` | `**/tests/**/*.rs`, `**/tests.rs` | Rust's test files by where they are; an inline `#[cfg(test)]` module holds tests wherever it is |
+| `test-files.support` | `**/conftest.py`, `**/tests/**` | files that go with the tests rather than the code, which the checks that run tests take from the working tree |
+| `test-files.golden` | `**/tests/**/golden/**` | golden files, which test integrity reads as expected values |
+| `complexity.exempt` | `tests/**`, `**/tests/**/*.rs`, `**/tests.rs` | files whose functions cognitive complexity does not score |
+| `build-config` | none | a table of file to note, a sentence the quality file gives after "The change edits `file`." |
+| `linters.<name>` | the table above | the globs of the files that linter reads, for `ruff`, `mypy`, `pymarkdown`, `shellcheck`, `actionlint` or `clippy`; `[]` runs it on none. Clippy lints the workspaces of the `Cargo.toml` files among its files, so its globs must take those in |
+| `budgets.mutation` | 600 | seconds, as `--mutation-budget`, which replaces it |
+| `budgets.base-run` | 120 | seconds, as `--base-run-budget`, which replaces it |
+| `[[test]]` | none | the commands that run the tests: `name`, `command` (an argv list), `junit` and `coverage` (the reports it writes). The gate checks them but does not run them yet |
+
+The linters' rules stay in their own files, as below. A CI that passes `main`'s `pyproject.toml` with `--config`, and
+`main`'s `gate.toml` beside it when `main` has one, judges a change by the rules and the settings of `main`, so a
+change cannot loosen how it is judged through its own `gate.toml` either; `--config` may also be given twice, once
+with a `pyproject.toml` and once with a `gate.toml` from elsewhere. An edit to the tree's own `gate.toml` is noted
+under build configuration as one that did not change how the change was judged when the settings came from another
+file or from the defaults, and as one that did when they came from the tree's own.
+
 ### Whose rules judge a change
 
-Every linter but clippy gets its rules from one `pyproject.toml`: the tree's own, or the one `--config` names. A
+Every linter but clippy gets its rules from one `pyproject.toml`: the tree's own, or the `pyproject.toml` that
+`--config` names. A
 quality build passes `main`'s, and runs `main`'s `gate.py`, so a change cannot loosen the rules it is judged by.
 shellcheck and actionlint have no table there; they run on their defaults, with `--norc` and an empty config file
 so that a `.shellcheckrc` or `.github/actionlint.yaml` added to the tree cannot loosen them either. What a

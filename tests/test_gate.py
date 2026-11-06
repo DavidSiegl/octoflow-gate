@@ -924,7 +924,7 @@ class TestGate(RepositoryTest):
             with self.subTest(tool=tool):
                 if tool != "pymarkdown":
                     self.assertIn(main_rules, self.argv(tool))
-        self.assertIn(f"by the rules in `{main_rules}`.", out)
+        self.assertIn(f"by the rules in `{main_rules}`, with the settings from the defaults", out)
         self.assertIn(f"The gate took its rules from `{main_rules}`, so the edit did not change", out)
 
     # gate.toml, the gate's settings (GateSettings), as the program reads them.
@@ -950,6 +950,7 @@ class TestGate(RepositoryTest):
                           ("[build-config]\nJenkinsfile = 1\n", "`build-config.Jenkinsfile`"),
                           ('[build-config]\n"uv.lock" = "Pins."\n', "`build-config.uv.lock`"),
                           ("linters = 1\n", "`linters`"),
+                          ('[linters]\nclippy = ["engine/**/*.rs"]\n', "`linters.clippy`"),
                           ('[[test]]\nname = "t"\ncommand = []\n', "`test[0].command`"),
                           ('[[test]]\ncommand = ["pytest"]\n', "`test[0].name`"),
                           ('[[test]]\nname = "t"\n', "`test[0].command`"),
@@ -981,7 +982,39 @@ class TestGate(RepositoryTest):
         _, out, _ = self.gate("--config", main_settings)
         self.assertEqual([s.python_tests for s in seen],
                          [gate.GateSettings().python_tests, ("spec/**/*.py",), ("checks/**/*.py",)])
-        self.assertIn(f"against the base `{self.base}`, with the settings in `{main_settings}`.", out)
+        self.assertIn(f"against the base `{self.base}`, with the settings from `{main_settings}`.", out)
+
+    def test_config_s_rules_bring_the_settings_beside_them_never_the_tree_s(self):
+        # A CI passes main's rules; the change's own gate.toml must not loosen how it is judged.
+        seen = []
+        self.checks(gate.GateCheck("settings", fails=False, find=lambda change: seen.append(change.settings) or []))
+        self.commit({"gate.toml": ""}, "settings")
+        self.put("gate.toml", '[linters]\nruff = []\n[test-files]\npython = ["spec/**/*.py"]\n')
+        main_rules = self.main_rules()
+        with open(main_rules, "w") as f:
+            f.write("[tool.ruff]\n")
+        main_settings = os.path.join(os.path.dirname(main_rules), "gate.toml")
+        _, out, _ = self.gate("--config", main_rules)
+        self.assertIn(main_rules, self.argv("ruff"))
+        self.assertIn(f", with the settings from the defaults (there is no `{main_settings}`).", out)
+        self.assertIn(f"- The change edits `gate.toml`. The gate took its settings from the defaults (there is no "
+                      f"`{main_settings}`), so the edit did not change how the change was judged.\n", out)
+        with open(main_settings, "w") as f:
+            f.write('[test-files]\npython = ["checks/**/*.py"]\n')
+        _, out, _ = self.gate("--config", main_rules)
+        self.assertEqual([s.python_tests for s in seen], [gate.GateSettings().python_tests, ("checks/**/*.py",)])
+        self.assertIn(f", with the settings from `{main_settings}`.", out)
+
+    def test_config_naming_the_tree_s_own_files_judges_by_the_edits(self):
+        self.commit({"gate.toml": ""}, "settings")
+        self.put("gate.toml", "[budgets]\nmutation = 45\n")
+        self.put("pyproject.toml", "[tool.ruff]\nline-length = 100\n")
+        _, out, _ = self.gate("--config", os.path.join(self.repo, "gate.toml"),
+                              "--config", os.path.join(self.repo, "pyproject.toml"))
+        self.assertIn("- The change edits `pyproject.toml`, which holds the gate's rules; the change was judged by "
+                      "the edited rules.\n", out)
+        self.assertIn("- The change edits `gate.toml`, which holds the gate's settings; the change was judged by the "
+                      "edited settings.\n", out)
 
     def test_config_given_twice_takes_rules_from_one_and_settings_from_the_other(self):
         seen = []
@@ -994,7 +1027,7 @@ class TestGate(RepositoryTest):
             f.write('[test-files]\ngolden = ["snapshots/**"]\n')
         _, out, _ = self.gate("--config", main_settings, "--config", main_rules)
         self.assertEqual(seen, [(main_rules, ("snapshots/**",))])
-        self.assertIn(f", by the rules in `{main_rules}`, with the settings in `{main_settings}`.", out)
+        self.assertIn(f", by the rules in `{main_rules}`, with the settings from `{main_settings}`.", out)
         for twice in ((main_rules, main_rules), (main_settings, main_settings)):
             with self.subTest(twice), self.assertRaises(SystemExit), patch("sys.stderr"):
                 self.gate("--config", twice[0], "--config", twice[1])
@@ -6578,6 +6611,14 @@ class TestGateSettings(unittest.TestCase):
             f.write(text)
         self.addCleanup(os.remove, f.name)
         return gate.GateSettings.read(f.name)
+
+    def test_a_bracket_expression_never_matches_a_slash(self):
+        # As in git's `:(glob)` pathspecs, where wildmatch runs with WM_PATHNAME.
+        settings = self.read('[test-files]\ngolden = ["a[!b]c", "d[.-0]e", "f[]x]g"]\n')
+        for path, golden in (("axc", True), ("a/c", False), ("d.e", True), ("d/e", False), ("f]g", True),
+                             ("fxg", True), ("f/g", False)):
+            with self.subTest(path):
+                self.assertEqual(settings.golden_file(path), golden)
 
     def test_an_empty_gate_toml_is_the_defaults(self):
         self.assertEqual(self.read(""), gate.GateSettings())

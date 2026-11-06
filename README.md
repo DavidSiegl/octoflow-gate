@@ -93,8 +93,9 @@ mutation = 600
 base-run = 120
 ```
 
-A CI that must not let a change loosen its own settings passes `main`'s with `--config`, beside `main`'s
-`pyproject.toml`.
+A CI that passes `main`'s `pyproject.toml` with `--config` judges by the `gate.toml` beside it, or by the defaults
+where there is none, never by the change's own, so a change cannot loosen its own settings: put `main`'s `gate.toml`
+beside `main`'s `pyproject.toml`.
 
 ## Developing it
 

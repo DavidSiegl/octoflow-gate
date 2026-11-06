@@ -11,6 +11,13 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
 - **A project with `gate.toml` still needs a `pyproject.toml`.** `judge_change` refuses to judge without the rules file
   (`no rules: ... is not a file`), though a Rust-only project's linter, clippy, takes its rules from Cargo's files.
   Found with gate-standalone/03 (2026-11-06). Closes with the rules file optional when no linter that reads it runs.
+- **The Rust helpers take the whole `GateSettings` to ask one question of it.** `_rust_tests`, `_rust_skips`,
+  `_rust_swallowed_errors`, `_rust_test_documents`, `_touched_rust_tests`, `_rust_scored_functions` and the helpers
+  around them in `gate.py` take `settings` only to pass it down to `_in_rust_tests`. Raised by cross-review 02 of
+  octoflow-gate (F6, 2026-11-06): "A pass-through parameter by deep-modules' rule; a `rust_test` predicate, or the
+  per-file boolean as `_rust_attribute_place` already takes `test_file`, would keep the signatures." Left for the Rust
+  port (gate-standalone/12–14), which rewrites these helpers. Closes with the checks given which files are Rust tests
+  once, rather than the settings that decide it.
 
 - **`gate.py` and docs/quality-gate.md still speak in octoflow's words.** The quality file is written for the
   Builder to answer and the Reviewer to judge (`quality_report`'s docstring, `TO_WEIGH_NOTE`'s comment, the
@@ -168,7 +175,7 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   Closes with the inline path comparing typed literals and pairing a unary minus with its operand.
   Moved from octoflow-ai on 2026-11-05.
 - **The gate's intro writes the rules and settings paths (`--config`) as they are.** `judge_change`'s intro names the
-  rules file and the settings file without `one_line` (`gate.py`, `intro = ...` in `judge_change`), so a path
+  rules file and the settings file without `one_line` (`gate.py`, `_intro`), so a path
   holding a line breaker splits the
   quality file's third line, and `docs/quality-gate.md`'s "wherever it appears in a list item or a name" says more
   than holds for it. `gate_failures` does not read the intro, so no round is misjudged. Raised by cross-review 38

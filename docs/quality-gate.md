@@ -714,11 +714,14 @@ as git numbers them. Each document is an object:
 ### The gate's settings
 
 Which files are tests and the like is the project's to say, in a `gate.toml` at its top level, or in the file
-`--config` names when that ends in `.toml` and is not called `pyproject.toml` (`GateSettings` in `gate.py`). Each key
+`--config` names when that ends in `.toml` and is not called `pyproject.toml` (`GateSettings` in `gate.py`). When
+`--config` names only a `pyproject.toml`, the settings are those of the `gate.toml` beside it, or the defaults where
+there is none, never the tree's own (`_settings_for`). Each key
 has the gate's default, so a project without the file, or a key the file leaves out, is judged as by the defaults
 below. A key the gate does not know, or a value of the wrong kind, stops it with exit status 2, naming the key: a
 misspelt key never judges by the default. A glob reads as git's `:(glob)` pathspecs do, against the path from the top
-level: `*` stops at a slash, `**/` stands for any directories, none included, and a trailing `/**` for all below.
+level: `*`, `?` and a bracket expression stop at a slash, `**/` stands for any directories, none included, and a
+trailing `/**` for all below.
 
 | Key | Default | What it says |
 |---|---|---|
@@ -728,19 +731,22 @@ level: `*` stops at a slash, `**/` stands for any directories, none included, an
 | `test-files.golden` | `**/tests/**/golden/**` | golden files, which test integrity reads as expected values |
 | `complexity.exempt` | `tests/**`, `**/tests/**/*.rs`, `**/tests.rs` | files whose functions cognitive complexity does not score |
 | `build-config` | none | a table of file to note, a sentence the quality file gives after "The change edits `file`." |
-| `linters.<name>` | the table above | the globs of the files that linter reads, for `ruff`, `mypy`, `pymarkdown`, `shellcheck`, `actionlint` or `clippy`; `[]` runs it on none |
+| `linters.<name>` | the table above | the globs of the files that linter reads, for `ruff`, `mypy`, `pymarkdown`, `shellcheck`, `actionlint` or `clippy`; `[]` runs it on none. Clippy lints the workspaces of the `Cargo.toml` files among its files, so its globs must take those in |
 | `budgets.mutation` | 600 | seconds, as `--mutation-budget`, which replaces it |
 | `budgets.base-run` | 120 | seconds, as `--base-run-budget`, which replaces it |
 | `[[test]]` | none | the commands that run the tests: `name`, `command` (an argv list), `junit` and `coverage` (the reports it writes). The gate checks them but does not run them yet |
 
-The linters' rules stay in their own files, as below. `--config` may be given twice, once with a `pyproject.toml` and
-once with a `gate.toml`, so that a CI judges a change by the rules and the settings of `main`; an edit to the tree's
-own `gate.toml` is then noted under build configuration as one that did not change how the change was judged, and
-without `--config` as one that did.
+The linters' rules stay in their own files, as below. A CI that passes `main`'s `pyproject.toml` with `--config`, and
+`main`'s `gate.toml` beside it when `main` has one, judges a change by the rules and the settings of `main`, so a
+change cannot loosen how it is judged through its own `gate.toml` either; `--config` may also be given twice, once
+with a `pyproject.toml` and once with a `gate.toml` from elsewhere. An edit to the tree's own `gate.toml` is noted
+under build configuration as one that did not change how the change was judged when the settings came from another
+file or from the defaults, and as one that did when they came from the tree's own.
 
 ### Whose rules judge a change
 
-Every linter but clippy gets its rules from one `pyproject.toml`: the tree's own, or the one `--config` names. A
+Every linter but clippy gets its rules from one `pyproject.toml`: the tree's own, or the `pyproject.toml` that
+`--config` names. A
 quality build passes `main`'s, and runs `main`'s `gate.py`, so a change cannot loosen the rules it is judged by.
 shellcheck and actionlint have no table there; they run on their defaults, with `--norc` and an empty config file
 so that a `.shellcheckrc` or `.github/actionlint.yaml` added to the tree cannot loosen them either. What a

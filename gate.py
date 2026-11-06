@@ -354,10 +354,10 @@ def quality_report(gate: str, intro: str, *, conditions: list[str] | tuple = (),
     it was given none. coverage is the sentence about coverage of new code, None for no such section.
     suppressions are the (path, line, text) of lint suppressions the change added. edited are the build configuration
     files the change edits, as edited_config gives them; rules_from names the file the gate took its rules from when
-    that was not the edited pyproject.toml, and settings_from the one it took its settings from when that was not the
-    edited gate.toml; notes are the (path, note) of each file gate.toml adds to the build configuration
-    (GateSettings.build_config). clippy_config are the files the change edits that clippy takes its rules or its
-    toolchain from, as clippy_config_files gives them.
+    that was not the tree's own pyproject.toml, and settings_from says where it took its settings from when that was not
+    the tree's own gate.toml, as _settings_for words it; None means the tree's own judged. notes are the (path, note) of
+    each file gate.toml adds to the build configuration (GateSettings.build_config). clippy_config are the files the
+    change edits that clippy takes its rules or its toolchain from, as clippy_config_files gives them.
     """
     out = [f"GATE: {gate}", "", intro]
     if conditions:
@@ -665,9 +665,18 @@ SETTINGS_FILE = "gate.toml"
 @functools.cache
 def _glob_pattern(globs: tuple[str, ...]) -> re.Pattern:
     """The pattern a repository path, from the top level, fully matches when one of globs matches it. A glob reads as
-    git's `:(glob)` pathspecs do: `*` and `?` stop at a slash, `**/` stands for any directories, none included, and a
-    trailing `/**` for everything below; a name starting with a dot is matched like any other."""
-    return re.compile("|".join(glob.translate(g, recursive=True, include_hidden=True) for g in globs) or "(?!)")
+    git's `:(glob)` pathspecs do: `*`, `?` and a bracket expression stop at a slash, `**/` stands for any directories,
+    none included, and a trailing `/**` for everything below; a name starting with a dot is matched like any other."""
+    # glob.translate lets a negated or ranged bracket expression match a slash ([!b] becomes [^b]), which git's
+    # wildmatch does not with WM_PATHNAME: each expression it writes gets a lookahead refusing one.
+    return re.compile("|".join(_BRACKET_EXPRESSION.sub(lambda m: m[0] if m[0][0] == "\\" else "(?!/)" + m[0],
+                                                       glob.translate(g, recursive=True, include_hidden=True))
+                               for g in globs) or "(?!)")
+
+
+# In glob.translate's output, an escaped character, or a bracket expression: one whose first member may be `]`, and
+# whose members may be escaped.
+_BRACKET_EXPRESSION = re.compile(r"\\.|\[\^?\]?(?:\\.|[^\]\\])*\]")
 
 
 @dataclass(frozen=True)
@@ -753,8 +762,12 @@ class GateSettings:
 
     def lints(self, tool: "GateTool", path: str) -> bool:
         """Whether tool reads the file at path, by the globs gate.toml gives it, else its own."""
-        globs = dict(self.linters).get(tool.name, tool.globs)
-        return bool(_glob_pattern(tuple(globs)).fullmatch(path))
+        return bool(_glob_pattern(tuple(self._linter_globs.get(tool.name, tool.globs))).fullmatch(path))
+
+    @functools.cached_property
+    def _linter_globs(self) -> dict[str, tuple[str, ...]]:
+        """linters as a lookup, built once: lints is asked of every tracked file for each linter."""
+        return dict(self.linters)
 
 
 def _settings_table(value: object, key: str, path: str, known: Iterable[str] | None = None) -> dict[str, Any]:
@@ -799,8 +812,15 @@ def _build_config_settings(value: object, table: str, path: str) -> dict[str, An
 
 def _linter_settings(value: object, table: str, path: str) -> dict[str, Any]:
     linters = _settings_table(value, table, path, [t.name for t in GATE_TOOLS])
-    return {"linters": tuple((name, _settings_strings(globs, f"{table}.{name}", path))
-                             for name, globs in linters.items())}
+    chosen = tuple((name, _settings_strings(globs, f"{table}.{name}", path)) for name, globs in linters.items())
+    # Clippy lints only the workspaces of the manifests among its files (Clippy.run): globs that take in none would
+    # turn it off as silently as a typo would.
+    for name, globs in chosen:
+        if name == "clippy" and globs and not any(fnmatch.fnmatchcase("Cargo.toml", g.rsplit("/", 1)[-1])
+                                                  for g in globs):
+            raise GateError(f"{path}: `{table}.{name}` must take in the Cargo.toml of each workspace clippy lints, "
+                            f"or be [] to turn it off")
+    return {"linters": chosen}
 
 
 def _budget_settings(value: object, table: str, path: str) -> dict[str, Any]:
@@ -980,9 +1000,9 @@ def judge_change(cwd: str, base: str, checks: tuple[GateCheck, ...], *, rules: s
 
     The change is GateChange.from_tree's, which every part of the judgement below reads: none reads what the tree tracks
     under mutmut's state, _MUTMUT_STATE; the checks read its Rust with the gate-rust helper at rust_syntax
-    (GateChange.rust_files), an absolute path. It is read by the settings (GateSettings) in the gate.toml at settings,
-    else in the tree's own SETTINGS_FILE, else by the defaults when the tree has none. Runs each GATE_TOOLS linter whose
-    files the repository tracks outside it over those files, with the rules of the pyproject.toml at rules, or the
+    (GateChange.rust_files), an absolute path. It is read by the settings (GateSettings) _settings_for gives: those of
+    the gate.toml at settings, else of the one beside the rules file, else the defaults. Runs each GATE_TOOLS linter
+    whose files the repository tracks outside it over those files, with the rules of the pyproject.toml at rules, or the
     tree's own, and lists the findings on lines the change added and the lineless ones on files it touched. Then runs
     each of checks, such as gate_checks gives, on the change, and lists what it finds, as an issue or as a finding to
     weigh as GateCheck.judged says. The gate is ERROR when the change adds or edits files under mutmut's state
@@ -1011,7 +1031,7 @@ def judge_change(cwd: str, base: str, checks: tuple[GateCheck, ...], *, rules: s
     rules_path = os.path.abspath(rules) if rules else os.path.join(root, "pyproject.toml")
     if not os.path.isfile(rules_path):
         raise GateError(f"no rules: {rules_path} is not a file")
-    read_by = _settings_for(root, settings)
+    read_by, settings_from = _settings_for(root, rules_path, settings)
 
     change = GateChange.from_tree(root, base_sha, rules_path, rust_syntax, read_by)
     changed = change.changed
@@ -1059,34 +1079,53 @@ def judge_change(cwd: str, base: str, checks: tuple[GateCheck, ...], *, rules: s
                               f"least {GATE_MIN_COVERAGE:g}% once a change has {GATE_MIN_NEW_LINES} or more new "
                               f"lines to cover.")
 
-    intro = _intro(_git(root, "rev-parse", "HEAD").strip(), base_sha, rules, settings)
+    intro = _intro(_git(root, "rev-parse", "HEAD").strip(), base_sha, rules, settings_from)
     text = quality_report(GATE_ERROR if conditions else GATE_OK, intro, conditions=conditions, issues=issues,
                           to_weigh=to_weigh, elsewhere=elsewhere, tests=failing, coverage=coverage_sentence,
                           suppressions=added_suppressions(root, changed),
                           edited=edited_config(change.diff, changed, read_by),
                           clippy_config=clippy_config_files(change.diff, changed, _cargo_home_in(root)),
-                          rules_from=f"`{rules}`" if rules else None,
-                          settings_from=f"`{settings}`" if settings else None, notes=read_by.build_config)
+                          rules_from=None if _tree_s_own(root, rules_path, "pyproject.toml") else f"`{rules}`",
+                          settings_from=settings_from, notes=read_by.build_config)
     # Paths and linter output come verbatim, so a name that is not UTF-8 holds lone surrogates, which no file or
     # terminal can take: give their bytes back, then write each byte that is not UTF-8 as \xNN.
     return text.encode("utf-8", "surrogateescape").decode("utf-8", "backslashreplace")
 
 
-def _settings_for(root: str, settings: str | None) -> GateSettings:
-    """The settings judge_change judges the work tree at root by: those of the gate.toml at settings, a path absolute
-    or relative to the process's working directory, when given; else those of root's own SETTINGS_FILE when there
-    is one, also when it is no file, such as a dangling link, which is then an error to read, never the defaults;
-    else the defaults. Raises GateError as GateSettings.read does."""
-    path = os.path.abspath(settings) if settings else os.path.join(root, SETTINGS_FILE)
-    return GateSettings.read(path) if settings or os.path.lexists(path) else GateSettings()
+def _settings_for(root: str, rules_path: str, settings: str | None) -> tuple[GateSettings, str | None]:
+    """The settings judge_change judges the work tree at root by, and where they came from when that is not root's
+    own SETTINGS_FILE, for the quality file to say.
+
+    They are those of the gate.toml at settings, a path absolute or relative to the process's working directory,
+    when given; else those of the SETTINGS_FILE beside rules_path, the absolute path of the rules file the gate
+    reads, which is root's own unless `--config` named another: a CI that judges a change by main's rules thereby
+    judges it by main's settings too, never by the change's own. A gate.toml that is there but no file, such as a
+    dangling link, is an error to read; with none there, the settings are the defaults.
+
+    Where they came from is None when the settings are root's own SETTINGS_FILE's, or the defaults for want of one;
+    else the file as a code span, or "the defaults (there is no `path`)". Raises GateError as GateSettings.read
+    does."""
+    path = os.path.abspath(settings) if settings else os.path.join(os.path.dirname(rules_path), SETTINGS_FILE)
+    there = settings or os.path.lexists(path)
+    read_by = GateSettings.read(path) if there else GateSettings()
+    if _tree_s_own(root, path, SETTINGS_FILE):
+        return read_by, None
+    return read_by, f"`{path}`" if there else f"the defaults (there is no `{path}`)"
 
 
-def _intro(head: str, base_sha: str, rules: str | None, settings: str | None) -> str:
-    """The quality file's opening sentence: the gate judged the tree at commit head against base_sha, naming rules
-    and settings, judge_change's arguments, as given, each only when given."""
+def _tree_s_own(root: str, path: str, name: str) -> bool:
+    """Whether path, an absolute path, names the file name at the top level of the work tree at root, also through a
+    symbolic link on either side."""
+    return os.path.realpath(path) == os.path.realpath(os.path.join(root, name))
+
+
+def _intro(head: str, base_sha: str, rules: str | None, settings_from: str | None) -> str:
+    """The quality file's opening sentence: the gate judged the tree at commit head against base_sha, naming rules,
+    judge_change's argument, as given, and settings_from, _settings_for's account of where the settings came from,
+    each only when there is one."""
     return (f"`gate.py` judged the working tree at `{head}` against the base `{base_sha}`"
             + (f", by the rules in `{rules}`" if rules else "")
-            + (f", with the settings in `{settings}`" if settings else "") + ".")
+            + (f", with the settings from {settings_from}" if settings_from else "") + ".")
 
 
 def _linted_files(tracked: list[str], tool: GateTool, settings: GateSettings) -> list[str]:
@@ -6008,7 +6047,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--config", metavar="FILE", action="append", default=[],
                         help=f"a file named *.toml but pyproject.toml holds the gate's settings, used instead of the "
                              f"tree's own {SETTINGS_FILE}; any other is a pyproject.toml whose rules the linters take "
-                             f"instead of the tree's own. Given once for each")
+                             f"instead of the tree's own, and beside which the settings are then looked for. Given "
+                             f"once for each")
     parser.add_argument("--coverage", metavar="XML", action="append", default=[],
                         help="a Cobertura coverage report of the tree, such as pytest-cov's coverage.xml or "
                              "cargo-llvm-cov's --cobertura output; given more than once, the reports are merged by "

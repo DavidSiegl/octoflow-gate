@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Judge the change this working tree makes since BASE with the gate itself: install what the
 # tests need, run gate-rust's tests and gate.py's with coverage, then run the judge's gate.py,
-# with the judge's rules (pyproject.toml) and its gate-rust helper, so that a change cannot
-# loosen how it is itself judged (docs/quality-gate.md says what each check means).
+# with the judge's rules (pyproject.toml), its settings (gate.toml where it has one, else the
+# defaults) and its gate-rust helper, so that a change cannot loosen how it is itself judged
+# (docs/quality-gate.md says what each check means).
 #
 #   scripts/gate [BASE]     BASE is any git revision; default main.
 #
@@ -131,12 +132,18 @@ if ((status > 1)); then
 	exit 2
 fi
 
-# The judge's gate.py, rules and helper, copied only now that the tests have run. A helper
-# that does not build is one the gate cannot run, which each check that reads Rust reports as
-# not run on a change to Rust, so it only warns.
+# The judge's gate.py, rules, settings and helper, copied only now that the tests have run.
+# gate.py reads the gate.toml beside the rules it is given, so a judge without one judges by
+# the defaults, never by the change's own. A helper that does not build is one the gate cannot
+# run, which each check that reads Rust reports as not run on a change to Rust, so it only
+# warns.
 judge_dir=$(mktemp -d)
 trap 'rm -rf "$judge_dir"' EXIT
-git archive "$judge" gate.py pyproject.toml gate-rust | tar -x -C "$judge_dir"
+judged=(gate.py pyproject.toml gate-rust)
+if git cat-file -e "$judge:gate.toml" 2>/dev/null; then
+	judged+=(gate.toml)
+fi
+git archive "$judge" "${judged[@]}" | tar -x -C "$judge_dir"
 cargo build --release --locked --manifest-path "$judge_dir/gate-rust/Cargo.toml" --target-dir "$judge_dir/target" ||
 	echo "gate: $judge_rev's gate-rust helper did not build; gate.py reports Rust as not run" >&2
 

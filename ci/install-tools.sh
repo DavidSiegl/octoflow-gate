@@ -1,7 +1,8 @@
 #!/bin/sh
 # Put the pinned releases below into <dir> and exit 0; exit non-zero, saying why on standard error, when one cannot be
-# downloaded or its archive does not match its pinned sha256. scripts/gate runs it, with .tools/bin, which it then puts
-# first on PATH, when one of them is not on PATH, as on the Jenkins agent, whose image does not provide them:
+# downloaded or its archive does not match its pinned sha256. A tool <dir> already holds from the same pinned archive
+# is kept, not downloaded again; one from another pin is replaced. scripts/gate runs it, with .tools/bin, which it then
+# puts first on PATH, when one of them is not on PATH, as on the Jenkins agent, whose image does not provide them:
 #
 # - cargo-llvm-cov and cargo-nextest, with which scripts/gate runs the gate-rust helper's tests and measures their
 #   coverage, and which gate.py's passes-at-base check runs a change's Rust tests with. cargo-llvm-cov also needs
@@ -23,14 +24,18 @@ archive=$(mktemp)
 trap 'rm -f "$archive"' EXIT
 
 # fetch_tool NAME VERSION URL SHA256: download the .tar.gz at URL, check it against SHA256, and extract the executable
-# NAME, at the archive's top level, into $dir.
+# NAME, at the archive's top level, into $dir, unless $dir/NAME.sha256 says it came from that archive already.
 fetch_tool() {
+    if [ -x "$dir/$1" ] && [ "$(cat "$dir/$1.sha256" 2>/dev/null)" = "$4" ]; then
+        return 0
+    fi
     curl -fsSL -o "$archive" "$3"
     echo "$4  $archive" | sha256sum -c --quiet - || {
         echo "install-tools.sh: the $1 $2 archive does not match its pinned sha256" >&2
         exit 1
     }
     tar -xzf "$archive" -C "$dir" "$1"
+    echo "$4" > "$dir/$1.sha256"
 }
 
 mkdir -p "$dir"

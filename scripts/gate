@@ -7,9 +7,10 @@
 #   scripts/gate [BASE]     BASE is any git revision; default main.
 #
 # The judge is BASE's commit, except in a Jenkins build of a pull request (CHANGE_TARGET set),
-# where it is the target branch's tip, origin/$CHANGE_TARGET, as the Jenkinsfile's Change
-# stage fetched it: a rule tightened on main after the branch left it then judges the pull
-# request before auto-merge takes it, instead of first failing main's next build.
+# where it is the target branch's tip, refs/remotes/origin/$CHANGE_TARGET, as the
+# Jenkinsfile's Change stage fetched it: a rule tightened on main after the branch left it
+# then judges the pull request before auto-merge takes it, instead of first failing main's
+# next build.
 #
 # Jenkins runs it on every pull request (from its merge base with main) and on main (from
 # the last passing build), and judges by its exit status alone: 0 for GATE: OK, 1 for
@@ -47,7 +48,8 @@ if ! base=$(git rev-parse --verify --quiet "${1:-main}^{commit}"); then
 	echo "gate: ${1:-main} is not a commit" >&2
 	exit 2
 fi
-judge_rev=${CHANGE_TARGET:+origin/$CHANGE_TARGET}
+# The full ref, since a tag or branch named origin/<target> would win over a short name.
+judge_rev=${CHANGE_TARGET:+refs/remotes/origin/$CHANGE_TARGET}
 judge_rev=${judge_rev:-${1:-main}}
 if ! judge=$(git rev-parse --verify --quiet "$judge_rev^{commit}"); then
 	echo "gate: the judge $judge_rev is not a commit" >&2
@@ -91,12 +93,12 @@ for component in clippy llvm-tools; do
 		exit 2
 	fi
 done
-# On PATH first, so a run finds what an earlier one downloaded. command -v succeeds when any
-# one of several names is found, so each is asked alone.
-export PATH="$top/.tools/bin:$PATH"
+# command -v succeeds when any one of several names is found, so each is asked alone.
+# install-tools.sh keeps what an earlier run downloaded from the same pins.
 for tool in cargo-llvm-cov cargo-nextest cargo-mutants; do
 	if ! command -v "$tool" >/dev/null; then
 		ci/install-tools.sh "$top/.tools/bin"
+		export PATH="$top/.tools/bin:$PATH"
 		break
 	fi
 done

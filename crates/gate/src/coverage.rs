@@ -233,39 +233,27 @@ fn lcov_lines(
     let here = [PathBuf::from(".")];
     let mut out = Vec::new();
     let mut records = 0;
-    // The current record: whether one is open, and when its file is one the change adds lines to, that file; its
-    // changed lines' hits and, by line, their branches' (taken, outcomes).
-    let mut open = false;
-    let mut file: Option<(OsString, &BTreeSet<u32>)> = None;
-    let mut hits: BTreeMap<u32, bool> = BTreeMap::new();
-    let mut branches: HashMap<u32, (usize, usize)> = HashMap::new();
+    // The record being read, from its SF: entry to its end_of_record; None between records.
+    let mut record: Option<LcovRecord> = None;
     for raw in report.split(|&b| b == b'\n') {
         let line = raw.strip_suffix(b"\r").unwrap_or(raw);
         let entry = || String::from_utf8_lossy(line).into_owned();
         if let Some(path) = line.strip_prefix(b"SF:") {
-            if open {
+            if record.is_some() {
                 return Err(format!("a record has no end_of_record before `{}`", entry()));
             }
-            (open, records) = (true, records + 1);
-            file = changed_file(OsStr::from_bytes(path), &here, real_root, changed);
+            records += 1;
+            let file = changed_file(OsStr::from_bytes(path), &here, real_root, changed);
+            record = Some(LcovRecord { file, ..Default::default() });
         } else if line == b"end_of_record" {
-            if !open {
-                return Err("an end_of_record ends no record".into());
-            }
-            if let Some((path, _)) = file.take() {
-                out.extend(hits.iter().map(|(&number, &hit)| {
-                    let (taken, outcomes) = branches.get(&number).copied().unwrap_or_default();
-                    LineCoverage { at: (path.clone(), number), hit, taken, outcomes }
-                }));
-            }
-            (open, hits, branches) = (false, BTreeMap::new(), HashMap::new());
-        } else if !open && !line.trim_ascii().is_empty() && !line.starts_with(b"TN:") {
+            out.extend(record.take().ok_or("an end_of_record ends no record")?.lines());
+        } else if let Some(record) = &mut record {
+            record.read(line).map_err(|why| format!("`{}`: {why}", entry()))?;
+        } else if !line.trim_ascii().is_empty() && !line.starts_with(b"TN:") {
             return Err(format!("`{}` is outside a record, so this is not LCOV", entry()));
-        } else if let Some((_, added)) = file {
-            lcov_entry(line, added, &mut hits, &mut branches).map_err(|why| format!("`{}`: {why}", entry()))?;
         }
     }
-    if open {
+    if record.is_some() {
         return Err("its last record has no end_of_record".into());
     }
     if records == 0 {
@@ -274,33 +262,55 @@ fn lcov_lines(
     Ok(out)
 }
 
-/// Adds `line`, an entry of an LCOV record of a file whose added lines are `added`, to the record's `hits` and
-/// `branches` as [`lcov_lines`] reads them, when it is a DA or BRDA entry of an added line; errs, with why, when it
-/// is one whose fields cannot be read.
-fn lcov_entry(
-    line: &[u8],
-    added: &BTreeSet<u32>,
-    hits: &mut BTreeMap<u32, bool>,
-    branches: &mut HashMap<u32, (usize, usize)>,
-) -> Result<(), String> {
-    if let Some(fields) = line.strip_prefix(b"DA:") {
-        let fields = std::str::from_utf8(fields).map_err(|e| e.to_string())?;
-        let (number, count) = fields.split_once(',').ok_or("no hit count")?;
-        if let Some(number) = changed_line(number, added)? {
-            let count = py_int(count.split(',').next().unwrap_or_default())?;
-            *hits.entry(number).or_default() |= count > 0;
+/// What [`lcov_lines`] has read of one LCOV record so far.
+#[derive(Default)]
+struct LcovRecord<'a> {
+    /// The record's file and the lines the change adds to it; None when the change adds no lines to it, so that its
+    /// entries are not read.
+    file: Option<(OsString, &'a BTreeSet<u32>)>,
+    /// Of each added line the record has a DA entry for, whether any of them counts a hit.
+    hits: BTreeMap<u32, bool>,
+    /// Of each added line the record has BRDA entries for, how many of its branch outcomes were taken, and how many
+    /// there are.
+    branches: HashMap<u32, (usize, usize)>,
+}
+
+impl LcovRecord<'_> {
+    /// Adds `line`, an entry of the record, when it is a DA or BRDA entry of an added line; errs, with why, when it
+    /// is one whose fields cannot be read.
+    fn read(&mut self, line: &[u8]) -> Result<(), String> {
+        let Some((_, added)) = self.file else { return Ok(()) };
+        if let Some(fields) = line.strip_prefix(b"DA:") {
+            let fields = std::str::from_utf8(fields).map_err(|e| e.to_string())?;
+            let (number, count) = fields.split_once(',').ok_or("no hit count")?;
+            if let Some(number) = changed_line(number, added)? {
+                let count = py_int(count.split(',').next().unwrap_or_default())?;
+                *self.hits.entry(number).or_default() |= count > 0;
+            }
+        } else if let Some(fields) = line.strip_prefix(b"BRDA:") {
+            let fields = std::str::from_utf8(fields).map_err(|e| e.to_string())?;
+            let parts: Vec<&str> = fields.split(',').collect();
+            let [number, _, _, taken] = parts[..] else { return Err("not 4 fields".into()) };
+            if let Some(number) = changed_line(number, added)? {
+                let was = self.branches.entry(number).or_default();
+                was.1 += 1;
+                was.0 += usize::from(!matches!(taken.trim(), "-" | "0"));
+            }
         }
-    } else if let Some(fields) = line.strip_prefix(b"BRDA:") {
-        let fields = std::str::from_utf8(fields).map_err(|e| e.to_string())?;
-        let parts: Vec<&str> = fields.split(',').collect();
-        let [number, _, _, taken] = parts[..] else { return Err("not 4 fields".into()) };
-        if let Some(number) = changed_line(number, added)? {
-            let was = branches.entry(number).or_default();
-            was.1 += 1;
-            was.0 += usize::from(!matches!(taken.trim(), "-" | "0"));
-        }
+        Ok(())
     }
-    Ok(())
+
+    /// The coverage of the added lines the record has DA entries for, in line order; none when the change adds no
+    /// lines to its file.
+    fn lines(self) -> Vec<LineCoverage> {
+        let Some((path, _)) = self.file else { return vec![] };
+        (self.hits.iter())
+            .map(|(&number, &hit)| {
+                let (taken, outcomes) = self.branches.get(&number).copied().unwrap_or_default();
+                LineCoverage { at: (path.clone(), number), hit, taken, outcomes }
+            })
+            .collect()
+    }
 }
 
 /// The Python files `changed` adds lines to whose names are not UTF-8, in order: coverage.py collects no data for

@@ -6620,6 +6620,13 @@ class TestGateSettings(unittest.TestCase):
             with self.subTest(path):
                 self.assertEqual(settings.golden_file(path), golden)
 
+    def test_a_star_matches_nothing_before_a_slash(self):
+        settings = self.read('[test-files]\ngolden = ["a*/b", "src/test*/x.py", "c/*"]\n')
+        for path, golden in (("a/b", True), ("ax/b", True), ("ax/y/b", False), ("src/test/x.py", True),
+                             ("c/d", True), ("c/", False), ("c/d/e", False)):
+            with self.subTest(path):
+                self.assertEqual(settings.golden_file(path), golden)
+
     def test_an_empty_gate_toml_is_the_defaults(self):
         self.assertEqual(self.read(""), gate.GateSettings())
 

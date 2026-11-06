@@ -668,8 +668,11 @@ def _glob_pattern(globs: tuple[str, ...]) -> re.Pattern:
     git's `:(glob)` pathspecs do: `*`, `?` and a bracket expression stop at a slash, `**/` stands for any directories,
     none included, and a trailing `/**` for everything below; a name starting with a dot is matched like any other."""
     # glob.translate lets a negated or ranged bracket expression match a slash ([!b] becomes [^b]), which git's
-    # wildmatch does not with WM_PATHNAME: each expression it writes gets a lookahead refusing one.
-    return re.compile("|".join(_BRACKET_EXPRESSION.sub(lambda m: m[0] if m[0][0] == "\\" else "(?!/)" + m[0],
+    # wildmatch does not with WM_PATHNAME: each expression it writes gets a lookahead refusing one. [^/], which it
+    # writes for * and never for a glob's own brackets (it escapes a [!/] as literal text), cannot match one, and
+    # must keep matching nothing right before one, as `a*/b` does `a/b`.
+    return re.compile("|".join(_BRACKET_EXPRESSION.sub(lambda m: m[0] if m[0] == "[^/]" or m[0][0] == "\\"
+                                                       else "(?!/)" + m[0],
                                                        glob.translate(g, recursive=True, include_hidden=True))
                                for g in globs) or "(?!)")
 

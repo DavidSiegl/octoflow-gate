@@ -16,19 +16,15 @@ was made on them.
 `gate.py --base REV` judges the change from `REV` to the working tree and writes the quality file:
 
 ```bash
-uv run pytest --cov=gate --cov-branch --cov-report=xml --junitxml=test-results.xml
-cargo llvm-cov nextest --manifest-path gate-rust/Cargo.toml --ignore-run-fail --profile ci \
-    --config-file ci/nextest.toml --cobertura --output-path coverage-rust.xml
 cargo build --release --locked --manifest-path gate-rust/Cargo.toml
-uv run python gate.py --base main --tests test-results.xml --tests gate-rust/target/nextest/ci/junit.xml \
-    --coverage coverage.xml --coverage coverage-rust.xml --rust-syntax gate-rust/target/release/gate-rust \
-    --out quality.md
+uv run python gate.py --base main --rust-syntax gate-rust/target/release/gate-rust --out quality.md
 ```
 
-The `cargo llvm-cov` command runs the Rust tests and measures their coverage, which takes [cargo-llvm-cov and
-cargo-nextest](#rust-tests-and-coverage); without them, leave out the Rust reports and the gate judges the Python's
-alone. The `cargo build` builds the helper the gate reads Rust with ([gate-rust](#reading-rust-the-gate-rust-helper)),
-which `--rust-syntax` names.
+It first runs the tests, with the two commands this repository's `gate.toml` lists as `[[test]]`
+([running the tests](#running-the-tests)): pytest, with coverage, and `cargo llvm-cov nextest`, which runs the Rust
+tests and measures their coverage and takes [cargo-llvm-cov and cargo-nextest](#rust-tests-and-coverage). The
+`cargo build` builds the helper the gate reads Rust with ([gate-rust](#reading-rust-the-gate-rust-helper)), which
+`--rust-syntax` names.
 
 It runs six linters over the files git tracks outside `mutants/` (below), each over the files it reads, and keeps
 only the findings on lines the change adds, and the lineless ones on files it touches. Findings on older lines are
@@ -509,9 +505,9 @@ The gate is `GATE: ERROR` when any of these holds, and `GATE: OK` otherwise:
   of the file past git's, and shellcheck stops reading there. Either way the gate cannot judge their findings below it.
   The condition names the file, the first such line and the character. A file no linter reads, such as a text file with
   old Mac line ends, is not held to this;
-- with `--tests`, a failing test in that JUnit report, or in any of them, since `--tests` may be given more than
-  once;
-- with `--coverage`, coverage of new code below 80%, once the change has 20 or more new lines to cover. Coverage
+- a failing test, in any JUnit report a `[[test]]` command writes, or that `--tests` names;
+- a `[[test]]` command whose tests could not be judged, as [running the tests](#running-the-tests) says;
+- with a Cobertura report, from a `[[test]]` command or `--coverage`, coverage of new code below 80%, once the change has 20 or more new lines to cover. Coverage
   of new code is (covered branch outcomes + covered lines) / (branch outcomes + coverable lines), over the added
   lines the Cobertura report lists; a smaller change is not judged on coverage, since a few lines swing it too far.
   Given more than once, as Jenkins gives the Python's and the Rust's, the reports are merged by path and line: a
@@ -734,7 +730,7 @@ trailing `/**` for all below.
 | `linters.<name>` | the table above | the globs of the files that linter reads, for `ruff`, `mypy`, `pymarkdown`, `shellcheck`, `actionlint` or `clippy`; `[]` runs it on none. Clippy lints the workspaces of the `Cargo.toml` files among its files, so its globs must take those in |
 | `budgets.mutation` | 600 | seconds, as `--mutation-budget`, which replaces it |
 | `budgets.base-run` | 120 | seconds, as `--base-run-budget`, which replaces it |
-| `[[test]]` | none | the commands that run the tests: `name`, `command` (an argv list), `junit` and `coverage` (the reports it writes). The gate checks them but does not run them yet |
+| `[[test]]` | none | the commands that run the tests: `name`, `command` (an argv list), `junit` and `coverage` (the reports it writes). The gate runs them, as [running the tests](#running-the-tests) says |
 
 The linters' rules stay in their own files, as below. A CI that passes `main`'s `pyproject.toml` with `--config`, and
 `main`'s `gate.toml` beside it when `main` has one, judges a change by the rules and the settings of `main`, so a
@@ -742,6 +738,31 @@ change cannot loosen how it is judged through its own `gate.toml` either; `--con
 with a `pyproject.toml` and once with a `gate.toml` from elsewhere. An edit to the tree's own `gate.toml` is noted
 under build configuration as one that did not change how the change was judged when the settings came from another
 file or from the defaults, and as one that did when they came from the tree's own.
+
+### Running the tests
+
+The gate runs each `[[test]]` command of the settings that judge the change, in the order listed, before any linter
+or check: the surviving-mutants check reads the test contexts that a pytest run with `--cov-context=test` writes. Each
+runs at the tree's top level, as an argv and never through a shell, with no input; its output goes to the gate's
+standard error, never into the quality file. No time limit applies to it, and it does not count against a check's
+budget. Before a command runs, the reports it names are deleted, so a report an earlier run left is never read.
+
+A failing test fails the gate as one of the failing tests the quality file lists. A command whose tests could not be
+judged is a failed condition of its own, naming the command, when it
+
+- could not start, such as a program not on `PATH`;
+- left a report it names missing, whatever its exit status: a run that exits 0 and writes no JUnit report would
+  otherwise pass tests nobody judged;
+- left a JUnit report the gate cannot read;
+- exited non-zero while its JUnit reports list no failing test, so that what failed was not a test, such as a build
+  that did not compile.
+
+A Cobertura report a command wrote that cannot be read stops the gate, which exits 2, as one `--coverage` names does.
+`--tests` or `--coverage`, given at all, replace every command: a CI that has already run the tests passes their
+reports, and no command runs. Ctrl-C during a command kills its process group, and the gate exits 130.
+
+A CI that judges a change by `main`'s settings, as below, runs `main`'s commands, so a change cannot alter which
+commands judge it.
 
 ### Whose rules judge a change
 

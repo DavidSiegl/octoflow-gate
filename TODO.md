@@ -8,6 +8,12 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
 
 ## Open issues
 
+- **A `[[test]]` command cannot set its environment.** `TestCommand` in `gate.py` holds an argv alone, run with the
+  gate's own environment (`tool_env`), so a command that needs a variable set takes it from whoever runs the gate.
+  octoflow-ai's Rust test run sets `E2E_ENGINE` to an absolute path in the workspace and wraps cargo in
+  `ci/cargo-lock.sh` (its Jenkinsfile, Test stage); the README's octoflow example shows the plain argv. Found with
+  gate-standalone/05 (2026-11-06). Closes when octoflow-ai's gate-standalone/07 adopts `[[test]]`: with an `env`
+  table on the entry if the runner's environment does not serve, or with this entry deleted if it does.
 - **A project with `gate.toml` still needs a `pyproject.toml`.** `judge_change` refuses to judge without the rules file
   (`no rules: ... is not a file`), though a Rust-only project's linter, clippy, takes its rules from Cargo's files.
   Found with gate-standalone/03 (2026-11-06). Closes with the rules file optional when no linter that reads it runs.

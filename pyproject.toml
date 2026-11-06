@@ -4,7 +4,7 @@ testpaths = ["tests"]
 
 [project]
 name = "octoflow-gate"
-version = "0.3.0"
+version = "0.4.0"
 description = "The quality gate: judge the change a git working tree makes since a commit, and write the quality file"
 readme = "README.md"
 # gate.py is stdlib-only, so it runs with a system python3 3.13+ without uv.

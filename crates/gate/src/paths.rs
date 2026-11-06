@@ -23,7 +23,8 @@ pub fn real_path(path: &Path) -> PathBuf {
         });
         parts.collect::<Vec<_>>().into_iter().rev().collect()
     };
-    let mut rest = names(&abs_path(path));
+    // Absolute but not normalized: a `..` after a link climbs out of the link's target, so it waits for the link.
+    let mut rest = names(&std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()));
     let mut out = PathBuf::from("/");
     // What each link met so far resolves to; None while it is being resolved, so that meeting it again is a loop.
     let mut links: HashMap<PathBuf, Option<PathBuf>> = HashMap::new();
@@ -143,6 +144,17 @@ mod tests {
         assert_eq!(real_path(&dir.join("q.md")), dir.join("reports/q.md"));
         assert_eq!(real_path(&dir.join("reports/far")), dir.join("nope/x.md"));
         assert_eq!(real_path(&dir.join("loop/x")), dir.join("loop/x"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn real_path_climbs_out_of_a_link_s_target_not_its_name() {
+        let dir = std::env::temp_dir().join(format!("gate-paths-climb-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("elsewhere/sub")).unwrap();
+        std::fs::create_dir_all(dir.join("here")).unwrap();
+        let dir = std::fs::canonicalize(&dir).unwrap();
+        std::os::unix::fs::symlink(dir.join("elsewhere/sub"), dir.join("here/link")).unwrap();
+        assert_eq!(real_path(&dir.join("here/link/../x")), dir.join("elsewhere/x"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -198,6 +198,15 @@ mod tests {
         assert!(matches("a[", "a["));
         assert!(!matches("[z-a]", "m"));
         assert!(matches("[?]", "?"));
+        assert!(matches("[a-c]", "b"));
+        assert!(matches("[b-b]", "b"));
+        assert!(!matches("[!a-c]", "b"));
+        assert!(matches("[!a-c]", "d"));
+        assert!(matches("[a-cx-z]", "y"));
+        assert!(!matches("[a-cx-z]", "d"));
+        assert!(matches("[!]]", "a"));
+        assert!(!matches("[!]]", "]"));
+        assert!(matches("[-a]", "-"));
     }
 
     #[test]

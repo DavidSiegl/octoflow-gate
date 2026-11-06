@@ -10,6 +10,7 @@ use crate::config_edits::{cargo_home_in, clippy_config_files, edited_config};
 use crate::coverage::new_coverage;
 use crate::diff::{change_diff, changed_files, changed_lines, ChangedFile, ChangedLines};
 use crate::linters::{tracked_from, Linter, LINTERS};
+use crate::process::tool_env;
 use crate::report::{Finding, QualityReport};
 use crate::settings::{tree_s_own, Settings};
 use crate::suppressions::{added_suppressions, stray_line_end_condition, stray_line_ends};
@@ -171,7 +172,7 @@ pub fn judge_change(cwd: &Path, base: &str, given: &Given) -> Result<QualityRepo
         coverage,
         suppressions: added_suppressions(&root, changed)?,
         edited_config: edited_config(&change.diff, changed, &change.settings),
-        clippy_config: clippy_config_files(&change.diff, changed, cargo_home_in(&root).as_deref()),
+        clippy_config: clippy_config_files(&change.diff, changed, cargo_home_in(&root, &tool_env()).as_deref()),
         rules_from: match &given.rules {
             Some(given) if !tree_s_own(&root, &rules, "pyproject.toml") => {
                 Some(format!("`{}`", text::path(given.as_os_str())))

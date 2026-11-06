@@ -298,6 +298,28 @@ mod tests {
     }
 
     #[test]
+    fn cobertura_counts_hits_and_the_branches_of_lines_it_marks_as_branches() {
+        let root = std::env::temp_dir().join(format!("gate-coverage-cobertura-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let report = scratch(
+            "cobertura.xml",
+            &format!(
+                "<coverage><sources><source> </source><source>{}</source></sources><packages><package><classes>\
+                 <class filename='a.py'><lines><line number='1' hits='0'/>\
+                 <line number='2' hits='1' branch='true' condition-coverage='50% (1/2)'/>\
+                 <line number='3' hits='1' branch='false' condition-coverage='0% (0/2)'/>\
+                 </lines></class></classes></package></packages></coverage>",
+                root.display()
+            ),
+        );
+        let got = new_coverage(&[report], &root, &changed(&[("a.py", &[1, 2, 3])])).unwrap();
+        assert_eq!(
+            got,
+            NewCoverage { lines: 3, covered_lines: 2, conditions: 2, covered_conditions: 1, unmeasured: vec![] }
+        );
+    }
+
+    #[test]
     fn an_unreadable_line_is_an_error() {
         let report =
             scratch("bad.xml", "<coverage><class filename='a.py'><lines><line number='x'/></lines></class></coverage>");
@@ -325,7 +347,9 @@ mod tests {
             "Coverage of new code is 45.8%; the gate wants at least 80% once a change has 20 or more new lines to \
              cover."
         );
-        assert_eq!(NewCoverage { lines: 19, ..c }.condition(), None);
+        assert_eq!(NewCoverage { lines: 19, ..c.clone() }.condition(), None);
+        let at_the_limit = NewCoverage { lines: 20, covered_lines: 16, conditions: 0, covered_conditions: 0, ..c };
+        assert_eq!(at_the_limit.condition(), None);
     }
 
     use std::os::unix::ffi::OsStringExt;

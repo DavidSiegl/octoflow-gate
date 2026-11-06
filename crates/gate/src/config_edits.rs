@@ -50,11 +50,11 @@ pub fn clippy_config_files(diff: &[u8], changed: &ChangedLines, cargo_home: Opti
     touched_paths(diff, changed).into_iter().filter(configures_clippy).collect()
 }
 
-/// The CARGO_HOME of the environment clippy runs with, relative to `root`, the tree's top, "" when it is `root`
-/// itself; None when it is unset or outside `root`. A relative CARGO_HOME is taken from `root`, though cargo takes
-/// it from each workspace it runs in.
-pub fn cargo_home_in(root: &Path) -> Option<std::path::PathBuf> {
-    let home = crate::process::tool_env().into_iter().find(|(name, _)| name == "CARGO_HOME")?.1;
+/// The CARGO_HOME of `env`, the environment clippy runs with, relative to `root`, the tree's top, "" when it is
+/// `root` itself; None when it is unset, empty or outside `root`. A relative CARGO_HOME is taken from `root`, though
+/// cargo takes it from each workspace it runs in.
+pub fn cargo_home_in(root: &Path, env: &[(OsString, OsString)]) -> Option<std::path::PathBuf> {
+    let home = &env.iter().find(|(name, _)| name == "CARGO_HOME")?.1;
     if home.is_empty() {
         return None;
     }
@@ -98,5 +98,20 @@ mod tests {
         assert_eq!(clippy_config_files(DIFF, &changed, None), [".cargo/config.toml"]);
         assert!(clippy_config_files(b"--- a/config\n", &Default::default(), None).is_empty());
         assert_eq!(clippy_config_files(b"--- a/config\n", &Default::default(), Some(Path::new(""))), ["config"]);
+        assert!(clippy_config_files(b"--- a/.cargo/notes.md\n", &Default::default(), None).is_empty());
+    }
+
+    #[test]
+    fn cargo_home_is_found_relative_to_the_tree_or_not_at_all() {
+        let root = std::env::temp_dir().join(format!("gate-cargo-home-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("h")).unwrap();
+        let env = |home: &str| [("PATH".into(), "/bin".into()), ("CARGO_HOME".into(), OsString::from(home))];
+        assert_eq!(cargo_home_in(&root, &env("h")), Some("h".into()));
+        assert_eq!(cargo_home_in(&root, &env(root.join("h").to_str().unwrap())), Some("h".into()));
+        assert_eq!(cargo_home_in(&root, &env(".")), Some("".into()));
+        assert_eq!(cargo_home_in(&root, &env("..")), None);
+        assert_eq!(cargo_home_in(&root, &env("")), None);
+        assert_eq!(cargo_home_in(&root, &[]), None);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

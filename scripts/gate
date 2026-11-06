@@ -5,8 +5,11 @@
 # says what each check means). The gate is the release the judge's ci/gate.pin names, gate.py
 # and gate-rust helper, fetched with the judge's ci/fetch-gate.sh as a project fetches it; a
 # judge from before the pin (main up to v0.5.0's release) judges with its own gate.py and a
-# helper built from its gate-rust/. gate.py runs the tests, with the `[[test]]` commands of
-# the judge's gate.toml.
+# helper built from its gate-rust/. A release's helper is built for Linux x86_64 alone
+# (README.md, "Running the gate in a project"): on any other machine the pinned gate reports
+# every check that reads Rust as not run, which it warns of, and only a Linux x86_64 run
+# matches Jenkins's. gate.py runs the tests, with the `[[test]]` commands of the judge's
+# gate.toml.
 #
 #   scripts/gate [BASE]     BASE is any git revision; default the branch main, read as
 #                           refs/heads/main so a tag main cannot stand in (gitrevisions(7)).
@@ -17,16 +20,17 @@
 # then judges the pull request before auto-merge takes it, instead of first failing main's
 # next build.
 #
-# Jenkins runs it on every pull request (from its merge base with main) and on main (from
-# the last passing build), and judges by its exit status alone: 0 for GATE: OK, 1 for
-# GATE: ERROR (quality.md says why), 2 when the change could not be judged (a tool missing,
-# BASE or the judge not a commit, the judge without pyproject.toml, a gate.toml listing a
-# [[test]] command, and either a pinned release that can be fetched or gate.py and gate-rust/,
-# gate.py ending without a verdict), and 130 when
-# gate.py was interrupted. A failing test, or a test command that could not run, is the
-# gate's to report. It leaves at the repo root quality.md and, from a judge whose gate.py
-# writes one (0.3.0 on), quality.json, which Jenkins archives; and the reports the judge's
-# test commands write, which Jenkins publishes the JUnit ones of.
+# Jenkins runs it on every pull request (from its merge base with main) and on main (from the
+# last passing build), and judges by its exit status alone: 0 for GATE: OK, 1 for GATE: ERROR
+# (quality.md says why), 2 when the change could not be judged, and 130 when gate.py was
+# interrupted. It cannot be judged when a tool is missing; BASE or the judge is not a commit;
+# the judge lacks pyproject.toml, or a gate.toml listing a [[test]] command; the judge pins a
+# release that cannot be downloaded or does not match its sha256, or has neither a pin nor
+# gate.py and gate-rust/Cargo.toml; or gate.py ends without a verdict. A failing test, or a
+# test command that could not run, is the gate's to report. It leaves at the repo root
+# quality.md and, from a judge whose gate.py writes one (0.3.0 on), quality.json, which Jenkins
+# archives; and the reports the judge's test commands write, which Jenkins publishes the JUnit
+# ones of.
 #
 # In a Jenkins build (WORKSPACE set), crates are fetched into the workspace (CARGO_HOME), so
 # no build compiles sources an earlier one left, and temporary files go under WORKSPACE_TMP
@@ -62,11 +66,16 @@ if ! judge=$(git rev-parse --verify --quiet "$judge_rev^{commit}"); then
 	echo "gate: the judge $judge_rev is not a commit" >&2
 	exit 2
 fi
-# The gate the judge pins, or, from a judge before the pin, the judge's own.
+# The gate the judge pins, or, from a judge before the pin, the judge's own: gate_paths are
+# what the judge must hold of it, and gate_tree what is taken from the judge to run it.
 if git cat-file -e "$judge:ci/gate.pin" 2>/dev/null; then
+	pinned=true
 	gate_paths=(ci/gate.pin ci/fetch-gate.sh)
+	gate_tree=("${gate_paths[@]}")
 else
-	gate_paths=(gate.py gate-rust)
+	pinned=false
+	gate_paths=(gate.py gate-rust/Cargo.toml)
+	gate_tree=(gate.py gate-rust)
 fi
 for path in "${gate_paths[@]}" pyproject.toml gate.toml; do
 	if ! git cat-file -e "$judge:$path" 2>/dev/null; then
@@ -108,11 +117,13 @@ fi
 # given, never the change's own.
 judge_dir=$(mktemp -d)
 trap 'rm -rf "$judge_dir"' EXIT
-git archive "$judge" pyproject.toml gate.toml "${gate_paths[@]}" | tar -x -C "$judge_dir"
-if [[ -e $judge_dir/ci/gate.pin ]]; then
-	"$judge_dir/ci/fetch-gate.sh" "$judge_dir/ci/gate.pin" "$judge_dir/release"
-	pinned=$(grep -v '^#' "$judge_dir/ci/gate.pin" | head -n 1)
-	echo "gate: judging with octoflow-gate ${pinned%% *}, the release $judge_rev's ci/gate.pin pins" >&2
+git archive "$judge" pyproject.toml gate.toml "${gate_tree[@]}" | tar -x -C "$judge_dir"
+if $pinned; then
+	version=$("$judge_dir/ci/fetch-gate.sh" "$judge_dir/ci/gate.pin" "$judge_dir/release")
+	echo "gate: judging with octoflow-gate $version, the release $judge_rev's ci/gate.pin pins" >&2
+	if [[ $(uname -sm) != "Linux x86_64" ]]; then
+		echo "gate: the release's gate-rust helper is for Linux x86_64, not $(uname -sm): Rust is not judged" >&2
+	fi
 	gate_py=$judge_dir/release/gate.py
 	helper=$judge_dir/release/gate-rust-linux-x86_64
 else

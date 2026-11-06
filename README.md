@@ -71,9 +71,6 @@ tar -xzf "$gate/gate.tar.gz" -C "$gate"
 uv run python "$gate/gate.py" --base main --rust-syntax "$gate/gate-rust-linux-x86_64" --out quality.md
 ```
 
-`ci/fetch-gate.sh <pin> <dir>` does the first four lines from a pin file such as this repository's `ci/gate.pin`, which
-is how this repository's own gate fetches the release that judges it.
-
 A merge into this repository's `main` that raises its version publishes that version's release; every release stays
 published.
 

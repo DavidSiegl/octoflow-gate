@@ -1,7 +1,8 @@
 #!/bin/sh
 # Download the octoflow-gate release that <pin> names from its GitHub release, check it against the pinned sha256,
 # and unpack it into <dir>, made if missing: <dir>/gate.py, <dir>/gate-rust-linux-x86_64 and the rest README.md's
-# "Running the gate in a project" lists. Exits 0 when <dir> holds the release; exits non-zero, saying why on standard
+# "Running the gate in a project" lists, and print the release's version. Exits 0 when <dir> holds the release; exits
+# non-zero, saying why on standard
 # error, when <pin> cannot be read or has no `<version> <sha256>` line, the download fails, or the tarball does not
 # match the sha256, in which case nothing is unpacked. What <dir> held before is overwritten where the release has the
 # same file and otherwise left in place.
@@ -9,8 +10,8 @@
 #   ci/fetch-gate.sh <pin> <dir>
 #
 # <pin> is a file like ci/gate.pin: lines starting with # are comments, and the first other line is the release's
-# version and the sha256 of its tarball. scripts/gate fetches the release that judges this repo's changes with it;
-# a project fetches the gate the same way. Needs curl, sha256sum and tar.
+# version and the sha256 of its tarball. scripts/gate fetches the release that judges this repo's changes with it, by
+# the steps README.md's "Running the gate in a project" gives a project. Needs curl, sha256sum and tar.
 set -eu
 
 [ $# -eq 2 ] || { echo "usage: fetch-gate.sh <pin> <dir>" >&2; exit 2; }
@@ -39,3 +40,4 @@ echo "$sha256  $tarball" | sha256sum -c --quiet - || {
 }
 mkdir -p "$dir"
 tar -xzf "$tarball" -C "$dir"
+echo "$version"

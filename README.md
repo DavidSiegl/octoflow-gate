@@ -145,7 +145,7 @@ uv sync
 ci/install-tools.sh <dir on PATH>   # cargo-nextest, cargo-llvm-cov, cargo-mutants, which some tests run
 uv run pytest
 cargo test --manifest-path gate-rust/Cargo.toml
-scripts/gate                         # as Jenkins runs it: main's gate, which runs both test suites, on the change since main
+scripts/gate                         # as Jenkins runs it: the release main pins (ci/gate.pin) judges the change
 uv run python ci/smoke-release.py "$(ci/package.sh dist)"  # the release tarball, as Jenkins builds and checks it
 ```
 

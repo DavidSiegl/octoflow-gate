@@ -1,0 +1,6 @@
+# The octoflow-gate release that judges this repo's changes, as ci/fetch-gate.sh reads it: one line, the release's
+# version and the sha256 of its octoflow-gate-<version>.tar.gz, as the release's .sha256 asset gives it. scripts/gate
+# reads this file from the judge's commit, so a change to it judges the changes after it, never itself. Raise it to a
+# new release only after that release exists and has been checked (sha256sum -c on the downloaded tarball). The
+# release named here must read this commit's gate.toml, which scripts/gate checks.
+0.5.0 4ebf96264d5ae20cc2dd0516122cd50ebf11dac9f1944c14d899aece882773f8

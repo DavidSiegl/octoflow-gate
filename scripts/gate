@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Judge the change this working tree makes since BASE with the gate itself: install what the
 # tests need, then run the judge's gate.py, with the judge's rules (pyproject.toml), its
-# settings (gate.toml where it has one, else the defaults) and its gate-rust helper, so that a
+# settings (gate.toml) and its gate-rust helper, so that a
 # change cannot loosen how it is itself judged (docs/quality-gate.md says what each check
 # means). gate.py runs the tests, with the `[[test]]` commands of the judge's gate.toml.
 #
@@ -17,12 +17,12 @@
 # Jenkins runs it on every pull request (from its merge base with main) and on main (from
 # the last passing build), and judges by its exit status alone: 0 for GATE: OK, 1 for
 # GATE: ERROR (quality.md says why), 2 when the change could not be judged (a tool missing,
-# BASE or the judge not a commit, the judge without gate.py, pyproject.toml or gate-rust/,
-# gate.py ending without a verdict), and 130 when gate.py was interrupted. A failing test, or
-# a test command that could not run, is the gate's to report. It leaves at the repo root
-# quality.md and, from a judge whose gate.py writes one (0.3.0 on), quality.json, which
-# Jenkins archives; and the reports the judge's test commands write, which Jenkins publishes
-# the JUnit ones of.
+# BASE or the judge not a commit, the judge without gate.py, pyproject.toml, gate-rust/ or a
+# gate.toml listing a [[test]] command, gate.py ending without a verdict), and 130 when
+# gate.py was interrupted. A failing test, or a test command that could not run, is the
+# gate's to report. It leaves at the repo root quality.md and, from a judge whose gate.py
+# writes one (0.3.0 on), quality.json, which Jenkins archives; and the reports the judge's
+# test commands write, which Jenkins publishes the JUnit ones of.
 #
 # In a Jenkins build (WORKSPACE set), crates are fetched into the workspace (CARGO_HOME), so
 # no build compiles sources an earlier one left, and temporary files go under WORKSPACE_TMP
@@ -58,12 +58,18 @@ if ! judge=$(git rev-parse --verify --quiet "$judge_rev^{commit}"); then
 	echo "gate: the judge $judge_rev is not a commit" >&2
 	exit 2
 fi
-for path in gate.py pyproject.toml gate-rust/Cargo.toml; do
+for path in gate.py pyproject.toml gate-rust/Cargo.toml gate.toml; do
 	if ! git cat-file -e "$judge:$path" 2>/dev/null; then
 		echo "gate: $judge_rev has no $path to judge with" >&2
 		exit 2
 	fi
 done
+# The judge's gate.py runs the tests, with its gate.toml's [[test]] commands: without one it
+# would judge the change on no test at all, and pass it whatever its tests do.
+if ! git show "$judge:gate.toml" | grep -q '^\[\[test\]\]'; then
+	echo "gate: $judge_rev's gate.toml lists no [[test]] command, so no test would be judged" >&2
+	exit 2
+fi
 # The verdict and the test contexts are gitignored and outlive a run: removed, so a run that
 # ends early cannot leave the last verdict, nor a pytest that writes none the last contexts.
 # gate.py removes each test command's reports before it runs it.
@@ -107,16 +113,12 @@ done
 uv sync --frozen
 
 # The judge's gate.py, rules, settings and helper. gate.py reads the gate.toml beside the
-# rules it is given, so a judge without one judges by the defaults, never by the change's
-# own, and runs no test command. A helper that does not build is one the gate cannot run,
-# which each check that reads Rust reports as not run on a change to Rust, so it only warns.
+# rules it is given, never the change's own. A helper that does not build is one the gate
+# cannot run, which each check that reads Rust reports as not run on a change to Rust, so it
+# only warns.
 judge_dir=$(mktemp -d)
 trap 'rm -rf "$judge_dir"' EXIT
-judged=(gate.py pyproject.toml gate-rust)
-if git cat-file -e "$judge:gate.toml" 2>/dev/null; then
-	judged+=(gate.toml)
-fi
-git archive "$judge" "${judged[@]}" | tar -x -C "$judge_dir"
+git archive "$judge" gate.py pyproject.toml gate.toml gate-rust | tar -x -C "$judge_dir"
 cargo build --release --locked --manifest-path "$judge_dir/gate-rust/Cargo.toml" --target-dir "$judge_dir/target" ||
 	echo "gate: $judge_rev's gate-rust helper did not build; gate.py reports Rust as not run" >&2
 

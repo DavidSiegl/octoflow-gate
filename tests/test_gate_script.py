@@ -38,3 +38,12 @@ class TestGateScript(RepositoryTest):
         self.commit({"gate.py": ""}, "a judge")
         self.git("tag", "main")
         self.assertEqual(self.gate(), (2, "gate: refs/heads/main has no gate.py to judge with\n"))
+
+    def test_a_judge_without_test_commands_is_refused(self):
+        # Its gate.py would then run no test, and judge the change without them.
+        judge = {"gate.py": "", "pyproject.toml": "", "gate-rust/Cargo.toml": ""}
+        self.commit(judge, "a judge without gate.toml")
+        self.assertEqual(self.gate(), (2, "gate: refs/heads/main has no gate.toml to judge with\n"))
+        self.commit({"gate.toml": '[budgets]\nmutation = 600\n# [[test]]\n'}, "a gate.toml without [[test]]")
+        refused = "gate: refs/heads/main's gate.toml lists no [[test]] command, so no test would be judged\n"
+        self.assertEqual(self.gate(), (2, refused))

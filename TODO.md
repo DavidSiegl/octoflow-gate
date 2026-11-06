@@ -154,12 +154,6 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   container that exports `WORKSPACE` but not `WORKSPACE_TMP`, a local run exits 2. If both are set, it moves
   CARGO_HOME, empties `$WORKSPACE_TMP/tmp` and switches to the `ci` Hypothesis profile." Closes with a variable only
   a Jenkins build sets deciding it, once one is confirmed on the agent.
-- **The Jenkinsfile's `junit` comment says a change to docs alone leaves no reports.** As cross-review 03 put it (F1,
-  2026-11-06): "scripts/gate:114-129 runs cargo-nextest and pytest on every change, docs alone included, and exits 2
-  … before gate.py whenever either did not write its report. So a build with no test-results*.xml here is always one
-  the gate could not judge, never a docs change." The text is agent-estate's template's, so a local edit would not
-  survive `copier update`. Closes with the template naming the docs-only case only for a gate that skips its tests on
-  one, taken by the next update.
 - **Under the gate's `--cap-lints warn`, an `#[allow]` overrides a workspace's `forbid`.** `Clippy._lint_workspace` in
   `gate.py` caps every lint at warn so that a lint at deny cannot stop cargo before a compile error in a later crate
   (cross-review 66, F1); rustc's cap also lowers `forbid`, so an added `#[allow(unsafe_code)]` under `unsafe_code =

@@ -5,7 +5,8 @@
 # defaults) and its gate-rust helper, so that a change cannot loosen how it is itself judged
 # (docs/quality-gate.md says what each check means).
 #
-#   scripts/gate [BASE]     BASE is any git revision; default main.
+#   scripts/gate [BASE]     BASE is any git revision; default the branch main, read as
+#                           refs/heads/main so a tag main cannot stand in (gitrevisions(7)).
 #
 # The judge is BASE's commit, except in a Jenkins build of a pull request (CHANGE_TARGET set),
 # where it is the target branch's tip, refs/remotes/origin/$CHANGE_TARGET, as the
@@ -44,14 +45,15 @@ export COVERAGE_FILE=.coverage
 
 top=$(git rev-parse --show-toplevel)
 cd "$top"
+base_name=${1:-refs/heads/main}
 # Resolved before the tests run, which could move a ref.
-if ! base=$(git rev-parse --verify --quiet "${1:-main}^{commit}"); then
-	echo "gate: ${1:-main} is not a commit" >&2
+if ! base=$(git rev-parse --verify --quiet "$base_name^{commit}"); then
+	echo "gate: $base_name is not a commit" >&2
 	exit 2
 fi
 # The full ref, since a tag or branch named origin/<target> would win over a short name.
 judge_rev=${CHANGE_TARGET:+refs/remotes/origin/$CHANGE_TARGET}
-judge_rev=${judge_rev:-${1:-main}}
+judge_rev=${judge_rev:-$base_name}
 if ! judge=$(git rev-parse --verify --quiet "$judge_rev^{commit}"); then
 	echo "gate: the judge $judge_rev is not a commit" >&2
 	exit 2

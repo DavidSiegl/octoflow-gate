@@ -27,8 +27,8 @@ at its root.
 
 ## Quality gate
 
-`scripts/gate [BASE]` is this repo's own quality gate over the change since BASE (default `main`); its header says
-what it checks and what CI expects of it. Run it before handing a branch to review, and fix what it reports.
+`scripts/gate [BASE]` is this repo's own quality gate over the change since BASE (default the branch `main`); its
+header says what it checks and what CI expects of it. Run it before handing a branch to review, and fix what it reports.
 
 ## CI and merging
 

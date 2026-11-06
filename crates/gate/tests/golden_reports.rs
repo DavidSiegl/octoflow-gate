@@ -125,3 +125,45 @@ fn an_error_report_over_the_limit() {
     };
     assert_golden("quality_report_error_over_limit", &r);
 }
+
+/// gate_error's report, which gate.py's TestGate gets from a failing change end to end: its findings come from ruff
+/// and the test-integrity check, which the Rust gate does not run yet (gate-standalone/15, 16), so it is built here
+/// as gate_cli.rs cannot judge it.
+#[test]
+fn the_report_of_a_failing_change_is_gate_error_s() {
+    let error = |path: &str, line: u32, rule: &str, message: &str| Finding {
+        path: Some(path.into()),
+        line: Some(line),
+        severity: "error".into(),
+        rule: rule.into(),
+        message: message.into(),
+    };
+    let r = QualityReport {
+        conditions: [
+            "1 findings on lines the change added; each is listed below.",
+            "1 findings of the `test-integrity` check; each is listed below.",
+            "1 tests fail; each is listed below.",
+            "Coverage of new code is 50.0%; the gate wants at least 80% once a change has 20 or more new lines to \
+             cover.",
+        ]
+        .map(String::from)
+        .into(),
+        issues: vec![
+            error("f.py", 4, "ruff B023", "Function definition does not bind loop variable `x`"),
+            error("tests/test_f.py", 4, "test-integrity skip", "`pytest.mark.skip` added: it skips a test or expects \
+                   it to fail."),
+        ],
+        to_weigh: vec![Finding {
+            severity: "warning".into(),
+            ..error("tests/test_f.py", 5, "test-integrity removed-test", "`test_two` is gone; this was line 5 at the \
+                     base.")
+        }],
+        elsewhere: 1,
+        failing_tests: Some(vec![("tests.T.test_limit".into(), "AssertionError: 3 != 2".into())]),
+        coverage: Some(NewCoverage { lines: 20, covered_lines: 10, ..Default::default() }),
+        suppressions: vec![("f.py".into(), 23, "import os  # noqa: F401".into())],
+        edited_config: vec!["uv.lock".into()],
+        ..report()
+    };
+    assert_golden("gate_error", &r);
+}

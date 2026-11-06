@@ -26,11 +26,12 @@
 # interrupted. It cannot be judged when a tool is missing; BASE or the judge is not a commit;
 # the judge lacks pyproject.toml, or a gate.toml listing a [[test]] command; the judge pins a
 # release that cannot be downloaded or does not match its sha256, or has neither a pin nor
-# gate.py and gate-rust/Cargo.toml; or gate.py ends without a verdict. A failing test, or a
-# test command that could not run, is the gate's to report. It leaves at the repo root
-# quality.md and, from a judge whose gate.py writes one (0.3.0 on), quality.json, which Jenkins
-# archives; and the reports the judge's test commands write, which Jenkins publishes the JUnit
-# ones of.
+# gate.py and gate-rust/Cargo.toml; the change pins a release that cannot be fetched, or one
+# that would refuse the change's gate.toml (below, where the check is); or gate.py ends without
+# a verdict. A failing test, or a test command that could not run, is the gate's to report. It
+# leaves at the repo root quality.md and, from a judge whose gate.py writes one (0.3.0 on),
+# quality.json, which Jenkins archives; and the reports the judge's test commands write, which
+# Jenkins publishes the JUnit ones of.
 #
 # In a Jenkins build (WORKSPACE set), crates are fetched into the workspace (CARGO_HOME), so
 # no build compiles sources an earlier one left, and temporary files go under WORKSPACE_TMP
@@ -138,15 +139,18 @@ fi
 # Once merged, the change's gate.toml is read by the gate the change pins, and that gate.py
 # refuses a key it does not know: a gate.toml ahead of its pin would leave every later change
 # unjudgeable, the one that raises the pin included. So the change's gate.toml must load under
-# the release the change's ci/gate.pin names, fetched with the judge's ci/fetch-gate.sh; a
-# change may raise the pin and use what the new release reads in one go. A change without a
+# the release the change's ci/gate.pin names, fetched with the judge's ci/fetch-gate.sh, or
+# the change's own from a judge before the pin, which has none (the change that adds the pin);
+# a change may raise the pin and use what the new release reads in one go. A change without a
 # pin is judged next by its own gate.py, which its tests cover.
 if [[ -e ci/gate.pin ]]; then
-	if cmp -s ci/gate.pin "$judge_dir/ci/gate.pin" 2>/dev/null; then
+	if $pinned && cmp -s ci/gate.pin "$judge_dir/ci/gate.pin"; then
 		next_gate=$judge_dir/release
 	else
 		next_gate=$judge_dir/next-release
-		"$judge_dir/ci/fetch-gate.sh" ci/gate.pin "$next_gate" >/dev/null
+		fetch=$judge_dir/ci/fetch-gate.sh
+		$pinned || fetch=ci/fetch-gate.sh
+		"$fetch" ci/gate.pin "$next_gate" >/dev/null
 	fi
 	# GateSettings.read is gate.py's own reader of gate.toml (no release has a public one).
 	if ! uv run --no-project python -I - "$next_gate/gate.py" gate.toml <<-'EOF'; then

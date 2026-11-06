@@ -78,6 +78,20 @@ class TestGateScript(RepositoryTest):
         self.assertIn("gate: gate.toml: unknown key `new_key`; the release ci/gate.pin pins would refuse it", stderr)
 
 
+    def test_the_change_that_first_pins_a_release_has_its_gate_toml_checked_too(self):
+        # A judge from before the pin has no ci/fetch-gate.sh of its own, so the change's fetches the release it pins.
+        gate_toml = '[[test]]\nname = "t"\ncommand = ["true"]\n'
+        self.commit({"gate.py": "", "gate-rust/Cargo.toml": "", "pyproject.toml": "", "gate.toml": gate_toml},
+                    "a judge from before the pin")
+        fetch = "ci/fetch-gate.sh"
+        self.put(fetch, '#!/bin/sh\nmkdir -p "$2"\ncat > "$2/gate.py" <<\'EOF\'\n' + RELEASED_GATE_PY + "EOF\necho 0.5.0\n")
+        os.chmod(os.path.join(self.repo, fetch), 0o755)  # noqa: S103
+        self.put("ci/gate.pin", f"0.5.0 {'0' * 64}\n")
+        self.put("gate.toml", "new_key = 1\n" + gate_toml)
+        status, stderr = self.gate()
+        self.assertEqual(status, 2)
+        self.assertIn("gate: gate.toml: unknown key `new_key`; the release ci/gate.pin pins would refuse it", stderr)
+
 # The part of a released gate.py that reads gate.toml, as the fetch stub above unpacks it: it refuses any key but test.
 RELEASED_GATE_PY = """import tomllib
 class GateError(Exception):

@@ -147,7 +147,7 @@ pipeline {
             // (skipPublishingChecks) comes from them, so a failing test leaves the result to the
             // gate. None is no error.
             junit allowEmptyResults: true, skipMarkingBuildUnstable: true, skipPublishingChecks: true,
-                  testResults: 'test-results.xml, gate-rust/target/nextest/ci/junit.xml'
+                  testResults: 'test-results.xml, gate-rust/target/nextest/ci/junit.xml, target/nextest/ci/junit.xml'
         }
         // Mail on every build that did not pass (failed, unstable or aborted), and on the first
         // passing build after one, never on a build that merely passed again.

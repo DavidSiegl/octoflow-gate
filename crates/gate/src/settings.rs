@@ -324,7 +324,7 @@ mod tests {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../gate.toml");
         let settings = Settings::read(&path).unwrap();
         let names: Vec<&str> = settings.test_commands.iter().map(|c| c.name.as_str()).collect();
-        assert_eq!(names, ["cargo-nextest", "pytest"]);
+        assert_eq!(names, ["cargo-nextest", "cargo-nextest-gate", "pytest"]);
     }
 
     #[test]

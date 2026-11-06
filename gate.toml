@@ -11,6 +11,15 @@ command = ["cargo", "llvm-cov", "nextest", "--locked", "--manifest-path", "gate-
 junit = ["gate-rust/target/nextest/ci/junit.xml"]
 coverage = ["coverage-rust.xml"]
 
+# The Rust gate's tests (crates/gate), as gate-rust's are run; xtask, the workspace's own tasks, is no part of the
+# gate and has no tests. Its JUnit report goes to target/nextest/ci/junit.xml, the workspace's own target.
+[[test]]
+name = "cargo-nextest-gate"
+command = ["cargo", "llvm-cov", "nextest", "--locked", "--workspace", "--exclude", "xtask", "--ignore-run-fail",
+           "--profile", "ci", "--config-file", "ci/nextest.toml", "--cobertura", "--output-path", "coverage-gate.xml"]
+junit = ["target/nextest/ci/junit.xml"]
+coverage = ["coverage-gate.xml"]
+
 # --cov-context=test records which tests run each line, for gate.py's --test-contexts: mutmut then runs only the tests
 # that reach the changed functions. --hypothesis-profile=ci (tests/conftest.py) is for this run alone: mutmut's and
 # the other checks' runs of the tests keep the default.

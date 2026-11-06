@@ -1,7 +1,8 @@
 # octoflow-gate
 
 A quality gate for a change to a Python or Rust project: `gate.py` judges what a git working tree changed since a
-commit and writes a Markdown report, the quality file, whose first line is `GATE: OK` or `GATE: ERROR`. It was
+commit and writes its report twice: as the quality file, Markdown whose first line is `GATE: OK` or `GATE: ERROR`,
+for the people and agents who answer it, and as `quality.json`, the same report as data for a program to read. It was
 written for [octoflow](https://github.com/DavidSiegl/octoflow-ai), whose agents answer the quality file in a loop,
 and runs in any project as one stdlib-only Python file.
 
@@ -26,20 +27,31 @@ against it.
 ## Running it
 
 ```bash
-python gate.py --base REV [--config PYPROJECT] [--config GATE_TOML] [--tests JUNIT]... [--coverage XML]... [--out FILE]
-               [--mutation-budget SECONDS] [--base-run-budget SECONDS] [--test-contexts COVERAGE]
-               [--rust-syntax PATH]
+python gate.py --base REV [--config PYPROJECT] [--config GATE_TOML] [--tests JUNIT]... [--coverage XML]...
+               [--out FILE] [--json FILE] [--mutation-budget SECONDS] [--base-run-budget SECONDS]
+               [--test-contexts COVERAGE] [--rust-syntax PATH]
 ```
 
 `--base` is the commit the change is measured from; the working tree of the git repository around the current
-directory is the change. `python gate.py --help` describes each option.
+directory is the change. The quality file goes to `--out`, else to standard output; `quality.json` to `--json`, else
+beside `--out`'s file, its `.md` made `.json` (`quality.md` gives `quality.json`) or `.json` added. Each file is
+written whole or not at all. `python gate.py --help` describes each option.
 
 | Exit status | Means |
 |---|---|
 | 0 | `GATE: OK` |
 | 1 | `GATE: ERROR` |
-| 2 | it could not judge the change, or its arguments were wrong; it wrote no quality file |
-| 130 | Ctrl-C stopped it; it wrote no quality file |
+| 2 | it could not judge the change, or its arguments were wrong; it wrote neither file |
+| 130 | Ctrl-C stopped it; it wrote neither file |
+
+### Reading the report from a program
+
+`quality.json` is the gate's interface for a program that integrates it, described by the JSON Schema
+[schema/quality-v1.json](schema/quality-v1.json): the gate, its failed conditions, every finding with whether it fails
+the gate and a fingerprint that survives the finding moving, the failing tests, coverage of new code, the suppressions
+added and the build configuration edited. Its `schema_version` is raised on any change a reader could notice; a new
+optional field does not raise it. The quality file is prose, whose wording may change in any release: read the JSON,
+not the Markdown. [The report as a contract](docs/quality-gate.md#the-report-as-a-contract) says more.
 
 ## Running the gate in a project
 

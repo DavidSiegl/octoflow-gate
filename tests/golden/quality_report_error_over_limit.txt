@@ -1,6 +1,11 @@
 GATE: ERROR
 
-The intro.
+`gate.py` judged the working tree at `<head>` against the base `<base>`.
+
+## Failed conditions
+
+- 52 findings on lines the change added; each is listed below.
+- 51 tests fail; each is listed below.
 
 ## Issues on changed lines
 

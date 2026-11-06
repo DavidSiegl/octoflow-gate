@@ -19,8 +19,9 @@
 # BASE or the judge not a commit, the judge without gate.py, pyproject.toml or gate-rust/,
 # the tests unable to run, gate.py ending without a verdict), and 130 when gate.py was
 # interrupted. A failing test does not stop the run; the gate reports it. It leaves at the
-# repo root quality.md, the tests' JUnit reports test-results.xml (pytest) and
-# test-results-rust.xml (cargo-nextest), which Jenkins publishes, and the coverage reports
+# repo root quality.md and, from a judge whose gate.py writes one (0.3.0 on), quality.json,
+# which Jenkins archives; the tests' JUnit reports test-results.xml (pytest) and
+# test-results-rust.xml (cargo-nextest), which Jenkins publishes; and the coverage reports
 # the gate read.
 #
 # In a Jenkins build (WORKSPACE set), crates are fetched into the workspace (CARGO_HOME), so
@@ -64,7 +65,7 @@ for path in gate.py pyproject.toml gate-rust/Cargo.toml; do
 done
 # The reports and the verdict are gitignored and outlive a run: removed, so a step that
 # writes none cannot leave gate.py the last run's, nor a run that ends early the last verdict.
-rm -f quality.md test-results.xml test-results-rust.xml coverage.xml coverage-rust.xml "$COVERAGE_FILE"
+rm -f quality.md quality.json test-results.xml test-results-rust.xml coverage.xml coverage-rust.xml "$COVERAGE_FILE"
 
 if [[ -n ${WORKSPACE:-} ]]; then
 	export CARGO_HOME="$WORKSPACE/.cargo-home"

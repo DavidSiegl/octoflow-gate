@@ -2,8 +2,8 @@
 
 What `gate.py` judges and why: the [gate](#the-gate) itself, its [Rust tests and
 coverage](#rust-tests-and-coverage), the [gate-rust helper](#reading-rust-the-gate-rust-helper) it reads Rust with,
-[whose rules judge a change](#whose-rules-judge-a-change), and the [quality file as a
-contract](#the-quality-file-as-a-contract) with the programs that read it back. [README.md](../README.md) says how to
+[whose rules judge a change](#whose-rules-judge-a-change), and [the report as a contract](#the-report-as-a-contract)
+with the programs that read it back. [README.md](../README.md) says how to
 run it in a project.
 
 The gate was written inside [octoflow](https://github.com/DavidSiegl/octoflow-ai), whose orchestrator has an agent,
@@ -768,13 +768,22 @@ simplifications, pyupgrade, bandit, cyclomatic complexity (`C90`, `max-complexit
 exempt; mypy at its default strictness on `gate.py`; pymarkdown without the line-length and
 inline-HTML rules. Only lines a change adds count, so what `main` already has does not block.
 
-## The quality file as a contract
+## The report as a contract
 
-A program that reads the quality file back, such as [octoflow](https://github.com/DavidSiegl/octoflow-ai)'s
-orchestrator, which runs the gate in Jenkins after each round of its Builder's, may rely on the parts below and on
-nothing else. It keeps its own copy of them rather than importing `gate.py`, and checks that copy against the files
-the gate's tests write to `tests/golden/` (`gate_*.md`, `quality_report_*.md`), which change whenever the format
-does. So a change to one of these parts is a change to every reader's.
+The gate writes one report two ways. `quality.json` is the contract with a program that reads it back: the JSON
+Schema [schema/quality-v1.json](../schema/quality-v1.json) says what each field holds, and its `schema_version` is
+raised on any change a reader could notice; adding an optional field does not raise it, so a reader ignores fields it
+does not know. It holds everything the quality file shows, as data and without the file's limits: every finding, with
+`fails` saying whether it fails the gate and a `fingerprint` that stays the same when the finding moves to another
+line or its message counts something else; every failing test, with its whole detail; and the strings as the gate read
+them, line breaks included. A reader checks itself against the `tests/golden/*.json` files the gate's tests write,
+each validated against the schema and beside the quality file of the same report.
+
+The quality file is prose for the people and agents who answer it, and its wording and layout may change in any
+release. [octoflow](https://github.com/DavidSiegl/octoflow-ai)'s orchestrator, which runs the gate in Jenkins after
+each round of its Builder's, still reads the parts below from it until it reads `quality.json` instead, keeping its own
+copy of them and checking that copy against `tests/golden/*.txt`; until then a change to one of them is a change to
+its reader.
 
 - **The gate line.** The first non-blank line is `GATE: OK` or `GATE: ERROR`; a reader should tolerate Markdown
   emphasis around it. The gate writes no other; a reader may add its own, as octoflow's `GATE: BUILD_FAILED` for a
@@ -794,5 +803,4 @@ does. So a change to one of these parts is a change to every reader's.
   escape, `\x0d` or `\u2028`, in every list item and name (`one_line`), so each item is read back as the one line
   it was written as.
 
-Everything else in the file, such as the intro, coverage, suppressions and build configuration, is for whoever
-answers the findings to read.
+In both files, a byte of a path or a message that is not UTF-8 is written as the four characters `\xNN`.

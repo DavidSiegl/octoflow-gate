@@ -13,6 +13,8 @@ import unittest
 import conftest
 from guard_errors import RealSleep
 
+import gate
+
 ROOT = conftest.REPO
 GATE_SOURCE = ROOT / "gate.py"
 
@@ -67,6 +69,12 @@ class TestInvariants(unittest.TestCase):
             project = tomllib.load(f)["project"]
         self.assertEqual(project["dependencies"], [], "gate.py has no runtime dependencies "
                                                       "(pyproject.toml, [project])")
+
+    def test_the_gate_s_version_is_the_project_s(self):
+        with open(ROOT / "pyproject.toml", "rb") as f:
+            version = tomllib.load(f)["project"]["version"]
+        self.assertEqual(gate.GATE_VERSION, version, "a release raises gate.py's GATE_VERSION with pyproject.toml's "
+                                                     "version, for quality.json to name it (CLAUDE.md, Releases)")
 
     def test_coverage_records_with_the_c_tracer(self):
         with open(ROOT / "pyproject.toml", "rb") as f:

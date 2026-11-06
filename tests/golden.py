@@ -10,18 +10,19 @@ import difflib
 import os
 import re
 
-# Where the golden files are, one <name>.txt per name given to assert_golden.
+# Where the golden files are, one <name>.<extension> per name and extension given to assert_golden.
 GOLDEN_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "golden")
 
 
-def assert_golden(name: str, text: str) -> None:
-    """Pass when text equals the golden file tests/golden/<name>.txt, byte for byte as UTF-8, line ends included.
+def assert_golden(name: str, text: str, extension: str = "txt") -> None:
+    """Pass when text equals the golden file tests/golden/<name>.<extension>, byte for byte as UTF-8, line ends
+    included.
 
     Otherwise raise AssertionError naming the file, with a unified diff from the file to text, or saying the file is
     missing. With UPDATE_GOLDEN=1 in the environment, write text to the file instead, creating it if need be, and
-    pass. name is a file name without its extension; text is any str.
+    pass. name is a file name without its extension, extension one without its dot; text is any str.
     """
-    path = os.path.join(GOLDEN_DIR, f"{name}.txt")
+    path = os.path.join(GOLDEN_DIR, f"{name}.{extension}")
     if os.environ.get("UPDATE_GOLDEN") == "1":
         os.makedirs(GOLDEN_DIR, exist_ok=True)
         with open(path, "w", encoding="utf-8", newline="") as f:

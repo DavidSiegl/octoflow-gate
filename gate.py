@@ -1,17 +1,17 @@
 """
-The quality gate: judge the change a git working tree makes since a commit, and write the quality file.
+The quality gate: judge the change a git working tree makes since a commit, and report on it twice: the quality file,
+Markdown for the people and agents who answer it, and quality.json, the same report as data for a program to read.
 
-    python gate.py --base REV [--config PYPROJECT] [--config GATE_TOML] [--tests JUNIT]... [--coverage XML]... [--out
-    FILE]
-                   [--mutation-budget SECONDS] [--base-run-budget SECONDS] [--test-contexts COVERAGE]
-                   [--rust-syntax PATH]
+    python gate.py --base REV [--config PYPROJECT] [--config GATE_TOML] [--tests JUNIT]... [--coverage XML]...
+                   [--out FILE] [--json FILE] [--mutation-budget SECONDS] [--base-run-budget SECONDS]
+                   [--test-contexts COVERAGE] [--rust-syntax PATH]
 
 It judges the working tree of the git repository that holds the current directory: the linters (GATE_TOOLS) over
 the files the repository tracks, keeping the findings on the lines the change adds since --base, and the checks
 gate_checks lists, such as weakened tests, flaky tests and surviving mutants. `python gate.py --help` gives each
-option. Exit status 0 when the quality file's first line is GATE: OK, 1 for GATE:
-ERROR, EXIT_GATE_UNJUDGED (2) when it could not judge the change, having written nothing; argparse's own 2 for
-bad arguments, and EXIT_INTERRUPTED (130) for Ctrl-C, likewise writing nothing.
+option. Exit status 0 when the quality file's first line is GATE: OK, 1 for GATE: ERROR, EXIT_GATE_UNJUDGED (2) when
+it could not judge the change, having written nothing; argparse's own 2 for bad arguments, and EXIT_INTERRUPTED (130)
+for Ctrl-C, likewise writing nothing.
 
 The gate imports nothing but the standard library, so this one file is the whole program, to copy into another
 project or take from a commit with `git show REV:gate.py`. What it runs it takes from the project it judges: the
@@ -19,9 +19,9 @@ linters from PATH, and pytest, pytest-randomly and mutmut through the Python tha
 So run it with that project's Python, in which its dev tools are installed, such as `uv run python gate.py`. Rust it
 reads through a helper of its own, built from gate-rust, which --rust-syntax names (GateChange.rust_files).
 
-docs/quality-gate.md says what the gate judges and why, and, under "The quality file as a contract", which parts
-of the file's format a program that reads it back, such as octoflow's orchestrator, may rely on; tests/golden/ holds
-the files the gate writes for its tests, which such a reader checks itself against.
+docs/quality-gate.md says what the gate judges and why, and, under "The report as a contract", what a program that
+integrates the gate may rely on: quality.json, as schema/quality-v1.json describes it. tests/golden/ holds both files
+as the gate writes them for its tests.
 """
 
 import argparse
@@ -33,6 +33,7 @@ import difflib
 import fnmatch
 import functools
 import glob
+import hashlib
 import io
 import itertools
 import json
@@ -67,6 +68,9 @@ BUILD_CONFIG_FILES = ("pyproject.toml", "uv.lock")
 # configuration, whose rustflags can set lint levels.
 CLIPPY_CONFIG_NAMES = ("Cargo.toml", "clippy.toml", ".clippy.toml", "rust-toolchain", "rust-toolchain.toml")
 CARGO_CONFIG_NAMES = ("config", "config.toml")
+# This gate's version: pyproject.toml's, which tests/test_invariants.py holds it to, carried here for a copy of gate.py
+# taken from a release, which has no pyproject.toml beside it. quality.json names it (QualityReport.json).
+GATE_VERSION = "0.3.0"
 # The most findings the quality file lists, issues and findings to weigh numbered as one list, and the most failing
 # tests; the rest are counted.
 QUALITY_ISSUE_LIMIT = 50
@@ -104,9 +108,9 @@ TEST_CONTEXTS_TIMEOUT = 30
 TEST_COLLECTION_TIMEOUT = 30
 # The passes-at-base check runs the changed tests at the base for `gate.py --base-run-budget` seconds, this by default.
 BASE_RUN_BUDGET = 120
-# The gate's exit status when it could not judge the change, and so wrote no quality file.
+# The gate's exit status when it could not judge the change, and so wrote neither the quality file nor quality.json.
 EXIT_GATE_UNJUDGED = 2
-# Its exit status when Ctrl-C stopped it, before it wrote the quality file: 128 + SIGINT, as a shell reports it.
+# Its exit status when Ctrl-C stopped it, before it wrote either: 128 + SIGINT, as a shell reports it.
 EXIT_INTERRUPTED = 130
 # The version of the gate-rust helper's schema this gate reads (docs/quality-gate.md, "Reading Rust: the gate-rust
 # helper"), which the helper's SCHEMA must equal; GateChange.rust_files refuses a helper of another.
@@ -336,48 +340,176 @@ def _unquote(name: str) -> str:
 # tell whether a quality round failed as the one before it did; the format's home, as the block's opening says.
 FAILED_CONDITIONS = "## Failed conditions"
 FAILING_TESTS = "## Failing tests"
+# quality.json's `schema_version`, the version of schema/quality-v1.json it follows: raised on any change to the JSON
+# a reader could notice, but not for a new optional field.
+QUALITY_SCHEMA_VERSION = 1
 
 
-def quality_report(gate: str, intro: str, *, conditions: list[str] | tuple = (), issues=(), to_weigh=(),
-                   elsewhere: int = 0, tests: list[tuple[str, str]] | None = None,
-                   coverage: str | None = None, suppressions: list[tuple[str, int, str]] | tuple = (),
-                   edited=(), rules_from: str | None = None, settings_from: str | None = None, notes=(),
-                   clippy_config=()) -> str:
-    """The quality file: the gate, GATE_OK or GATE_ERROR, on its first line, then what the Builder has to answer.
+@dataclass(frozen=True)
+class QualityReport:
+    """What the gate found about one change, written two ways from this one value: markdown, the quality file, prose
+    for the people and agents who answer it, and json, quality.json, the data a program that integrates the gate
+    reads. The gate is GATE_ERROR when a condition failed, else GATE_OK.
 
-    conditions are the failed ones, each a sentence. issues, the findings that fail the gate, and to_weigh,
-    the ones that do not, are {path, line, severity, rule, message} as tool_findings gives them, line None
-    for one about the whole file and path None for one about the whole change. Both are listed in the order
-    given and numbered as one list, issues first, at most QUALITY_ISSUE_LIMIT in all; the rest are counted.
-    elsewhere counts the linter findings left out for not being on lines the change added. tests are the
-    (name, detail) of the failing tests of every test report the gate was given, None for no tests section, as when
-    it was given none. coverage is the sentence about coverage of new code, None for no such section.
-    suppressions are the (path, line, text) of lint suppressions the change added. edited are the build configuration
-    files the change edits, as edited_config gives them; rules_from names the file the gate took its rules from when
-    that was not the tree's own pyproject.toml, and settings_from says where it took its settings from when that was not
-    the tree's own gate.toml, as _settings_for words it; None means the tree's own judged. notes are the (path, note) of
-    each file gate.toml adds to the build configuration (GateSettings.build_config). clippy_config are the files the
-    change edits that clippy takes its rules or its toolchain from, as clippy_config_files gives them.
+    Paths, messages and test details are held as the gate read them, so a name that is not UTF-8 holds lone
+    surrogates, as os.fsdecode makes them; both renderings write each such byte as `\\xNN`.
     """
-    out = [f"GATE: {gate}", "", intro]
-    if conditions:
-        out += ["", FAILED_CONDITIONS, "", *(one_line(f"- {c}") for c in conditions)]
-    out += _issues_section(issues, elsewhere)
-    if to_weigh:
-        out += _to_weigh_section(to_weigh, after=min(len(issues), QUALITY_ISSUE_LIMIT))
-    if tests is not None:
-        out += _tests_section(tests)
-    if coverage is not None:
-        out += ["", "## Coverage on new code", "", coverage]
-    if suppressions:
-        out += ["", "## Suppressions added", "",
-                *(one_line(f"- `{path}:{line}` `{text}`") for path, line, text in suppressions)]
-    if edited or clippy_config:
-        out += _config_section(edited, rules_from, settings_from, dict(notes), clippy_config)
-    return "\n".join(out) + "\n"
+    # The commits judged, as full shas: HEAD of the work tree, whose working tree was judged, and the base.
+    head: str
+    base: str
+    # The failed conditions, each a sentence; none means the gate is OK.
+    conditions: Sequence[str] = ()
+    # The findings that fail the gate, and the ones to weigh, which do not: {path, line, severity, rule, message} as
+    # tool_findings gives them, line None for one about the whole file and path None for one about the whole change.
+    # Both renderings list them in this order, issues first; the quality file numbers them as one list.
+    issues: Sequence[dict] = ()
+    to_weigh: Sequence[dict] = ()
+    # How many linter findings were left out for not being on lines the change added.
+    elsewhere: int = 0
+    # The (name, detail) of the failing tests of every test report the gate was given; None when it was given none.
+    failing_tests: Sequence[tuple[str, str]] | None = None
+    # Coverage of the new code; None when the gate was given no coverage report.
+    coverage: "NewCoverage | None" = None
+    # The (path, line, text) of each lint suppression the change added.
+    suppressions: Sequence[tuple[str, int, str]] = ()
+    # The build configuration files the change edits, as edited_config gives them.
+    edited_config: Sequence[str] = ()
+    # The file the gate took its rules from, as a code span, when that was not the tree's own pyproject.toml; None
+    # when it was.
+    rules_from: str | None = None
+    # Where the gate took its settings from when that was not the tree's own gate.toml, as _settings_for words it;
+    # None when it was.
+    settings_from: str | None = None
+    # The (path, note) of each file gate.toml adds to the build configuration (GateSettings.build_config).
+    config_notes: Sequence[tuple[str, str]] = ()
+    # The files the change edits that clippy takes its rules or its toolchain from, as clippy_config_files gives them.
+    clippy_config: Sequence[str] = ()
+
+    @property
+    def gate(self) -> str:
+        """GATE_ERROR when a condition failed, else GATE_OK."""
+        return GATE_ERROR if self.conditions else GATE_OK
+
+    def markdown(self) -> str:
+        """The quality file: `GATE: ` and the gate on its first line, then what whoever answers it has to answer.
+
+        It numbers at most QUALITY_ISSUE_LIMIT findings and lists as many failing tests, each by the first line of its
+        detail, and counts the rest. It is prose, whose wording may change in any release; a program reads json
+        instead (docs/quality-gate.md, "The report as a contract").
+        """
+        out = [f"GATE: {self.gate}", "", self._intro()]
+        if self.conditions:
+            out += ["", FAILED_CONDITIONS, "", *(one_line(f"- {c}") for c in self.conditions)]
+        out += _issues_section(self.issues, self.elsewhere)
+        if self.to_weigh:
+            out += _to_weigh_section(self.to_weigh, after=min(len(self.issues), QUALITY_ISSUE_LIMIT))
+        if self.failing_tests is not None:
+            out += _tests_section(self.failing_tests)
+        if self.coverage is not None:
+            out += ["", "## Coverage on new code", "", _coverage_sentence(self.coverage)]
+        if self.suppressions:
+            out += ["", "## Suppressions added", "",
+                    *(one_line(f"- `{path}:{line}` `{text}`") for path, line, text in self.suppressions)]
+        if config := self._config_items():
+            out += ["", "## Build configuration", "", *(one_line(f"- {text}") for _, text in config)]
+        return _utf8("\n".join(out) + "\n")
+
+    def json(self) -> str:
+        """quality.json: the report as one JSON object, as schema/quality-v1.json describes it, indented, with a line
+        end after it. It lists every finding and every failing test, with the whole of each test's detail; its strings
+        hold the text as it is, line breaks included, but for a byte that is not UTF-8, written `\\xNN`."""
+        findings = [_json_finding(f, fails) for fails, group in ((True, self.issues), (False, self.to_weigh))
+                    for f in group]
+        c = self.coverage
+        doc = {
+            "schema_version": QUALITY_SCHEMA_VERSION,
+            "gate": self.gate,
+            "gate_version": GATE_VERSION,
+            "base": self.base,
+            "head": self.head,
+            "failed_conditions": list(self.conditions),
+            "findings": findings,
+            "findings_total": len(findings),
+            "failing_tests": None if self.failing_tests is None else [
+                {"name": name, "detail": detail} for name, detail in self.failing_tests],
+            "coverage": None if c is None else {
+                "lines": c.lines, "covered_lines": c.covered_lines, "conditions": c.conditions,
+                "covered_conditions": c.covered_conditions, "percent": c.percent(), "unmeasured": list(c.unmeasured)},
+            "suppressions": [{"path": path, "line": line, "text": text} for path, line, text in self.suppressions],
+            "build_config": [{"files": files, "text": text} for files, text in self._config_items()],
+        }
+        return json.dumps(_utf8_strings(doc), indent=2, ensure_ascii=False) + "\n"
+
+    def _intro(self) -> str:
+        """The quality file's opening sentence: which commit's tree the gate judged against which base, and where it
+        took its rules and settings from when they were not the tree's own."""
+        return (f"`gate.py` judged the working tree at `{self.head}` against the base `{self.base}`"
+                + (f", by the rules in {self.rules_from}" if self.rules_from else "")
+                + (f", with the settings from {self.settings_from}" if self.settings_from else "") + ".")
+
+    def _config_items(self) -> list[tuple[list[str], str]]:
+        """The edits to the build configuration the report names: for each, the files it is about and the sentences
+        that say what the edit means for how the change was judged."""
+        out = []
+        if "pyproject.toml" in self.edited_config:
+            out.append((["pyproject.toml"], (
+                f"The change edits `pyproject.toml`. The gate took its rules from {self.rules_from}, so the edit did "
+                f"not change how the change was judged." if self.rules_from else
+                "The change edits `pyproject.toml`, which holds the gate's rules; the change was judged by the edited "
+                "rules.")))
+        if "uv.lock" in self.edited_config:
+            out.append((["uv.lock"], "The change edits `uv.lock`, which pins the versions of the linters the gate ran."))
+        if SETTINGS_FILE in self.edited_config:
+            out.append(([SETTINGS_FILE], (
+                f"The change edits `{SETTINGS_FILE}`. The gate took its settings from {self.settings_from}, so the "
+                f"edit did not change how the change was judged." if self.settings_from else
+                f"The change edits `{SETTINGS_FILE}`, which holds the gate's settings; the change was judged by the "
+                f"edited settings.")))
+        out += [([path], f"The change edits `{path}`. {note}")
+                for path, note in dict(self.config_notes).items() if path in self.edited_config]
+        if self.clippy_config:
+            named = _series([f"`{f}`" for f in self.clippy_config], limit=5)
+            out.append((list(self.clippy_config), (f"The change edits {named}, which clippy takes its rules or its "
+                                                   f"toolchain from; it judged the change by the edited ones.")))
+        return out
 
 
-# The sections of quality_report after its first, each as lines that start with a blank one.
+def _json_finding(finding: dict, fails: bool) -> dict:
+    """finding, as QualityReport holds it, as quality.json lists it: fails says whether it fails the gate."""
+    path = None if finding["path"] is None else _utf8(finding["path"])
+    rule, message = _utf8(finding["rule"]), _utf8(finding["message"])
+    return {"path": path, "line": finding["line"], "severity": finding["severity"], "rule": rule,
+            "check": rule.split(" ", 1)[0], "message": message, "fails": fails,
+            "fingerprint": finding_fingerprint(path, rule, message)}
+
+
+def finding_fingerprint(path: str | None, rule: str, message: str) -> str:
+    """A finding's fingerprint in quality.json, 16 hex digits: the same for a finding that moved, or whose message
+    counts something else, and different for another finding on the same line. It is the start of the SHA-256 of
+    path ("" for None), rule and message without its ASCII digits, joined by NUL characters, as UTF-8; octoflow's
+    engine computes it the same way (engine/src/quality.rs, finding_fingerprint)."""
+    message = "".join(c for c in message if not ("0" <= c <= "9"))
+    return hashlib.sha256("\0".join([path or "", rule, message]).encode("utf-8")).hexdigest()[:16]
+
+
+def _utf8(text: str) -> str:
+    """text with each lone surrogate that os.fsdecode made of a byte that is not UTF-8 given back as that byte and
+    written `\\xNN`, so that a file or a terminal can take it."""
+    return text.encode("utf-8", "surrogateescape").decode("utf-8", "backslashreplace")
+
+
+def _utf8_strings(value: Any) -> Any:
+    """value, a JSON document of dicts, lists and scalars, with _utf8 applied to every string in it, keys included."""
+    if isinstance(value, str):
+        return _utf8(value)
+    if isinstance(value, dict):
+        return {_utf8(k): _utf8_strings(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_utf8_strings(v) for v in value]
+    return value
+
+
+# The sections of QualityReport.markdown after its first, each as lines that start with a blank one.
 
 def on_changed_lines(issues, changed: dict[str, set[int]]) -> list[dict]:
     """The issues on lines the change added, and the lineless ones on files it touched, by path and line."""
@@ -439,36 +571,13 @@ def _numbered(k: int, finding: dict) -> str:
     return one_line(f"{k}. {where} {finding['severity']} {finding['rule']}: {finding['message']}")
 
 
-def _tests_section(tests: list[tuple[str, str]]) -> list[str]:
+def _tests_section(tests: Sequence[tuple[str, str]]) -> list[str]:
     out = ["", FAILING_TESTS, ""]
     out += [one_line(f"- `{name}`: {detail.strip().splitlines()[0] if detail.strip() else 'failed'}")
             for name, detail in tests[:QUALITY_ISSUE_LIMIT]] or ["None."]
     if len(tests) > QUALITY_ISSUE_LIMIT:
         out.append(f"- and {len(tests) - QUALITY_ISSUE_LIMIT} more.")
     return out
-
-
-def _config_section(edited, rules_from: str | None, settings_from: str | None, notes: dict[str, str],
-                    clippy_config) -> list[str]:
-    out = ["", "## Build configuration", ""]
-    if "pyproject.toml" in edited:
-        out.append(f"- The change edits `pyproject.toml`. The gate took its rules from {rules_from}, so the edit "
-                   f"did not change how the change was judged." if rules_from else
-                   "- The change edits `pyproject.toml`, which holds the gate's rules; the change was judged by "
-                   "the edited rules.")
-    if "uv.lock" in edited:
-        out.append("- The change edits `uv.lock`, which pins the versions of the linters the gate ran.")
-    if SETTINGS_FILE in edited:
-        out.append(f"- The change edits `{SETTINGS_FILE}`. The gate took its settings from {settings_from}, so the "
-                   f"edit did not change how the change was judged." if settings_from else
-                   f"- The change edits `{SETTINGS_FILE}`, which holds the gate's settings; the change was judged by "
-                   f"the edited settings.")
-    out += [f"- The change edits `{path}`. {note}" for path, note in notes.items() if path in edited]
-    if clippy_config:
-        named = _series([f"`{f}`" for f in clippy_config], limit=5)
-        out.append(f"- The change edits {named}, which clippy takes its rules or its toolchain from; it judged the "
-                   f"change by the edited ones.")
-    return [one_line(line) for line in out]
 
 
 def edited_config(diff: str, changed: dict[str, set[int]], settings: "GateSettings | None" = None) -> list[str]:
@@ -989,6 +1098,9 @@ class NewCoverage:
     covered_lines: int
     conditions: int  # branch outcomes on those lines
     covered_conditions: int
+    # The changed Python files whose names coverage.py cannot record (_unmeasured_files), whose lines both counts
+    # leave out.
+    unmeasured: tuple[str, ...] = ()
 
     def percent(self) -> float:
         """(covered conditions + covered lines) / (conditions + lines), in percent; 100 with nothing to cover."""
@@ -998,8 +1110,8 @@ class NewCoverage:
 
 def judge_change(cwd: str, base: str, checks: tuple[GateCheck, ...], *, rules: str | None = None,
                  settings: str | None = None, coverage: list[str] | tuple[str, ...] = (),
-                 tests: list[str] | tuple[str, ...] = (), rust_syntax: str | None = None) -> str:
-    """The quality file for the change from base to the working tree of the git repository at cwd.
+                 tests: list[str] | tuple[str, ...] = (), rust_syntax: str | None = None) -> QualityReport:
+    """The gate's report on the change from base to the working tree of the git repository at cwd.
 
     The change is GateChange.from_tree's, which every part of the judgement below reads: none reads what the tree tracks
     under mutmut's state, _MUTMUT_STATE; the checks read its Rust with the gate-rust helper at rust_syntax
@@ -1015,9 +1127,8 @@ def judge_change(cwd: str, base: str, checks: tuple[GateCheck, ...], *, rules: s
     when one of tests, JUnit reports of the tree's tests such as pytest's --junitxml and cargo-nextest's, has a failing
     test, or when coverage, Cobertura reports of the tree such as pytest-cov's coverage.xml and cargo-llvm-cov's, merged
     as new_coverage says, puts new code below GATE_MIN_COVERAGE percent on GATE_MIN_NEW_LINES or more new lines to
-    cover; else OK. With no tests, or no coverage, the quality file has no section on them. Suppressions the change
-    added are listed, not counted against it. Paths are absolute or relative to the process's working directory. A file
-    name that is not UTF-8 appears in the quality file with each byte it cannot decode as `\\xNN`.
+    cover; else OK. With no tests, or no coverage, the report's failing_tests, or coverage, is None. Suppressions the
+    change added are listed, not counted against it. Paths are absolute or relative to the process's working directory.
 
     Raises GateError when it cannot judge: cwd is not in a git work tree, base names no commit, there is no rules file,
     the settings cannot be read as GateSettings.read says, a test or coverage report cannot be read, or git prints what
@@ -1073,26 +1184,21 @@ def judge_change(cwd: str, base: str, checks: tuple[GateCheck, ...], *, rules: s
         if failing:
             conditions.append(f"{len(failing)} tests fail; each is listed below.")
 
-    covered, coverage_sentence = None, None
+    covered = None
     if coverage:
         covered = new_coverage([os.path.abspath(report) for report in coverage], root, changed)
-        coverage_sentence = _coverage_sentence(covered, _unmeasured_files(changed))
         if covered.lines >= GATE_MIN_NEW_LINES and covered.percent() < GATE_MIN_COVERAGE:
             conditions.append(f"Coverage of new code is {_floor_tenth(covered.percent())}%; the gate wants at "
                               f"least {GATE_MIN_COVERAGE:g}% once a change has {GATE_MIN_NEW_LINES} or more new "
                               f"lines to cover.")
 
-    intro = _intro(_git(root, "rev-parse", "HEAD").strip(), base_sha, rules, settings_from)
-    text = quality_report(GATE_ERROR if conditions else GATE_OK, intro, conditions=conditions, issues=issues,
-                          to_weigh=to_weigh, elsewhere=elsewhere, tests=failing, coverage=coverage_sentence,
-                          suppressions=added_suppressions(root, changed),
-                          edited=edited_config(change.diff, changed, read_by),
-                          clippy_config=clippy_config_files(change.diff, changed, _cargo_home_in(root)),
-                          rules_from=None if _tree_s_own(root, rules_path, "pyproject.toml") else f"`{rules}`",
-                          settings_from=settings_from, notes=read_by.build_config)
-    # Paths and linter output come verbatim, so a name that is not UTF-8 holds lone surrogates, which no file or
-    # terminal can take: give their bytes back, then write each byte that is not UTF-8 as \xNN.
-    return text.encode("utf-8", "surrogateescape").decode("utf-8", "backslashreplace")
+    return QualityReport(
+        head=_git(root, "rev-parse", "HEAD").strip(), base=base_sha, conditions=conditions, issues=issues,
+        to_weigh=to_weigh, elsewhere=elsewhere, failing_tests=failing, coverage=covered,
+        suppressions=added_suppressions(root, changed), edited_config=edited_config(change.diff, changed, read_by),
+        clippy_config=clippy_config_files(change.diff, changed, _cargo_home_in(root)),
+        rules_from=None if _tree_s_own(root, rules_path, "pyproject.toml") else f"`{rules}`",
+        settings_from=settings_from, config_notes=read_by.build_config)
 
 
 def _settings_for(root: str, rules_path: str, settings: str | None) -> tuple[GateSettings, str | None]:
@@ -1120,15 +1226,6 @@ def _tree_s_own(root: str, path: str, name: str) -> bool:
     """Whether path, an absolute path, names the file name at the top level of the work tree at root, also through a
     symbolic link on either side."""
     return os.path.realpath(path) == os.path.realpath(os.path.join(root, name))
-
-
-def _intro(head: str, base_sha: str, rules: str | None, settings_from: str | None) -> str:
-    """The quality file's opening sentence: the gate judged the tree at commit head against base_sha, naming rules,
-    judge_change's argument, as given, and settings_from, _settings_for's account of where the settings came from,
-    each only when there is one."""
-    return (f"`gate.py` judged the working tree at `{head}` against the base `{base_sha}`"
-            + (f", by the rules in `{rules}`" if rules else "")
-            + (f", with the settings from {settings_from}" if settings_from else "") + ".")
 
 
 def _linted_files(tracked: list[str], tool: GateTool, settings: GateSettings) -> list[str]:
@@ -1399,7 +1496,8 @@ def new_coverage(reports: Iterable[str], root: str, changed: dict[str, set[int]]
     Each report's paths are relative to its <source> directories, a relative source to the current directory, or to
     root when it lists none; an absolute path stands as it is. So cargo-llvm-cov's report, whose source is its Cargo
     workspace's directory, maps to the repository's paths as long as the tree is where the report was written. A
-    changed line no report lists is not coverable, like a comment. Raises GateError when a report cannot be read or
+    changed line no report lists is not coverable, like a comment; the changed Python files coverage.py cannot record
+    at all are named as unmeasured. Raises GateError when a report cannot be read or
     parsed.
     """
     merged: dict[tuple[str, int], tuple[bool, int, int]] = {}  # (path, line): (covered, covered outcomes, outcomes)
@@ -1409,7 +1507,8 @@ def new_coverage(reports: Iterable[str], root: str, changed: dict[str, set[int]]
             merged[at] = (was_hit or hit, max(was_taken, taken), max(was_outcomes, outcomes))
     return NewCoverage(lines=len(merged), covered_lines=sum(hit for hit, _, _ in merged.values()),
                        conditions=sum(outcomes for _, _, outcomes in merged.values()),
-                       covered_conditions=sum(taken for _, taken, _ in merged.values()))
+                       covered_conditions=sum(taken for _, taken, _ in merged.values()),
+                       unmeasured=tuple(_unmeasured_files(changed)))
 
 
 def _changed_line_coverage(report: str, root: str,
@@ -1454,17 +1553,17 @@ def _changed_cobertura_line(report: str, line: ElementTree.Element,
         raise GateError(f"the coverage report {report} has a line it cannot read: {e}") from e
 
 
-def _coverage_sentence(c: NewCoverage, unmeasured: list[str]) -> str:
-    """The quality file's coverage section for c: how much of the new code is covered, then, by name, the changed
-    files in unmeasured, whose names coverage.py cannot record, so that c leaves their lines out of both counts."""
+def _coverage_sentence(c: NewCoverage) -> str:
+    """The quality file's coverage section for c: how much of the new code is covered, then, by name, the files it
+    could not measure."""
     if not c.lines:
         sentence = "No new lines to cover."
     else:
         branches = f", counting their {c.conditions} branch outcomes" if c.conditions else ""
         sentence = (f"{_floor_tenth(c.percent())}% of {c.lines} new lines to cover{branches}; "
                     f"{c.lines - c.covered_lines} lines are not covered.")
-    if unmeasured:
-        named = _series([f"`{one_line(path)}`" for path in unmeasured], limit=5)
+    if c.unmeasured:
+        named = _series([f"`{one_line(path)}`" for path in c.unmeasured], limit=5)
         sentence += f"\n\nNot measured: {named}; coverage.py records no data for a file whose name is not UTF-8."
     return sentence
 
@@ -5995,30 +6094,36 @@ def _check_condition(name: str, n: int) -> str:
 
 def gate_command(base: str, rules: str | None, coverage: list[str], tests: list[str], out: str | None,
                  mutation_budget: float | None, base_run_budget: float | None, test_contexts: str | None = None,
-                 rust_syntax: str | None = None, settings: str | None = None) -> int:
-    """Write the quality file judge_change gives for the current directory, by the rules in rules and the settings in
+                 rust_syntax: str | None = None, settings: str | None = None, json_out: str | None = None) -> int:
+    """Write the report judge_change gives for the current directory, by the rules in rules and the settings in
     settings as judge_change takes them, with gate_checks's checks and the gate-rust helper at rust_syntax, a path
-    relative to the current directory or absolute, to out or standard output.
+    relative to the current directory or absolute.
 
-    Returns 0 for GATE: OK and 1 for GATE: ERROR; EXIT_GATE_UNJUDGED, having written nothing, when the change
-    could not be judged or out could not be written.
+    The quality file goes to out, else to standard output; quality.json to json_out, else, with out, to out's path
+    with its `.md` made `.json`, or `.json` added when it has no `.md` (json_path_for), else nowhere. Returns 0 for
+    GATE: OK and 1 for GATE: ERROR; EXIT_GATE_UNJUDGED, having written nothing, when the change could not be judged or
+    a file could not be written.
     """
+    json_out = json_out or (json_path_for(out) if out else None)
     try:
-        text = judge_change(os.getcwd(), base, gate_checks(mutation_budget, base_run_budget, test_contexts),
-                            rules=rules, settings=settings, coverage=coverage, tests=tests,
-                            rust_syntax=os.path.abspath(rust_syntax) if rust_syntax else None)
-        if out:
-            write_quality_file(out, text)
+        report = judge_change(os.getcwd(), base, gate_checks(mutation_budget, base_run_budget, test_contexts),
+                              rules=rules, settings=settings, coverage=coverage, tests=tests,
+                              rust_syntax=os.path.abspath(rust_syntax) if rust_syntax else None)
+        write_files([(path, text) for path, text in ((out, report.markdown()), (json_out, report.json())) if path])
     except GateError as e:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_GATE_UNJUDGED
-    # quality_report's first line: the gate's own words, with no emphasis to tolerate.
-    gate = text.split("\n", 1)[0].removeprefix("GATE: ")
-    if out:
-        print(f"GATE: {gate}, in {out}", file=sys.stderr)
-    else:
-        print(text, end="")
-    return 0 if gate == GATE_OK else 1
+    if written := [path for path in (out, json_out) if path]:
+        print(f"GATE: {report.gate}, in {_series(written)}", file=sys.stderr)
+    if not out:
+        print(report.markdown(), end="")
+    return 0 if report.gate == GATE_OK else 1
+
+
+def json_path_for(out: str) -> str:
+    """Where quality.json goes beside the quality file at out: out with its `.md` made `.json`, or with `.json` added
+    when it does not end in `.md`."""
+    return f"{out.removesuffix('.md')}.json" if out.endswith(".md") else f"{out}.json"
 
 
 def seconds_arg(text: str) -> int:
@@ -6045,7 +6150,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         f"fails the gate, and so do a linter that is missing or fails, a Cargo workspace that does not compile, a "
         f"failing test, files committed under mutmut's {_MUTMUT_STATE}/, and coverage below "
         f"{GATE_MIN_COVERAGE:g}% on {GATE_MIN_NEW_LINES} or more new lines to cover. Exit status 0 for OK, 1 for "
-        f"ERROR, {EXIT_GATE_UNJUDGED} when it could not judge, writing no quality file."))
+        f"ERROR, {EXIT_GATE_UNJUDGED} when it could not judge, writing nothing. --out FILE also writes quality.json, "
+        f"the same report as data."))
     parser.add_argument("--base", required=True, metavar="REV", help="the commit the change is measured from")
     parser.add_argument("--config", metavar="FILE", action="append", default=[],
                         help=f"a file named *.toml but pyproject.toml holds the gate's settings, used instead of the "
@@ -6061,7 +6167,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="a JUnit report of the tree's tests, such as pytest's --junitxml or cargo-nextest's; "
                              "given more than once, a failing test in any of them counts; without it, tests are not "
                              "judged")
-    parser.add_argument("--out", metavar="FILE", help="write the quality file here instead of to standard output")
+    parser.add_argument("--out", metavar="FILE",
+                        help="write the quality file here instead of to standard output, and quality.json beside it, "
+                             "its name FILE's with the .md made .json, or with .json added")
+    parser.add_argument("--json", metavar="FILE", dest="json_out",
+                        help="write quality.json, the report as data, here; with --out, instead of beside FILE")
     parser.add_argument("--mutation-budget", type=seconds_arg, metavar="SECONDS",
                         help=f"stop mutmut, which mutation-tests the functions the change edits, after this long, "
                              f"and report how many of its mutants it tried; default {SETTINGS_FILE}'s budgets.mutation, "
@@ -6094,25 +6204,35 @@ def _names_settings(path: str) -> bool:
     return path.endswith(".toml") and os.path.basename(path) != "pyproject.toml"
 
 
-def write_quality_file(path: str, text: str) -> None:
-    """Make text, line endings as they are, the contents of the file at path.
+def write_files(contents: list[tuple[str, str]]) -> None:
+    """Make each text, line endings as they are, the contents of the file at its path, for each (path, text) of
+    contents, so that each file is written whole or keeps what it held.
 
-    Written aside and renamed into place, so a failed write leaves the old file, not half a new one. A symlink at
-    path is followed, so the link stays and its target changes, and an existing file keeps its permissions. Raises
-    GateError when it cannot be written.
+    Each is written aside, and only once every one is written are they renamed into place, so a file that cannot be
+    written, or Ctrl-C before the renames, leaves every file as it was; only a rename that fails after another
+    succeeded leaves some new and some old. A symlink at a path is followed, so the link stays and its target changes,
+    and an existing file keeps its permissions. Raises GateError naming the file that cannot be written.
     """
-    real = os.path.realpath(path)
-    tmp = f"{real}.tmp.{os.getpid()}"
+    aside: list[tuple[str, str, str]] = []  # (path as given, the real path, the file written aside)
+    writing = ""  # the path, as given, of the file being written or renamed into place
     try:
-        with open(tmp, "w", encoding="utf-8", newline="") as f:
-            f.write(text)
-        with contextlib.suppress(FileNotFoundError):
-            shutil.copymode(real, tmp)
-        os.replace(tmp, real)
+        for writing, text in contents:
+            real = os.path.realpath(writing)
+            tmp = f"{real}.tmp.{os.getpid()}"
+            aside.append((writing, real, tmp))
+            with open(tmp, "w", encoding="utf-8", newline="") as f:
+                f.write(text)
+            with contextlib.suppress(FileNotFoundError):
+                shutil.copymode(real, tmp)
+        for given, real, tmp in aside:
+            writing = given
+            os.replace(tmp, real)
     except OSError as e:
-        with contextlib.suppress(OSError):
-            os.remove(tmp)
-        raise GateError(f"cannot write {path}: {e}") from e
+        raise GateError(f"cannot write {writing}: {e}") from e
+    finally:
+        for _, _, tmp in aside:
+            with contextlib.suppress(OSError):
+                os.remove(tmp)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -6123,10 +6243,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
         return gate_command(args.base, args.rules, args.coverage, args.tests, args.out, args.mutation_budget,
-                            args.base_run_budget, args.test_contexts, args.rust_syntax, args.settings)
+                            args.base_run_budget, args.test_contexts, args.rust_syntax, args.settings, args.json_out)
     except KeyboardInterrupt:
-        # write_quality_file renames the whole file into place last, so out holds what it held before.
-        print("interrupted; no quality file was written", file=sys.stderr)
+        # write_files renames the files into place last, so each holds what it held before.
+        print("interrupted; no report was written", file=sys.stderr)
         return EXIT_INTERRUPTED
 
 

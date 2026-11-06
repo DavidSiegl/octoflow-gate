@@ -2,7 +2,8 @@
 repository.
 
 The property tests of the diff reading are in tests/test_properties.py. The golden files under tests/golden/ hold the
-quality file's format, which programs that integrate the gate read (README.md).
+report the gate writes, the quality file and quality.json, whose schema is the interface of a program that integrates
+the gate (README.md).
 """
 
 import ast
@@ -29,12 +30,13 @@ import unittest
 from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
+import jsonschema
 from coverage import CoverageData
 from gitrepo import RepositoryTest, git
 from golden import assert_golden
 
 import gate
-from gate import changed_lines, quality_report
+from gate import changed_lines
 
 
 def empty_rust_helper(directory):
@@ -163,13 +165,67 @@ class TestChangedLines(unittest.TestCase):
         self.assertEqual(gate.edited_config(diff, changed_lines(diff)), [])
 
 
+# The JSON Schema quality.json follows (QualityReport.json), which every golden quality.json is validated against.
+QUALITY_SCHEMA = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "schema", "quality-v1.json")
+
+
+def report(**fields):
+    """A QualityReport of fields, its commits written <head> and <base>."""
+    return gate.QualityReport(head="<head>", base="<base>", **fields)
+
+
+def quality_file(**fields):
+    """The quality file of report(**fields)."""
+    return report(**fields).markdown()
+
+
+def assert_golden_report(test, name, markdown, quality_json):
+    """Hold a report's two renderings, the quality file markdown and quality_json, to the golden files <name>.txt and
+    <name>.json, after checking that the JSON follows the schema and says what the quality file shows. The JSON's
+    gate_version is written <version> in the golden file, so that a release does not change it."""
+    doc = json.loads(quality_json)
+    quality_json = quality_json.replace(f'"gate_version": {json.dumps(gate.GATE_VERSION)}', '"gate_version": "<version>"')
+    with open(QUALITY_SCHEMA, encoding="utf-8") as f:
+        jsonschema.validate(doc, json.load(f), format_checker=jsonschema.Draft202012Validator.FORMAT_CHECKER)
+    assert_report_agrees(test, markdown, doc)
+    assert_golden(name, markdown)
+    assert_golden(name, quality_json, "json")
+
+
+def assert_report_agrees(test, markdown, doc):
+    """Check that quality.json's doc says what the quality file markdown shows: the gate, the failed conditions, the
+    numbered findings, which of them fail the gate, how many there are with the ones counted but not listed, and the
+    failing tests with the ones counted."""
+    sections = {m.group(1): m.group(2) for m in re.finditer(r"^## (.+)\n\n((?:.+\n|\n(?!## ))*)", markdown, re.MULTILINE)}
+    test.assertEqual(markdown.split("\n", 1)[0], f"GATE: {doc['gate']}")
+    test.assertEqual(re.findall(r"^- (.*)$", sections.get("Failed conditions", ""), re.MULTILINE),
+                     [gate.one_line(c) for c in doc["failed_conditions"]])
+    issues, to_weigh = sections["Issues on changed lines"], sections.get("Findings to weigh", "")
+    listed = [(int(k), True) for k in re.findall(r"^(\d+)\. ", issues, re.MULTILINE)]
+    listed += [(int(k), False) for k in re.findall(r"^(\d+)\. ", to_weigh, re.MULTILINE)]
+    test.assertEqual(listed, [(k, f["fails"]) for k, f in enumerate(doc["findings"][:len(listed)], 1)])
+    counted = sum(int(n) for n in re.findall(r"^(\d+) (?:more issues|more findings to weigh|findings to weigh) "
+                                             r"(?:on changed lines )?are not listed", markdown, re.MULTILINE))
+    test.assertEqual(len(listed) + counted, doc["findings_total"])
+    test.assertEqual(doc["findings_total"], len(doc["findings"]))
+    if doc["failing_tests"] is None:
+        test.assertNotIn("Failing tests", sections)
+        return
+    tests = sections["Failing tests"]
+    named = re.findall(r"^- `(.*)`: ", tests, re.MULTILINE)
+    more = sum(int(n) for n in re.findall(r"^- and (\d+) more\.$", tests, re.MULTILINE))
+    test.assertEqual(named, [gate.one_line(t["name"]) for t in doc["failing_tests"][:len(named)]])
+    test.assertEqual(len(named) + more, len(doc["failing_tests"]))
+
+
 class TestQualityReport(unittest.TestCase):
     def issues(self, n):
         return [{"path": "f.py", "line": i, "severity": "HIGH", "rule": "r", "message": f"m{i}"} for i in range(1, n + 1)]
 
     def test_numbers_at_most_fifty_issues(self):
-        text = quality_report("ERROR", "intro", issues=self.issues(60), elsewhere=10, tests=[])
-        self.assertTrue(text.startswith("GATE: ERROR\n\nintro\n"))
+        text = quality_file(conditions=["c"], issues=self.issues(60), elsewhere=10, failing_tests=[])
+        self.assertTrue(text.startswith("GATE: ERROR\n\n`gate.py` judged the working tree at `<head>` against the "
+                                        "base `<base>`.\n"))
         self.assertIn("50. `f.py:50` HIGH r: m50\n", text)
         self.assertNotIn("51. ", text)
         self.assertIn("10 more issues on changed lines are not listed", text)
@@ -178,9 +234,14 @@ class TestQualityReport(unittest.TestCase):
     def finding(self, path, line, rule="flaky test_x"):
         return {"path": path, "line": line, "severity": "warning", "rule": rule, "message": "m"}
 
+    def test_the_gate_fails_on_a_condition_alone(self):
+        self.assertEqual(report().gate, gate.GATE_OK)
+        self.assertEqual(report(to_weigh=[self.finding("t.py", 3)]).gate, gate.GATE_OK)
+        self.assertEqual(report(conditions=["`ruff` is not installed."]).gate, gate.GATE_ERROR)
+
     def test_findings_to_weigh_alone_leave_the_gate_ok(self):
-        text = quality_report("OK", "intro", to_weigh=[self.finding("t.py", 3), self.finding("t.py", None),
-                                                        self.finding(None, None, "mutants budget")])
+        text = quality_file(to_weigh=[self.finding("t.py", 3), self.finding("t.py", None),
+                                      self.finding(None, None, "mutants budget")])
         self.assertTrue(text.startswith("GATE: OK\n"))
         self.assertIn("## Issues on changed lines\n\nNone.\n", text)
         self.assertIn("## Findings to weigh\n\nThese do not fail the gate. Fix each, or say in your report why it "
@@ -189,116 +250,155 @@ class TestQualityReport(unittest.TestCase):
                       "3. The change as a whole: warning mutants budget: m\n", text)
 
     def test_findings_to_weigh_are_numbered_after_the_issues(self):
-        text = quality_report("ERROR", "intro", issues=self.issues(2), to_weigh=[self.finding("t.py", 9)])
+        text = quality_file(conditions=["c"], issues=self.issues(2), to_weigh=[self.finding("t.py", 9)])
         self.assertLess(text.index("2. `f.py:2` HIGH r: m2"), text.index("## Findings to weigh"))
         self.assertIn("3. `t.py:9` warning flaky test_x: m\n", text)
 
     def test_the_limit_takes_issues_first_then_findings_to_weigh(self):
         limit = gate.QUALITY_ISSUE_LIMIT
-        text = quality_report("ERROR", "intro", issues=self.issues(limit - 2),
-                              to_weigh=[self.finding("t.py", n) for n in range(1, 6)])
+        text = quality_file(conditions=["c"], issues=self.issues(limit - 2),
+                            to_weigh=[self.finding("t.py", n) for n in range(1, 6)])
         self.assertIn(f"{limit}. `t.py:2` ", text)
         self.assertNotIn(f"{limit + 1}. ", text)
         self.assertIn("3 more findings to weigh are not listed.", text)
-        text = quality_report("ERROR", "intro", issues=self.issues(limit + 1), to_weigh=[self.finding("t.py", 1)])
+        text = quality_file(conditions=["c"], issues=self.issues(limit + 1), to_weigh=[self.finding("t.py", 1)])
         self.assertIn("## Findings to weigh\n\n1 findings to weigh are not listed; answer the issues above first.\n",
                       text)
         self.assertNotIn("`t.py:1`", text)
 
     def test_no_findings_to_weigh_no_section(self):
-        self.assertNotIn("Findings to weigh", quality_report("OK", "intro"))
-        self.assertNotIn("Findings to weigh", quality_report("ERROR", "intro", issues=self.issues(1)))
+        self.assertNotIn("Findings to weigh", quality_file())
+        self.assertNotIn("Findings to weigh", quality_file(conditions=["c"], issues=self.issues(1)))
 
     def test_tests_and_coverage(self):
         # The console's end is the engine's to write (TestBuildFailedReport): the gate's file never has one.
-        text = quality_report("OK", "intro", tests=[("t.T.test_x", "AssertionError\ntraceback")],
-                              coverage="62.5% of 40 new lines to cover.")
+        text = quality_file(failing_tests=[("t.T.test_x", "AssertionError\ntraceback")],
+                            coverage=gate.NewCoverage(lines=40, covered_lines=25, conditions=0, covered_conditions=0))
         self.assertIn("- `t.T.test_x`: AssertionError\n", text)
-        self.assertIn("## Coverage on new code\n\n62.5% of 40 new lines to cover.\n", text)
+        self.assertIn("## Coverage on new code\n\n62.5% of 40 new lines to cover; 15 lines are not covered.\n", text)
         self.assertIn("None.", text)
         self.assertNotIn("console", text)
         self.assertNotIn("Jenkins has no test report", text)
-        self.assertNotIn("## Failing tests", quality_report("OK", "intro", tests=None))
-        self.assertIn("## Failing tests\n\nNone.\n", quality_report("OK", "intro", tests=[]))
+        self.assertNotIn("## Failing tests", quality_file(failing_tests=None))
+        self.assertIn("## Failing tests\n\nNone.\n", quality_file(failing_tests=[]))
 
     def test_sections_left_out_by_default(self):
-        text = quality_report("OK", "intro")
+        text = quality_file()
         self.assertNotIn("## Failing tests", text)
         self.assertNotIn("## Coverage on new code", text)
         self.assertNotIn("## Suppressions added", text)
         self.assertNotIn("## Failed conditions", text)
 
     def test_conditions_and_suppressions_are_listed(self):
-        text = quality_report("ERROR", "intro", conditions=["`ruff` is not installed."],
-                              suppressions=[("f.py", 3, "x = 1  # noqa: F401")])
+        text = quality_file(conditions=["`ruff` is not installed."], suppressions=[("f.py", 3, "x = 1  # noqa: F401")])
         self.assertIn("## Failed conditions\n\n- `ruff` is not installed.\n", text)
         self.assertIn("## Suppressions added\n\n- `f.py:3` `x = 1  # noqa: F401`\n", text)
 
     def test_failing_tests_beyond_the_limit_are_counted(self):
         tests = [(f"t.T.test_{k}", "") for k in range(gate.QUALITY_ISSUE_LIMIT + 3)]
-        text = quality_report("ERROR", "intro", tests=tests)
+        text = quality_file(conditions=["c"], failing_tests=tests)
         self.assertIn("- `t.T.test_0`: failed\n", text)
         self.assertIn("- and 3 more.\n", text)
         self.assertNotIn(f"test_{gate.QUALITY_ISSUE_LIMIT}`", text)
 
+    def test_the_intro_names_rules_and_settings_only_when_not_the_tree_s_own(self):
+        self.assertIn("\n`gate.py` judged the working tree at `<head>` against the base `<base>`.\n", quality_file())
+        text = quality_file(rules_from="`main.toml`", settings_from="the defaults (there is no `gate.toml`)")
+        self.assertIn("against the base `<base>`, by the rules in `main.toml`, with the settings from the defaults "
+                      "(there is no `gate.toml`).\n", text)
+
     def test_build_config_edits_are_named(self):
         for only, other in (("pyproject.toml", "uv.lock"), ("uv.lock", "pyproject.toml")):
             with self.subTest(only=only):
-                text = quality_report("OK", "i", tests=[], edited=[only])
+                text = quality_file(failing_tests=[], edited_config=[only])
                 self.assertIn(f"The change edits `{only}`", text)
                 self.assertNotIn(f"The change edits `{other}`", text)
 
     def test_gate_config_edits_are_named(self):
-        text = quality_report("OK", "i", edited=["pyproject.toml", "uv.lock"])
+        text = quality_file(edited_config=["pyproject.toml", "uv.lock"])
         self.assertIn("The change edits `pyproject.toml`, which holds the gate's rules; the change was judged by "
                       "the edited rules.", text)
         self.assertIn("The change edits `uv.lock`, which pins the versions of the linters the gate ran.", text)
-        text = quality_report("OK", "i", edited=["pyproject.toml"], rules_from="`main`'s `pyproject.toml`")
+        text = quality_file(edited_config=["pyproject.toml"], rules_from="`main`'s `pyproject.toml`")
         self.assertIn("The gate took its rules from `main`'s `pyproject.toml`, so the edit did not change", text)
 
     def test_clippy_config_edits_are_named_together(self):
-        text = quality_report("OK", "i", edited=["uv.lock"], clippy_config=["clippy.toml", "ui/Cargo.toml"])
+        text = quality_file(edited_config=["uv.lock"], clippy_config=["clippy.toml", "ui/Cargo.toml"])
         self.assertIn("- The change edits `clippy.toml` and `ui/Cargo.toml`, which clippy takes its rules or its "
                       "toolchain from; it judged the change by the edited ones.\n", text)
 
-    # The whole file, for each gate word and each way quality_report words a section, held to its golden file
-    # (tests/golden.py), so that a change to its wording fails here and is reviewed as the golden file's diff. The
-    # intro, the conditions and the coverage sentence are judge_change's: TestGate's golden files pin those.
+    def test_json_lists_every_finding_and_test_whole(self):
+        limit = gate.QUALITY_ISSUE_LIMIT
+        doc = json.loads(report(conditions=["c"], issues=self.issues(limit + 2), to_weigh=[self.finding("t.py", 1)],
+                                failing_tests=[(f"t.T.test_{k}", "Error: 1\nline 2") for k in range(limit + 1)]).json())
+        self.assertEqual((len(doc["findings"]), doc["findings_total"]), (limit + 3, limit + 3))
+        self.assertEqual([f["fails"] for f in doc["findings"][-2:]], [True, False])
+        self.assertEqual(len(doc["failing_tests"]), limit + 1)
+        self.assertEqual(doc["failing_tests"][0], {"name": "t.T.test_0", "detail": "Error: 1\nline 2"})
 
-    def test_an_ok_file_with_nothing_to_answer_is_golden(self):
-        assert_golden("quality_report_ok", quality_report("OK", "The intro."))
+    def test_json_keeps_line_breaks_and_writes_bytes_that_are_not_utf8_as_escapes(self):
+        name = os.fsdecode(b"g\xff\rh.py")
+        doc = json.loads(report(conditions=["c"], issues=[{"path": name, "line": 2, "severity": "error",
+                                                           "rule": "ruff E1", "message": "a b"}]).json())
+        [finding] = doc["findings"]
+        self.assertEqual((finding["path"], finding["message"], finding["check"]), ("g\\xff\rh.py", "a b", "ruff"))
+        self.assertEqual(finding["fingerprint"], gate.finding_fingerprint("g\\xff\rh.py", "ruff E1", "a b"))
 
-    def test_an_ok_file_with_findings_to_weigh_is_golden(self):
-        text = quality_report("OK", "The intro.", tests=[], coverage="85.0% of 20 new lines to cover; 3 lines are "
-                              "not covered.", to_weigh=[self.finding("t.py", 3), self.finding("t.py", None),
-                                                        self.finding(None, None, "mutants budget")],
-                              edited=["pyproject.toml"], rules_from="`main`'s `pyproject.toml`")
-        assert_golden("quality_report_ok_to_weigh", text)
+    def test_the_fingerprint_is_the_engine_s(self):
+        # Cases and values from octoflow-ai's engine/tests/oracle/quality.json, which its finding_fingerprint
+        # (engine/src/quality.rs) is tested against: no ASCII digits, other digits kept, None and "" alike.
+        for path, rule, message, fingerprint in (
+                ("a.py", "ruff C901", "too complex (16 > 15)", "d0917b36716743cd"),
+                (None, "x", "y", "2081f4f26135019e"),
+                ("\u00e9/\u00fc.py", "r", "\u0663 and 3 and \u00b2", "d4b7b570d3ec0fc7"),
+                ("", "", "", "96a296d224f285c6"),
+                ("a\0b", "rule", "m", "62f3c27545353791")):
+            with self.subTest(path=path, rule=rule, message=message):
+                self.assertEqual(gate.finding_fingerprint(path, rule, message), fingerprint)
 
-    def test_an_error_file_with_every_section_is_golden(self):
-        text = quality_report(
-            "ERROR", "The intro.",
+    # The whole report, for each gate word and each way it words a section, held to its golden files (tests/golden.py),
+    # the quality file and quality.json, so that a change to either fails here and is reviewed as the golden file's
+    # diff. The conditions and the coverage figures are judge_change's: TestGate's golden files pin those.
+
+    def test_an_ok_report_with_nothing_to_answer_is_golden(self):
+        r = report()
+        assert_golden_report(self, "quality_report_ok", r.markdown(), r.json())
+
+    def test_an_ok_report_with_findings_to_weigh_is_golden(self):
+        r = report(failing_tests=[],
+                   coverage=gate.NewCoverage(lines=20, covered_lines=17, conditions=0, covered_conditions=0),
+                   to_weigh=[self.finding("t.py", 3), self.finding("t.py", None),
+                             self.finding(None, None, "mutants budget")],
+                   edited_config=["pyproject.toml"], rules_from="`main`'s `pyproject.toml`")
+        assert_golden_report(self, "quality_report_ok_to_weigh", r.markdown(), r.json())
+
+    def test_an_error_report_with_every_section_is_golden(self):
+        r = report(
             conditions=["2 findings on lines the change added; each is listed below.", "`ruff` is not installed."],
             issues=self.issues(2), to_weigh=[self.finding("t.py", 9)], elsewhere=3,
-            tests=[("t.T.test_x", "AssertionError: 3 != 2\ntraceback"), ("t.T.test_y", "")],
-            coverage="50.0% of 20 new lines to cover; 10 lines are not covered.",
+            failing_tests=[("t.T.test_x", "AssertionError: 3 != 2\ntraceback"), ("t.T.test_y", "")],
+            coverage=gate.NewCoverage(lines=20, covered_lines=10, conditions=4, covered_conditions=1,
+                                      unmeasured=(os.fsdecode(b"m\xff.py"),)),
             suppressions=[("f.py", 3, "x = 1  # noqa: F401"), ("g\rh.py", 1, "# noqa")],
-            edited=["pyproject.toml", "uv.lock"],
+            edited_config=["pyproject.toml", "uv.lock", "gate.toml", "Jenkinsfile"], settings_from="`main.toml`",
+            config_notes=[("Jenkinsfile", "The quality job reads it from `main`.")],
             clippy_config=[f"c{k}/Cargo.toml" for k in range(7)])
-        assert_golden("quality_report_error", text)
+        assert_golden_report(self, "quality_report_error", r.markdown(), r.json())
 
-    def test_an_error_file_whose_findings_to_weigh_are_cut_is_golden(self):
-        text = quality_report("ERROR", "The intro.", issues=self.issues(gate.QUALITY_ISSUE_LIMIT - 1),
-                              to_weigh=[self.finding("t.py", n) for n in range(1, 4)],
-                              clippy_config=["clippy.toml", "ui/Cargo.toml"])
-        assert_golden("quality_report_error_to_weigh_cut", text)
+    def test_an_error_report_whose_findings_to_weigh_are_cut_is_golden(self):
+        r = report(conditions=[f"{gate.QUALITY_ISSUE_LIMIT - 1} findings on lines the change added; each is listed below."],
+                   issues=self.issues(gate.QUALITY_ISSUE_LIMIT - 1),
+                   to_weigh=[self.finding("t.py", n) for n in range(1, 4)],
+                   clippy_config=["clippy.toml", "ui/Cargo.toml"])
+        assert_golden_report(self, "quality_report_error_to_weigh_cut", r.markdown(), r.json())
 
-    def test_an_error_file_over_the_limit_is_golden(self):
+    def test_an_error_report_over_the_limit_is_golden(self):
         limit = gate.QUALITY_ISSUE_LIMIT
-        text = quality_report("ERROR", "The intro.", issues=self.issues(limit + 2),
-                              to_weigh=[self.finding("t.py", 1), self.finding("t.py", 2)],
-                              tests=[(f"t.T.test_{k}", "") for k in range(limit + 1)])
-        assert_golden("quality_report_error_over_limit", text)
+        r = report(conditions=[f"{limit + 2} findings on lines the change added; each is listed below.",
+                               f"{limit + 1} tests fail; each is listed below."],
+                   issues=self.issues(limit + 2), to_weigh=[self.finding("t.py", 1), self.finding("t.py", 2)],
+                   failing_tests=[(f"t.T.test_{k}", "") for k in range(limit + 1)])
+        assert_golden_report(self, "quality_report_error_over_limit", r.markdown(), r.json())
 
 
 class TestGate(RepositoryTest):
@@ -423,7 +523,7 @@ class TestGate(RepositoryTest):
                 f.write(raw)
             self.git("add", name)
         status, _, err = self.gate("--out", "quality.md")
-        self.assertEqual((status, err), (0, "GATE: OK, in quality.md\n"))
+        self.assertEqual((status, err), (0, "GATE: OK, in quality.md and quality.json\n"))
 
     def test_a_carriage_return_in_an_added_line_does_not_end_it(self):
         with open(os.path.join(self.repo, "f.py"), "ab") as f:
@@ -575,9 +675,45 @@ class TestGate(RepositoryTest):
         self.add_lines(1)
         status, stdout, err = self.gate("--out", "quality.md")
         self.assertEqual((status, stdout), (0, ""))
-        self.assertEqual(err, "GATE: OK, in quality.md\n")
+        self.assertEqual(err, "GATE: OK, in quality.md and quality.json\n")
         with open(os.path.join(self.repo, "quality.md")) as f:
             self.assertTrue(f.read().startswith("GATE: OK\n"))
+        with open(os.path.join(self.repo, "quality.json")) as f:
+            self.assertEqual(json.load(f)["gate"], "OK")
+
+    def test_quality_json_goes_beside_out_or_where_json_names(self):
+        self.add_lines(1)
+        for out, json_out, written in (("a.md", None, ["a.md", "a.json"]), ("b", None, ["b", "b.json"]),
+                                       ("c.md", "data.json", ["c.md", "data.json"])):
+            with self.subTest(out=out, json_out=json_out):
+                args = ["--out", os.path.join(self.outside, out)]
+                args += ["--json", os.path.join(self.outside, json_out)] if json_out else []
+                status, stdout, _ = self.gate(*args)
+                self.assertEqual((status, stdout), (0, ""))
+                for name in written:
+                    self.assertTrue(os.path.isfile(os.path.join(self.outside, name)), name)
+        self.assertFalse(os.path.exists(os.path.join(self.outside, "c.json")))
+
+    def test_json_alone_leaves_the_quality_file_on_standard_output(self):
+        self.add_lines(1)
+        data = os.path.join(self.outside, "q.json")
+        status, stdout, err = self.gate("--json", data)
+        self.assertEqual((status, err), (0, f"GATE: OK, in {data}\n"))
+        self.assertTrue(stdout.startswith("GATE: OK\n"))
+        with open(data) as f:
+            self.assertEqual(json.load(f)["gate"], "OK")
+
+    def test_a_file_that_cannot_be_written_leaves_the_other_as_it_was(self):
+        self.add_lines(1)
+        out = os.path.join(self.outside, "quality.md")
+        with open(out, "w") as f:
+            f.write("old\n")
+        status, _, err = self.gate("--out", out, "--json", os.path.join(self.outside, "missing", "q.json"))
+        self.assertEqual(status, gate.EXIT_GATE_UNJUDGED)
+        self.assertIn("cannot write", err)
+        with open(out) as f:
+            self.assertEqual(f.read(), "old\n")
+        self.assertEqual([n for n in os.listdir(self.outside) if ".tmp." in n], [])
 
     def coverage(self, lines):
         """A Cobertura report of f.py: lines maps a line number to its hits, or to (hits, "covered/total" branches)."""
@@ -1071,9 +1207,11 @@ class TestGate(RepositoryTest):
         self.assertNotIn("`Jenkinsfile`", out)
 
     def test_no_rules_file_writes_nothing(self):
-        status, _, err = self.gate("--config", "missing/pyproject.toml")
+        out = os.path.join(self.outside, "quality.md")
+        status, _, err = self.gate("--config", "missing/pyproject.toml", "--out", out)
         self.assertEqual(status, gate.EXIT_GATE_UNJUDGED)
         self.assertIn("is not a file", err)
+        self.assertFalse(os.path.exists(out) or os.path.exists(os.path.join(self.outside, "quality.json")))
 
     def test_ctrl_c_writes_nothing_and_exits_interrupted(self):
         out = os.path.join(self.outside, "quality.md")
@@ -1085,29 +1223,48 @@ class TestGate(RepositoryTest):
         self.assertIn("interrupted", err)
         with open(out) as f:
             self.assertEqual(f.read(), "GATE: OK\n")
+        self.assertFalse(os.path.exists(os.path.join(self.outside, "quality.json")))
+
+    def test_ctrl_c_while_writing_leaves_both_files_as_they_were(self):
+        self.add_lines(1)
+        out = os.path.join(self.outside, "quality.md")
+        with open(out, "w") as f:
+            f.write("old\n")
+        with patch.object(gate.os, "replace", side_effect=KeyboardInterrupt):
+            status, _, _ = self.gate("--out", out)
+        self.assertEqual(status, gate.EXIT_INTERRUPTED)
+        with open(out) as f:
+            self.assertEqual(f.read(), "old\n")
+        self.assertEqual([n for n in os.listdir(self.outside) if n == "quality.json" or ".tmp." in n], [])
 
     # The whole quality file the gate writes, held to its golden file (tests/golden.py), so that judge_change's
     # sentences are pinned too: the intro, the conditions these changes meet (linter findings, a failing check,
     # failing tests, coverage) and the coverage section. TestQualityReport's golden files pin the rest of the layout.
 
     def golden_run(self, *args, base="HEAD"):
-        """gate's standard output for ARGS against base, with the base commit's sha written as <base> and HEAD's as
-        <head>, <head> where they are one, and test-integrity as the only check: the other checks run pytest or
-        mutmut, whose words are the host's."""
+        """The quality file and quality.json gate writes with `--out` for ARGS against base, with the base commit's
+        sha written as <base> and HEAD's as <head>, <head> where they are one, and test-integrity as the only check:
+        the other checks run pytest or mutmut, whose words are the host's."""
         self.checks(*(c for c in gate.gate_checks() if c.name == "test-integrity"))
         shas = {self.git("rev-parse", base).strip(): "<base>", self.git("rev-parse", "HEAD").strip(): "<head>"}
-        _, out, _ = self.gate(*args, base=base)
-        for sha, name in shas.items():
-            out = out.replace(sha, name)
-        return out
+        out = os.path.join(self.outside, "quality.md")
+        self.gate(*args, "--out", out, base=base)
+        written = []
+        for path in (out, os.path.join(self.outside, "quality.json")):
+            with open(path, encoding="utf-8", newline="") as f:
+                text = f.read()
+            for sha, name in shas.items():
+                text = text.replace(sha, name)
+            written.append(text)
+        return written
 
     def test_the_file_of_a_passing_change_is_golden(self):
         name = os.fsdecode(b"m\xff.py")
         self.put(name, "m = 1\n")
         self.git("add", name)
         self.add_lines(1)
-        out = self.golden_run("--tests", self.junit(), "--coverage", self.coverage({4: 1}))
-        assert_golden("gate_ok", out)
+        assert_golden_report(self, "gate_ok", *self.golden_run("--tests", self.junit(), "--coverage",
+                                                               self.coverage({4: 1})))
 
     def test_the_file_of_a_failing_change_is_golden(self):
         base = self.commit({"tests/test_f.py": "def test_one():\n    assert 1\n\n\ndef test_two():\n    assert 2\n",
@@ -1120,9 +1277,9 @@ class TestGate(RepositoryTest):
             f.write("import os  # noqa: F401\n")
         self.says("ruff", "f.py:2:1: F401 `os` imported but unused\n"
                           "f.py:4:7: B023 Function definition does not bind loop variable `x`\nFound 2 errors.\n")
-        out = self.golden_run("--tests", self.junit(("test_limit", "AssertionError: 3 != 2")),
-                              "--coverage", self.coverage({n: int(n < 14) for n in range(1, 24)}), base=base)
-        assert_golden("gate_error", out)
+        assert_golden_report(self, "gate_error", *self.golden_run(
+            "--tests", self.junit(("test_limit", "AssertionError: 3 != 2")),
+            "--coverage", self.coverage({n: int(n < 14) for n in range(1, 24)}), base=base))
 
 
 class TestClippy(RepositoryTest):
@@ -1469,15 +1626,15 @@ class TestRustFiles(RepositoryTest):
             seen.append(change.rust_syntax)
             return change.rust_files[1]
         checks = (gate.GateCheck("reads-rust", fails=True, find=reads_rust),)
-        text = gate.judge_change(self.repo, "HEAD", checks, rust_syntax=helper)
+        text = gate.judge_change(self.repo, "HEAD", checks, rust_syntax=helper).markdown()
         self.assertEqual(seen, [helper])
         self.assertIn("GATE: OK\n", text)
-        text = gate.judge_change(self.repo, "HEAD", checks)
+        text = gate.judge_change(self.repo, "HEAD", checks).markdown()
         self.assertIn("1. The change as a whole: error reads-rust not-run: `gate.py --rust-syntax` was not given, so "
                       "the check judged none of the change's Rust.\n", text)
 
     def test_rust_syntax_names_the_helper_from_the_current_directory(self):
-        with patch.object(gate, "judge_change", return_value="GATE: OK\n") as judge, \
+        with patch.object(gate, "judge_change", return_value=gate.QualityReport(head="h", base="b")) as judge, \
                 contextlib.redirect_stdout(io.StringIO()), contextlib.chdir(self.outside):
             self.assertEqual(gate.main(["--base", "HEAD", "--rust-syntax", "bin/gate-rust"]), 0)
             self.assertEqual(gate.main(["--base", "HEAD"]), 0)

@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/DavidSiegl/octoflow-gate/blob/main/schema/quality-v1.json",
+  "title": "quality.json",
+  "description": "The gate's report on one change, as data: what gate.py writes beside the quality file (`--out`) or where `--json` names. Its schema_version is raised on any change a reader could notice; a new optional field does not raise it, so a reader ignores fields it does not know. Strings hold the text as the gate read it, line breaks included, but for each byte that is not UTF-8, written as the four characters `\\xNN`.",
+  "type": "object",
+  "required": ["schema_version", "gate", "gate_version", "base", "head", "failed_conditions", "findings",
+               "findings_total", "failing_tests", "coverage", "suppressions", "build_config"],
+  "properties": {
+    "schema_version": {
+      "description": "The version of this format; 1 for this schema.",
+      "const": 1
+    },
+    "gate": {
+      "description": "ERROR when any condition failed, else OK: the word on the quality file's first line.",
+      "enum": ["OK", "ERROR"]
+    },
+    "gate_version": {
+      "description": "The version of the gate.py that wrote the report, as its release names it, such as 0.3.0.",
+      "type": "string"
+    },
+    "base": {
+      "description": "The full sha of the commit the change is measured from.",
+      "type": "string"
+    },
+    "head": {
+      "description": "The full sha of HEAD in the work tree whose working tree, with its uncommitted edits, was judged.",
+      "type": "string"
+    },
+    "failed_conditions": {
+      "description": "Each condition that failed the gate, a sentence as the quality file words it; empty when the gate is OK.",
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "findings": {
+      "description": "Every finding, those that fail the gate first, each group in the quality file's order. Unlike the quality file, no limit applies.",
+      "type": "array",
+      "items": {"$ref": "#/$defs/finding"}
+    },
+    "findings_total": {
+      "description": "How many findings there are: the length of findings, which the quality file lists only up to its limit of 50.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "failing_tests": {
+      "description": "The failing tests of every test report the gate was given; null when it was given none.",
+      "type": ["array", "null"],
+      "items": {
+        "type": "object",
+        "required": ["name", "detail"],
+        "properties": {
+          "name": {"description": "The test's name as its report gives it.", "type": "string"},
+          "detail": {"description": "The whole of the failure's message and text, empty when the report gives none.", "type": "string"}
+        }
+      }
+    },
+    "coverage": {
+      "description": "Coverage of the lines the change added; null when the gate was given no coverage report.",
+      "type": ["object", "null"],
+      "required": ["lines", "covered_lines", "conditions", "covered_conditions", "percent", "unmeasured"],
+      "properties": {
+        "lines": {"description": "Added lines any coverage report can cover.", "type": "integer", "minimum": 0},
+        "covered_lines": {"description": "Those of them covered.", "type": "integer", "minimum": 0},
+        "conditions": {"description": "Branch outcomes on those lines.", "type": "integer", "minimum": 0},
+        "covered_conditions": {"description": "Those of them taken.", "type": "integer", "minimum": 0},
+        "percent": {
+          "description": "(covered_lines + covered_conditions) / (lines + conditions), in percent, unrounded; 100 with nothing to cover.",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "unmeasured": {
+          "description": "Changed Python files whose names coverage.py cannot record, so that the counts leave their lines out.",
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    },
+    "suppressions": {
+      "description": "Each lint suppression the change added; listed for a reviewer, not counted against the change.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "line", "text"],
+        "properties": {
+          "path": {"type": "string"},
+          "line": {"type": "integer", "minimum": 1},
+          "text": {"description": "The line that holds it.", "type": "string"}
+        }
+      }
+    },
+    "build_config": {
+      "description": "Each edit the change makes to a file that configures how the gate judges it, as the quality file's Build configuration section words it.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["files", "text"],
+        "properties": {
+          "files": {
+            "description": "Every file the item is about, paths from the tree's top.",
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1
+          },
+          "text": {
+            "description": "What the edit means for how the change was judged, in sentences; it may name only the first few files.",
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "finding": {
+      "type": "object",
+      "required": ["path", "line", "severity", "rule", "check", "message", "fails", "fingerprint"],
+      "properties": {
+        "path": {
+          "description": "The file, from the tree's top; null for a finding about the change as a whole.",
+          "type": ["string", "null"]
+        },
+        "line": {
+          "description": "The line, from 1; null for a finding about the whole file or the whole change.",
+          "type": ["integer", "null"],
+          "minimum": 1
+        },
+        "severity": {
+          "description": "The severity as the linter or the check words it, such as error or warning.",
+          "type": "string"
+        },
+        "rule": {
+          "description": "The linter or check, a space, and its own rule, such as `ruff F401` or `test-integrity skip`.",
+          "type": "string"
+        },
+        "check": {
+          "description": "The rule's first word: the linter or check that raised the finding.",
+          "type": "string"
+        },
+        "message": {"type": "string"},
+        "fails": {
+          "description": "true when the finding fails the gate; false when it is only to be weighed.",
+          "type": "boolean"
+        },
+        "fingerprint": {
+          "description": "16 hex digits naming the finding across runs: the start of the SHA-256 of path (empty for null), rule and message with its ASCII digits removed, joined by NUL characters, in UTF-8. A finding that moves to another line keeps it.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{16}$"
+        }
+      }
+    }
+  }
+}

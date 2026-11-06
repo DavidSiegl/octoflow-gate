@@ -912,14 +912,26 @@ class TestGate(RepositoryTest):
         self.assertIn("- 1 tests fail; each is listed below.\n", out)
         self.assertIn("## Failing tests\n\n- `t.T.test_x`: boom\n", out)
         self.assertIn("## Coverage on new code\n\n0.0% of 1 new lines to cover", out)
+        self.assertNotIn("The test command", out)
 
-    def test_a_test_command_that_cannot_start_is_a_failed_condition(self):
+    def test_a_test_command_that_cannot_start_is_a_failed_condition_and_its_reports_are_not_read(self):
         self.commit({"gate.toml": '[[test]]\nname = "unit"\ncommand = ["no-such-test-runner"]\n'
-                                  'junit = ["junit.xml"]\n'}, "test command")
+                                  'junit = ["junit.xml"]\ncoverage = ["coverage.xml"]\n'}, "test command")
         self.add_lines(1)
         status, out, _ = self.gate()
-        self.assertEqual(status, 1)
+        self.assertEqual(status, 1, out)
         self.assertIn("- The test command `unit` could not start: ", out)
+        self.assertNotIn(gate.FAILING_TESTS, out)
+        self.assertNotIn("## Coverage on new code", out)
+
+    def test_a_test_command_that_leaves_its_coverage_report_missing_is_a_failed_condition(self):
+        self.commit_test_command("open('junit.xml', 'w').write('<testsuites/>')\n", coverage=("coverage.xml",))
+        self.add_lines(1)
+        status, out, _ = self.gate()
+        self.assertEqual(status, 1, out)
+        self.assertIn("- The test command `unit` wrote no `coverage.xml`, which gate.toml names as its report, so its "
+                      "tests were not judged.\n", out)
+        self.assertNotIn(gate.FAILING_TESTS, out)
 
     def test_a_test_command_that_fails_with_no_failing_test_is_a_failed_condition(self):
         self.commit_test_command("open('junit.xml', 'w').write('<testsuites/>')\nsys.exit(2)\n")
@@ -968,12 +980,15 @@ class TestGate(RepositoryTest):
         self.add_lines(1)
 
         real_wait = gate.subprocess.Popen.wait
+        interrupted = []
 
+        # Ctrl-C arrives once, during the gate's first wait on the command once it is running.
         def interrupted_wait(proc, timeout=None):
-            if proc.args[-1] != os.path.join(self.outside, "run_tests.py"):
+            if interrupted or proc.args[-1] != os.path.join(self.outside, "run_tests.py"):
                 return real_wait(proc, timeout)
             while not (os.path.exists(pid_file) and os.path.getsize(pid_file)):
                 time.sleep(0.01)
+            interrupted.append(proc)
             raise KeyboardInterrupt
 
         with patch.object(gate.subprocess.Popen, "wait", interrupted_wait):
@@ -981,10 +996,9 @@ class TestGate(RepositoryTest):
         self.assertEqual((status, stdout), (gate.EXIT_INTERRUPTED, ""))
         with open(pid_file) as f:
             pid = int(f.read())
-        # The command is this process's child, left for it to reap: SIGKILL ended it, not its minute's sleep.
-        _, how = os.waitpid(pid, 0)
-        self.assertEqual((os.WIFSIGNALED(how), os.WTERMSIG(how) if os.WIFSIGNALED(how) else None),
-                         (True, signal.SIGKILL))
+        # Killed and reaped by the gate, not still in its minute's sleep, nor a zombie left for a later Popen to reap.
+        with self.assertRaises(ProcessLookupError):
+            os.kill(pid, 0)
 
     def test_added_suppressions_are_listed_not_failed(self):
         with open(os.path.join(self.repo, "f.py"), "a") as f:
@@ -1216,6 +1230,9 @@ class TestGate(RepositoryTest):
                           ('[[test]]\nname = "t"\ncommand = []\n', "`test[0].command`"),
                           ('[[test]]\ncommand = ["pytest"]\n', "`test[0].name`"),
                           ('[[test]]\nname = "t"\n', "`test[0].command`"),
+                          ('[[test]]\nname = "t"\ncommand = ["pytest"]\njunit = ["/tmp/j.xml"]\n', "`test[0].junit`"),
+                          ('[[test]]\nname = "t"\ncommand = ["pytest"]\ncoverage = ["a/../../c.xml"]\n',
+                           "`test[0].coverage`"),
                           ('[test]\nname = "t"\n', "`test`")):
             with self.subTest(key):
                 self.put("gate.toml", text)

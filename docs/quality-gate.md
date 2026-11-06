@@ -730,7 +730,7 @@ trailing `/**` for all below.
 | `linters.<name>` | the table above | the globs of the files that linter reads, for `ruff`, `mypy`, `pymarkdown`, `shellcheck`, `actionlint` or `clippy`; `[]` runs it on none. Clippy lints the workspaces of the `Cargo.toml` files among its files, so its globs must take those in |
 | `budgets.mutation` | 600 | seconds, as `--mutation-budget`, which replaces it |
 | `budgets.base-run` | 120 | seconds, as `--base-run-budget`, which replaces it |
-| `[[test]]` | none | the commands that run the tests: `name`, `command` (an argv list), `junit` and `coverage` (the reports it writes). The gate runs them, as [running the tests](#running-the-tests) says |
+| `[[test]]` | none | the commands that run the tests: `name`, `command` (an argv list), `junit` and `coverage` (the reports it writes, paths inside the tree from its top level). The gate runs them, as [running the tests](#running-the-tests) says |
 
 The linters' rules stay in their own files, as below. A CI that passes `main`'s `pyproject.toml` with `--config`, and
 `main`'s `gate.toml` beside it when `main` has one, judges a change by the rules and the settings of `main`, so a
@@ -748,7 +748,7 @@ standard error, never into the quality file. No time limit applies to it, and it
 budget. Before a command runs, the reports it names are deleted, so a report an earlier run left is never read.
 
 A failing test fails the gate as one of the failing tests the quality file lists. A command whose tests could not be
-judged is a failed condition of its own, naming the command, when it
+judged is a failed condition of its own, naming the command, and none of its reports is read, when it
 
 - could not start, such as a program not on `PATH`;
 - left a report it names missing, whatever its exit status: a run that exits 0 and writes no JUnit report would

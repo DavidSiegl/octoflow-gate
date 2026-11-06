@@ -8,6 +8,13 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
 
 ## Open issues
 
+- **This repository's CI does not run its own `[[test]]` commands yet.** As cross-review 05 put it (R1-2,
+  2026-11-06): "`scripts/gate` … still runs both suites itself and calls gate.py with `--tests … --coverage …`.
+  Either flag replaces every `[[test]]` entry, so the new entries in `gate.toml` never run in CI." Left for a
+  follow-up to gate-standalone/05 because a build is judged by `main`'s `gate.py`: until one that runs `[[test]]` is
+  on `main`, dropping the flags would judge no tests at all. Closes with `scripts/gate` no longer running cargo-nextest
+  and pytest nor passing `--tests`/`--coverage` (keeping `--test-contexts`, `COVERAGE_FILE` and the
+  `HYPOTHESIS_PROFILE` the commands inherit), and the Jenkinsfile publishing the JUnit reports the commands write.
 - **A `[[test]]` command cannot set its environment.** `TestCommand` in `gate.py` holds an argv alone, run with the
   gate's own environment (`tool_env`), so a command that needs a variable set takes it from whoever runs the gate.
   octoflow-ai's Rust test run sets `E2E_ENGINE` to an absolute path in the workspace and wraps cargo in

@@ -809,7 +809,7 @@ class TestCommand:
     __test__ = False  # not a test class, to pytest
     name: str  # what findings about the command call it
     command: tuple[str, ...]  # the argv, run in the tree's top level; never through a shell
-    junit: tuple[str, ...] = ()  # the JUnit reports it writes, paths from the tree's top level
+    junit: tuple[str, ...] = ()  # the JUnit reports it writes, paths inside the tree from its top level
     coverage: tuple[str, ...] = ()  # the Cobertura reports it writes, likewise
 
 
@@ -966,10 +966,15 @@ def _test_command_settings(value: object, table: str, path: str) -> dict[str, An
             raise GateError(f"{path}: `{key}.name` must be a non-empty string")
         if "command" not in test:
             raise GateError(f"{path}: `{key}.command` is missing")
+        reports = {r: _settings_strings(test.get(r, []), f"{key}.{r}", path) for r in ("junit", "coverage")}
+        for r, paths in reports.items():
+            # The gate removes each before the command runs, so one outside the tree would be a file of anyone's.
+            outside = [p for p in paths if os.path.isabs(p) or os.path.normpath(p).split(os.sep)[0] == os.pardir]
+            if outside:
+                raise GateError(f"{path}: `{key}.{r}` must name paths inside the tree, from its top level, "
+                                f"not {outside[0]!r}")
         commands.append(TestCommand(test["name"], _settings_strings(test["command"], f"{key}.command", path,
-                                                                    empty=False),
-                                    *(_settings_strings(test.get(r, []), f"{key}.{r}", path)
-                                      for r in ("junit", "coverage"))))
+                                                                    empty=False), reports["junit"], reports["coverage"]))
     return {"test_commands": tuple(commands)}
 
 
@@ -1220,7 +1225,7 @@ def judge_change(cwd: str, base: str, checks: tuple[GateCheck, ...], *, rules: s
 def _test_results(root: str, commands: Sequence[TestCommand], tests: Sequence[str],
                   coverage: Sequence[str]) -> tuple[list[tuple[str, str]] | None, list[str], list[str]]:
     """What the gate judges of the tests of the work tree at root: the failing tests, as failing_tests gives them,
-    None when there are no test reports to read; the Cobertura reports to read, absolute paths; and the failed
+    None when no JUnit report was read; the Cobertura reports to read, absolute paths; and the failed
     conditions about commands, gate.toml's `[[test]]` entries, whose tests could not be judged.
 
     tests and coverage, JUnit and Cobertura reports given on the command line, paths absolute or relative to the
@@ -1234,12 +1239,13 @@ def _test_results(root: str, commands: Sequence[TestCommand], tests: Sequence[st
     return run_test_commands(root, commands)
 
 
-def run_test_commands(root: str, commands: Sequence[TestCommand]) -> tuple[list[tuple[str, str]], list[str],
+def run_test_commands(root: str, commands: Sequence[TestCommand]) -> tuple[list[tuple[str, str]] | None, list[str],
                                                                            list[str]]:
     """Run each of commands, in order, at the top level of the work tree at root, with tool_env's environment and no
-    input, its output going to the gate's standard error; and give back what their reports say: the failing tests of
-    their JUnit reports, the paths of their Cobertura reports, and a failed condition for each command whose tests
-    could not be judged.
+    input, its output going to the gate's standard error; and give back what the reports of those whose tests could
+    be judged say: the failing tests of their JUnit reports, as failing_tests gives them, None when none of them
+    names a JUnit report; the absolute paths of their Cobertura reports; and a failed condition for each command whose
+    tests could not be judged, whose reports are not read.
 
     Before a command runs, the reports it names are removed, so that one an earlier run left is never read. Its
     tests could not be judged when it cannot start, when it leaves a report it names missing, or a JUnit report that
@@ -1251,7 +1257,7 @@ def run_test_commands(root: str, commands: Sequence[TestCommand]) -> tuple[list[
     Raises GateError when a report cannot be removed. On KeyboardInterrupt, from Ctrl-C, the running command's
     process group is killed before it comes through.
     """
-    failing: list[tuple[str, str]] = []
+    failing: list[tuple[str, str]] | None = None
     coverage: list[str] = []
     problems: list[str] = []
     for command in commands:
@@ -1262,39 +1268,45 @@ def run_test_commands(root: str, commands: Sequence[TestCommand]) -> tuple[list[
                 pass
             except OSError as e:
                 raise GateError(f"cannot remove {report}, which the test command {command.name} writes: {e}") from e
-        problem = _run_test_command(root, command, failing)
+        found, problem = _run_test_command(root, command)
         if problem:
             problems.append(f"The test command `{command.name}` {problem}, so its tests were not judged.")
+            continue
+        if command.junit:
+            failing = [*(failing or []), *found]
         coverage += [os.path.join(root, report) for report in command.coverage]
     return failing, coverage, problems
 
 
-def _run_test_command(root: str, command: TestCommand, failing: list[tuple[str, str]]) -> str | None:
-    """Run command as run_test_commands says, appending to failing the failing tests of its JUnit reports; and why
-    its tests could not be judged, a clause after "The test command `name`", or None when they could."""
+def _run_test_command(root: str, command: TestCommand) -> tuple[list[tuple[str, str]], str | None]:
+    """Run command as run_test_commands says, and give back the failing tests of its JUnit reports, and why its tests
+    could not be judged, a clause after "The test command `name`", or None when they could; the tests are [] then."""
     try:
-        # The argv is the judge's gate.toml's, run as a list; no shell reads it.
+        # The argv is from the gate.toml the settings came from (_settings_for), the judged tree's own unless
+        # --config names another; run as a list, no shell reads it.
         proc = subprocess.Popen(command.command, cwd=root, env=tool_env(), stdin=subprocess.DEVNULL,  # noqa: S603
                                 stdout=2, stderr=2, start_new_session=True)
     except OSError as e:
-        return f"could not start: {e.strerror or e}"
+        return [], f"could not start: {e.strerror or e}"
     try:
         returncode = proc.wait()
     finally:
         _kill_group(proc)
+        # Reaped here, so that a command killed by Ctrl-C is not left a zombie for a later Popen to reap.
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            proc.wait(timeout=TOOL_KILL_WAIT)
     for report in (*command.junit, *command.coverage):
         if not os.path.isfile(os.path.join(root, report)):
-            return f"wrote no `{report}`, which gate.toml names as its report"
+            return [], f"wrote no `{report}`, which gate.toml names as its report"
     found = []
     for report in command.junit:
         try:
             found += failing_tests(os.path.join(root, report))
         except GateError:
-            return f"left `{report}`, which gate.toml names as its report, unreadable as JUnit"
-    failing += found
+            return [], f"left `{report}`, which gate.toml names as its report, unreadable as JUnit"
     if returncode != 0 and not found:
-        return f"exited {returncode}, but its JUnit reports list no failing test"
-    return None
+        return [], f"exited {returncode}, but its JUnit reports list no failing test"
+    return found, None
 
 
 def _settings_for(root: str, rules_path: str, settings: str | None) -> tuple[GateSettings, str | None]:

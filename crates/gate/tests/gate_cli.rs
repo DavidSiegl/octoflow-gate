@@ -166,3 +166,27 @@ fn a_change_it_cannot_judge_writes_nothing_and_exits_2() {
     assert_eq!(done.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&done.stderr).contains("gate: error: unrecognized arguments: --bogus"));
 }
+
+#[test]
+fn ctrl_c_writes_nothing_and_exits_130() {
+    let repo = test_gate_repo();
+    repo.put("gate.toml", b"[[test]]\nname = \"slow\"\ncommand = [\"sh\", \"-c\", \"touch started; sleep 30\"]\n\
+                           junit = [\"results.xml\"]\n");
+    let out = repo.outside.join("quality.md");
+    // The gate leaves SIGINT ignored when it starts with it ignored, as a test run under Jenkins does; GNU env's
+    // --default-signal gives it the default for this run whatever the test runner had.
+    let mut gate = Command::new("env").current_dir(&repo.repo)
+        .args(["--default-signal=INT", env!("CARGO_BIN_EXE_gate"), "--base", "HEAD", "--out"]).arg(&out)
+        .spawn().unwrap();
+    let start = std::time::Instant::now();
+    while !repo.repo.join("started").exists() {
+        assert!(start.elapsed() < std::time::Duration::from_secs(30), "the test command never started");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let sent = Command::new("kill").args(["-INT", &gate.id().to_string()]).status().unwrap();
+    assert!(sent.success());
+    let done = gate.wait().unwrap();
+    assert_eq!(done.code(), Some(130));
+    assert!(start.elapsed() < std::time::Duration::from_secs(20), "{:?}", start.elapsed());
+    assert!(!out.exists() && !repo.outside.join("quality.json").exists());
+}

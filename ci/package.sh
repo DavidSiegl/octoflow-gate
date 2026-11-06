@@ -7,9 +7,9 @@
 # <version> is HEAD's pyproject.toml's. Every file, and the source the gate-rust helper is built from, comes from
 # HEAD's commit, never the working tree, so a tarball is the commit's whatever the checkout holds besides; the helper
 # is built for the machine that runs this, which on Jenkins is the agent. Members are sorted, owned by root, dated
-# with HEAD's commit time, and readable by all, writable by the owner alone. Exits non-zero, cargo or tar saying why,
-# when the helper does not build or HEAD lacks a file. Jenkins's Package stage runs it on every build, and
-# ci/smoke-release.py then checks the tarball before the Release stage publishes it.
+# with HEAD's commit time, and readable by all, writable by the owner alone. Exits non-zero, the failing tool saying
+# why, when the helper does not build, HEAD lacks a file or its version cannot be read. Jenkins's Package stage runs
+# it on every build, and ci/smoke-release.py then checks the tarball before the Release stage publishes it.
 set -euo pipefail
 
 [ $# -eq 1 ] || { echo "usage: package.sh <dir>" >&2; exit 2; }

@@ -14,9 +14,10 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   found' from `--rust-syntax`, and every Rust check is not run." The README says so. Closes with the helper built for
   `x86_64-unknown-linux-musl`, statically linked, once the agent image's rustup has that target (a build cannot add
   it: the rustup home is root's).
-- **gate.py trusts the structure of the helper's documents.** `_rust_documents` checks a document's `schema` and that
-  `fns` is a list, nothing more; a helper whose documents lack a field crashes the gate with a `KeyError` (`'mods'` in
-  `_rust_test_spans`) instead of a condition naming the helper. Only `gate-rust/tests/schema.rs` checks the fields, on
+- **gate.py trusts the structure of the helper's documents.** `_rust_documents` checks that each line is JSON with the
+  expected `schema`, and the number of documents, nothing more; a helper whose documents lack a field crashes the gate
+  with a `KeyError` (`'mods'` in `_rust_test_spans`, `'fns'` wherever the functions are scored) instead of a
+  condition naming the helper. Only `gate-rust/tests/schema.rs` checks the fields, on
   the helper's side. Found by cross-review 07 round 2 (2026-11-06). Closes with gate.py validating each document
   against the helper's schema, or turning a missing field into a failed condition.
 - **A `[[test]]` command cannot set its environment.** `TestCommand` in `gate.py` holds an argv alone, run with the

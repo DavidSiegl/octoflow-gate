@@ -13,7 +13,7 @@ Unpacked into an empty directory, the release must:
 The helper's output is checked only as gate.py reads it; its structure field by field is gate-rust/tests/schema.rs's,
 run on the same source by the build's Gate stage. Exits 0 when all hold; otherwise names the first that does not on
 standard error and exits 1. It runs gate.py with the Python that runs it, and needs jsonschema, a dev dependency,
-and git.
+git, and cargo with clippy on PATH: without clippy the gate raises a condition for it, which fails the check.
 """
 
 import json
@@ -121,12 +121,12 @@ def check_fixture_project(release: Path, project: Path) -> None:
     if found != [EXPECTED_FINDING]:
         raise SmokeFailure(f"the fixture project's findings are {json.dumps(found)}, not [{json.dumps(EXPECTED_FINDING)}]"
                            f": the helper's output was not read as it should be")
-    if report["failed_conditions"] != [EXPECTED_CONDITION]:
-        raise SmokeFailure(f"the fixture project's failed conditions are {json.dumps(report['failed_conditions'])}, "
-                           f"not [{json.dumps(EXPECTED_CONDITION)}]")
     if report["failing_tests"] != []:
         raise SmokeFailure(f"the fixture project's test report was not read: failing_tests is "
                            f"{json.dumps(report['failing_tests'])}, not []")
+    if report["failed_conditions"] != [EXPECTED_CONDITION]:
+        raise SmokeFailure(f"the fixture project's failed conditions are {json.dumps(report['failed_conditions'])}, "
+                           f"not [{json.dumps(EXPECTED_CONDITION)}]")
 
 
 def smoke(tarball: Path) -> None:

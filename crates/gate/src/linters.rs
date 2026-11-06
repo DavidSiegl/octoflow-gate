@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
-use std::path::{Component, Path, PathBuf};
+use std::path::Path;
 use std::sync::LazyLock;
 use std::time::Duration;
 
@@ -13,6 +13,7 @@ use regex::bytes::Regex;
 
 use crate::glob::Globs;
 use crate::judge::under_mutmut_state;
+use crate::paths::{normpath, rel_path};
 use crate::process;
 use crate::report::Finding;
 use crate::settings::Settings;
@@ -97,7 +98,7 @@ impl Tracked {
     /// The tracked file that `shown`, a path a linter printed, absolute or relative to `root`, names; None when it
     /// names none.
     fn name_of(&self, shown: &[u8], root: &Path) -> Option<OsString> {
-        let relative = lexical_rel_path(&root.join(OsStr::from_bytes(shown)), root).into_os_string();
+        let relative = rel_path(&normpath(&root.join(OsStr::from_bytes(shown))), &normpath(root)).into_os_string();
         if self.names.contains(&relative) {
             return Some(relative);
         }
@@ -106,23 +107,6 @@ impl Tracked {
     }
 }
 
-/// `path` relative to `start`, both normalized lexically first, as Python's `os.path.relpath` gives it.
-fn lexical_rel_path(path: &Path, start: &Path) -> PathBuf {
-    let normal = |p: &Path| -> PathBuf {
-        let mut out = PathBuf::from("/");
-        for part in p.components() {
-            match part {
-                Component::ParentDir => {
-                    out.pop();
-                }
-                Component::Normal(name) => out.push(name),
-                _ => {}
-            }
-        }
-        out
-    };
-    crate::paths::rel_path(&normal(path), &normal(start))
-}
 
 impl Linter {
     /// Whether the linter reads the file at `path`, by the globs gate.toml gives it, else its own.

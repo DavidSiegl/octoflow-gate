@@ -121,7 +121,7 @@ pub fn judge_change(cwd: &Path, base: &str, given: &Given) -> Result<QualityRepo
     }
     let base_sha = text::lossless(&first_line(done.stdout));
     let rules = match &given.rules {
-        Some(rules) => std::path::absolute(rules).unwrap_or_else(|_| rules.clone()),
+        Some(rules) => crate::paths::abs_path(rules),
         None => root.join("pyproject.toml"),
     };
     if !rules.is_file() {

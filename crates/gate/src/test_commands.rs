@@ -33,7 +33,7 @@ pub fn test_results(
     coverage: &[PathBuf],
 ) -> Result<TestResults, Unjudged> {
     if !tests.is_empty() || !coverage.is_empty() || commands.is_empty() {
-        let absolute = |p: &PathBuf| std::path::absolute(p).unwrap_or_else(|_| p.clone());
+        let absolute = |p: &PathBuf| crate::paths::abs_path(p);
         let failing = if tests.is_empty() {
             None
         } else {

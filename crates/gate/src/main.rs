@@ -359,6 +359,13 @@ mod tests {
         assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
         assert_eq!(std::fs::metadata(&target).unwrap().permissions().mode() & 0o777, 0o640);
         assert_eq!(std::fs::read_to_string(&other).unwrap(), "{}");
+        let dangling = dir.join("dangling.md");
+        symlink("unwritten.md", &dangling).unwrap();
+        write_files(&[(&dangling, "first".into())]).unwrap();
+        assert!(std::fs::symlink_metadata(&dangling).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_to_string(dir.join("unwritten.md")).unwrap(), "first");
+        std::fs::remove_file(&dangling).unwrap();
+        std::fs::remove_file(dir.join("unwritten.md")).unwrap();
         let missing = dir.join("no/such/dir/q.md");
         let err = write_files(&[(&other, "changed".into()), (&missing, "x".into())]).unwrap_err();
         assert!(err.0.starts_with(&format!("cannot write {}: ", missing.display())), "{}", err.0);

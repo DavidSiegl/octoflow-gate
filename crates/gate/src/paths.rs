@@ -1,42 +1,96 @@
 //! Paths as Python's os.path resolves them, which gate.py's judgement of paths rests on: `realpath`, which never
-//! fails, and `relpath`.
+//! fails, `abspath`, `normpath` and `relpath`.
 
+use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 
-/// `path`, made absolute from the current directory, with every symbolic link resolved as far as the path exists and
-/// `.` and `..` taken out, as Python's `os.path.realpath` gives it: the part past the first missing component is
-/// appended as written, lexically normalized.
+/// `path`, made absolute from the current directory, with every symbolic link resolved and `.` and `..` taken out,
+/// as Python's `os.path.realpath` gives it: a link is followed whether or not its target exists, a component that
+/// is missing or no link is kept as written, and a link that leads back to itself is kept as written too.
 pub fn real_path(path: &Path) -> PathBuf {
-    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    /// What is left to resolve, last first: a name to append, or the mark that every name a link's target put on
+    /// the stack has been resolved, so that the resolved path so far is what the link resolves to.
+    enum Step {
+        Name(OsString),
+        LinkDone(PathBuf),
+    }
+    let names = |path: &Path| -> Vec<Step> {
+        let parts = path.components().filter_map(|part| match part {
+            Component::Normal(name) => Some(Step::Name(name.to_os_string())),
+            Component::ParentDir => Some(Step::Name("..".into())),
+            _ => None,
+        });
+        parts.collect::<Vec<_>>().into_iter().rev().collect()
+    };
+    let mut rest = names(&abs_path(path));
     let mut out = PathBuf::from("/");
-    let mut parts = absolute.components().peekable();
-    while let Some(part) = parts.next() {
-        match part {
-            Component::RootDir | Component::Prefix(_) | Component::CurDir => {}
-            Component::ParentDir => {
+    // What each link met so far resolves to; None while it is being resolved, so that meeting it again is a loop.
+    let mut links: HashMap<PathBuf, Option<PathBuf>> = HashMap::new();
+    while let Some(step) = rest.pop() {
+        let name = match step {
+            Step::LinkDone(link) => {
+                links.insert(link, Some(out.clone()));
+                continue;
+            }
+            Step::Name(name) if name == ".." => {
                 out.pop();
+                continue;
             }
-            Component::Normal(name) => {
-                let next = out.join(name);
-                match std::fs::canonicalize(&next) {
-                    Ok(resolved) => out = resolved,
-                    Err(_) => {
-                        out = next;
-                        for rest in parts.by_ref() {
-                            match rest {
-                                Component::ParentDir => {
-                                    out.pop();
-                                }
-                                Component::Normal(name) => out.push(name),
-                                _ => {}
-                            }
-                        }
-                    }
-                }
-            }
+            Step::Name(name) => name,
+        };
+        let next = out.join(&name);
+        if !std::fs::symlink_metadata(&next).is_ok_and(|m| m.file_type().is_symlink()) {
+            out = next;
+            continue;
         }
+        if let Some(resolved) = links.get(&next) {
+            out = resolved.clone().unwrap_or(next);
+            continue;
+        }
+        let Ok(target) = std::fs::read_link(&next) else {
+            out = next;
+            continue;
+        };
+        if target.is_absolute() {
+            out = PathBuf::from("/");
+        }
+        links.insert(next.clone(), None);
+        rest.push(Step::LinkDone(next));
+        rest.extend(names(&target));
     }
     out
+}
+
+/// `path` made absolute from the current directory and normalized as [`normpath`] does, as Python's
+/// `os.path.abspath` gives it: no link is resolved, so `..` after a link climbs out of the link's name, not its
+/// target. `path` as written, normalized, when the current directory cannot be read.
+pub fn abs_path(path: &Path) -> PathBuf {
+    normpath(&std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()))
+}
+
+/// `path` with `.` and empty components taken out and each `..` cancelling the name before it, as Python's
+/// `os.path.normpath` gives it, without looking at the file system: `..` at the root of an absolute path is dropped,
+/// and at the start of a relative one kept. `.` when nothing is left.
+pub fn normpath(path: &Path) -> PathBuf {
+    let mut out: Vec<Component> = vec![];
+    for part in path.components() {
+        match part {
+            Component::CurDir => {}
+            Component::ParentDir => match out.last() {
+                Some(Component::Normal(_)) => {
+                    out.pop();
+                }
+                Some(Component::RootDir) => {}
+                _ => out.push(part),
+            },
+            _ => out.push(part),
+        }
+    }
+    if out.is_empty() {
+        return PathBuf::from(".");
+    }
+    out.into_iter().collect()
 }
 
 /// `path` relative to `start`, both absolute and normalized, as Python's `os.path.relpath` gives it: `..` for each
@@ -76,5 +130,37 @@ mod tests {
         assert_eq!(real_path(&link.join("missing/../file")), real.join("file"));
         assert_eq!(real_path(&link.join("../real/./x")), real.join("x"));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn real_path_follows_a_link_whose_target_is_missing_and_stops_at_a_loop() {
+        let dir = std::env::temp_dir().join(format!("gate-paths-dangling-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("reports")).unwrap();
+        let dir = std::fs::canonicalize(&dir).unwrap();
+        std::os::unix::fs::symlink("reports/q.md", dir.join("q.md")).unwrap();
+        std::os::unix::fs::symlink("../nope/x.md", dir.join("reports/far")).unwrap();
+        std::os::unix::fs::symlink("loop", dir.join("loop")).unwrap();
+        assert_eq!(real_path(&dir.join("q.md")), dir.join("reports/q.md"));
+        assert_eq!(real_path(&dir.join("reports/far")), dir.join("nope/x.md"));
+        assert_eq!(real_path(&dir.join("loop/x")), dir.join("loop/x"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn normpath_is_python_s() {
+        for (path, normal) in [
+            ("", "."),
+            (".", "."),
+            ("a/./b/", "a/b"),
+            ("a/../..", ".."),
+            ("../a/../b", "../b"),
+            ("/../a", "/a"),
+            ("/a/b/../../..", "/"),
+            ("a/..", "."),
+        ] {
+            assert_eq!(normpath(Path::new(path)), Path::new(normal), "{path:?}");
+        }
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(abs_path(Path::new("../x/./y")), cwd.parent().unwrap().join("x/y"));
     }
 }

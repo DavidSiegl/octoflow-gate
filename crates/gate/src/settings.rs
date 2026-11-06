@@ -121,7 +121,7 @@ impl Settings {
     /// else the file as a code span, or "the defaults (there is no `path`)". Errs as [`Settings::read`] does.
     pub fn for_tree(root: &Path, rules: &Path, given: Option<&Path>) -> Result<(Settings, Option<String>), Unjudged> {
         let path = match given {
-            Some(given) => std::path::absolute(given).unwrap_or_else(|_| given.to_path_buf()),
+            Some(given) => crate::paths::abs_path(given),
             None => rules.parent().unwrap_or(Path::new("/")).join(SETTINGS_FILE),
         };
         let there = given.is_some() || path.symlink_metadata().is_ok();
@@ -263,19 +263,7 @@ impl TestEntry {
 /// Whether `path` is relative and, normalized as Python's `os.path.normpath` would, does not climb out.
 fn inside_tree(path: &str) -> bool {
     let path = Path::new(path);
-    if path.is_absolute() {
-        return false;
-    }
-    let mut depth = 0usize;
-    for part in path.components() {
-        match part {
-            Component::ParentDir if depth == 0 => return false,
-            Component::ParentDir => depth -= 1,
-            Component::Normal(_) => depth += 1,
-            _ => {}
-        }
-    }
-    true
+    !path.is_absolute() && crate::paths::normpath(path).components().next() != Some(Component::ParentDir)
 }
 
 /// `text` as Python's `repr` writes a str without quotes or backslashes in it, which is what a gate.toml path is

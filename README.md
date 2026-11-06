@@ -55,13 +55,24 @@ not the Markdown. [The report as a contract](docs/quality-gate.md#the-report-as-
 
 ## Running the gate in a project
 
-`gate.py` is one file and imports only the standard library, so a project runs it from a copy taken at a commit of
-this repository, in the project's working tree and with the project's own Python:
+A project runs a release, pinned by its version and its sha256. Each
+[release](https://github.com/DavidSiegl/octoflow-gate/releases) `v<version>` has two assets:
+`octoflow-gate-<version>.tar.gz`, which holds `gate.py`, the gate-rust helper built for Linux x86_64 as
+`gate-rust-linux-x86_64`, the JSON Schema in `schema/`, golden quality files in both formats in `golden/`, and this
+README; and `octoflow-gate-<version>.tar.gz.sha256`, its sha256. `gate.py` is one file and imports only the standard
+library, so it runs in the project's working tree with the project's own Python:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/DavidSiegl/octoflow-gate/<commit>/gate.py
-uv run python gate.py --base main --out quality.md
+v=<version> gate=$(mktemp -d)   # outside the working tree, which is the change
+release=https://github.com/DavidSiegl/octoflow-gate/releases/download/v$v
+curl -fsSL -o "$gate/gate.tar.gz" "$release/octoflow-gate-$v.tar.gz"
+echo "<sha256>  $gate/gate.tar.gz" | sha256sum -c -
+tar -xzf "$gate/gate.tar.gz" -C "$gate"
+uv run python "$gate/gate.py" --base main --rust-syntax "$gate/gate-rust-linux-x86_64" --out quality.md
 ```
+
+A merge into this repository's `main` that raises its version publishes that version's release; every release stays
+published.
 
 It runs the project's tests itself, with the commands its `gate.toml` lists as `[[test]]` (below), and judges the
 JUnit and Cobertura reports they write. A CI that has already run the tests passes their reports instead, with
@@ -73,8 +84,8 @@ Python that runs `gate.py`, for the flaky-tests, passes-at-base and surviving-mu
 and clippy come from the machine, and only for a project that tracks shell scripts, GitHub workflows or Rust files.
 
 A change to Rust files is read with the [gate-rust helper](docs/quality-gate.md#reading-rust-the-gate-rust-helper),
-built from this repository's `gate-rust/` at the same commit as `gate.py` and named with `--rust-syntax`; a project
-without Rust needs neither:
+named with `--rust-syntax`: the release's, or, on another platform, one built from this repository's `gate-rust/` at
+the release's tag. A project without Rust needs neither:
 
 ```bash
 cargo build --release --locked --manifest-path path/to/octoflow-gate/gate-rust/Cargo.toml
@@ -134,6 +145,7 @@ ci/install-tools.sh <dir on PATH>   # cargo-nextest, cargo-llvm-cov, cargo-mutan
 uv run pytest
 cargo test --manifest-path gate-rust/Cargo.toml
 scripts/gate                         # as Jenkins runs it: main's gate, which runs both test suites, on the change since main
+uv run python ci/smoke-release.py "$(ci/package.sh dist)"  # the release tarball, as Jenkins builds and checks it
 ```
 
 ## License

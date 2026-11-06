@@ -1,6 +1,7 @@
 // Builds main and every pull request in a Multibranch Pipeline job and runs the quality
 // gate (scripts/gate) on each, failing the build on GATE: ERROR or when the gate could
-// not judge. For a pull request, Jenkins's GitHub App reports the result as the commit
+// not judge; then builds and checks the release tarball, which a build of main releases
+// when its version is new (Package, Release). For a pull request, Jenkins's GitHub App reports the result as the commit
 // status continuous-integration/jenkins/pr-head, which auto-merge trusts only from that
 // App, as does the ci-cd ruleset on main once agent-estate's init/github-rules.py has set
 // it.
@@ -65,6 +66,56 @@ pipeline {
                     } else if (status != 0) {
                         error("the gate could not judge the change (exit status ${status})")
                     }
+                }
+            }
+        }
+
+        // The release tarball, built and checked on every build, so a pull request shows that its merge would
+        // release. CARGO_HOME and TMPDIR as scripts/gate sets them, for the reasons its header gives: the smoke
+        // check runs the helper it unpacks.
+        stage('Package') {
+            steps {
+                sh '''
+                    export CARGO_HOME="$WORKSPACE/.cargo-home" TMPDIR="$WORKSPACE_TMP/tmp"
+                    mkdir -p "$TMPDIR"
+                    tarball=$(ci/package.sh dist)
+                    uv run --frozen python ci/smoke-release.py "$tarball"
+                '''
+            }
+        }
+
+        // A merge into main that raises the version in pyproject.toml releases it; any other build of main finds
+        // that release already there. gh creates the tag v<version> on GitHub at the commit built, so Jenkins needs
+        // no git push credentials. Modelled on octoflow-ai's Release stage.
+        stage('Release') {
+            when { branch 'main' }
+            steps {
+                withCredentials([string(credentialsId: 'GitHub-Agents', variable: 'GH_TOKEN')]) {
+                    sh '''
+                        version=$(uv version --short)
+                        tag="v$version"
+                        tarball="dist/octoflow-gate-$version.tar.gz"
+                        if gh release view "$tag" >/dev/null 2>gh-release-view.err; then
+                            echo "$tag is already released"
+                            exit 0
+                        fi
+                        # Anything but a missing release, e.g. a bad token, must fail rather than release twice.
+                        if ! grep -q 'release not found' gh-release-view.err; then
+                            cat gh-release-view.err >&2
+                            exit 1
+                        fi
+                        # Package built and checked them in this build; a restart from this stage has none.
+                        for f in "$tarball" "$tarball.sha256"; do
+                            [ -f "$f" ] || { echo "no $f; run the whole build" >&2; exit 1; }
+                        done
+                        # A release's own words, docs/releases/v<version>.md, when there is such a file: GitHub puts
+                        # them before the notes it generates from the pull requests.
+                        notes=docs/releases/$tag.md
+                        set --
+                        [ ! -f "$notes" ] || set -- --notes-file "$notes"
+                        gh release create "$tag" "$@" "$tarball" "$tarball.sha256" \\
+                            --target "$(git rev-parse HEAD)" --title "$tag" --generate-notes
+                    '''
                 }
             }
         }

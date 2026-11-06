@@ -3,7 +3,7 @@
 ## Releases
 
 A change reaches users only when a merge into `main` raises the version in `pyproject.toml`: that merge releases it
-(gate-standalone/06 adds the Release stage; until then nothing is released).
+as GitHub release `v<version>`, whose assets `ci/package.sh` builds (Jenkinsfile, Package and Release stages).
 
 - A change to `gate.py`, `gate-rust/` or what a release ships raises the version with `uv version --bump <level>`, which
   also updates `uv.lock`: `patch` for a fix, `minor` for a new check, finding or flag, and, while the version is 0.x,

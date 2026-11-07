@@ -117,14 +117,9 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   `tracing::info!(target: "x", ..)`, `select!{..}`) is dropped silently, so its branches, loops and closures add
   nothing to the score." Clippy's own `cognitive_complexity` reads no macro either. Closes with the helper parsing the
   common other shapes (`expr; n`, `expr, pattern if guard`, `name: expr` arguments) and a `macro` node, unread, that
-  gate.py can count or report. Moved from octoflow-ai on 2026-11-05.
-- **Rust's test code takes no part in pairing a function with its base.** `_rust_scored_functions` leaves the fns
-  `_in_rust_tests` places among the tests out on both sides, where a Python file under `tests/` stays in
-  `_base_scores`' pool as a file the check does not judge. So a fn moved unchanged into Rust's tests cannot keep its
-  own base before a copy of it elsewhere takes it, and that copy passes as the original. Found by gate-rust-checks
-  ticket 03 (2026-10-30); since its merge with ticket 02 it holds for test files as for inline test modules. Closes
-  with a per-function "exempt" mark on `_ScoredFunction` that `_BasePool` reads where it now asks
-  `_complexity_exempt` of a path. Moved from octoflow-ai on 2026-11-05.
+  gate.py can count or report. Moved from octoflow-ai on 2026-11-05. The Rust gate's front end does the same, as the
+  user ruled for gate-standalone/13 (2026-11-07): `crates/lang-rust/src/syntax.rs` splits a macro's token tree at
+  its top-level commas and reads each piece that parses as an expression; the other shapes stay open there too.
 - **A Rust test's own lines count toward the coverage of new code.** cargo-llvm-cov's report lists the lines of a
   `#[cfg(test)]` module as it lists the code's (docs/quality-gate.md, "Rust tests and coverage"), and a passing
   test runs them all, so a change that adds a Rust function and a test of it is judged on both: 15 untested lines
@@ -160,11 +155,13 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   `#[cfg_attr(any(), doc = ']',`. Raised by cross-review 136 (R5-F1, should-fix) and deferred by the user
   (2026-11-04). Closes with either of the reviewer's fixes: read the lines in between only when the attribute's text
   holds no `"` or `'`; or bound how far an attribute may span, to the lines before the next one that starts with `#[`
-  or an item keyword. Moved from octoflow-ai on 2026-11-05.
+  or an item keyword. Moved from octoflow-ai on 2026-11-05. The Rust gate does not have it: its front end
+  (`crates/lang-rust`) reads an attribute's literals as tree-sitter lexes them.
 - **`GateChange.rust_files` starts one `git cat-file` per base `.rs` file.** `_rust_paths` in `gate.py` copies each
   base side out of git with its own process, so a change to N Rust files starts N git processes before the helper's
   one run; about 5 ms each here. Raised by cross-review 106 (F5, 2026-10-30): "one `cat-file --batch` or `git archive`
   would do." Closes with one `git cat-file --batch` over all the base paths. Moved from octoflow-ai on 2026-11-05.
+  The Rust gate's `rust_files` (`crates/gate/src/parser_checks.rs`) does the same, one `git cat-file blob` a file.
 - **test-integrity's Rust detector does not see some weakenings that Python's does, or that its rules name.** Found
   while writing it (gate-rust-checks ticket 02, 2026-10-30); docs/quality-gate.md, "Rust tests", lists each:
   - an expected value held in a `const` or `static` the change edits: `_changed_constants` follows Python's

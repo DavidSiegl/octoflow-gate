@@ -11,6 +11,7 @@ pub mod glob;
 pub mod judge;
 pub mod junit;
 pub mod linters;
+pub mod parser_checks;
 pub mod paths;
 pub mod process;
 pub mod report;

@@ -230,6 +230,24 @@ fn a_new_test_module_and_attributes_that_skip_nothing_are_not_skips() {
 }
 
 #[test]
+fn a_helper_removed_from_a_test_module_is_no_removed_test() {
+    let base = edit(LIB, "    #[test]\n    fn adds_small", "    fn one() -> i32 {\n        1\n    }\n\n    #[test]\n    fn adds_small");
+    assert_eq!(check(&[edited(LIB_PATH, &base, LIB)]), vec![]);
+}
+
+#[test]
+fn attributes_in_or_on_a_module_that_holds_no_test_are_not_skips() {
+    // Modules before and after the one holding the tests; the attributes are kept off the start of a line here, as
+    // the gate would read them as skips added to this test (TODO.md, "A line of a string literal...").
+    let base = edit(LIB, "\n#[cfg(test)]", "\nmod before {\n    pub fn x() {}\n}\n\n#[cfg(test)]");
+    let base = format!("{base}\nmod after {{\n    pub fn y() {{}}\n}}\n");
+    let inner = "    #![cfg(feature = \"slow\")]\n";
+    let after = edit(&base, "mod before {\n", &format!("mod before {{\n{inner}"));
+    let after = edit(&after, "\nmod after {\n", &format!("\n#[cfg(feature = \"slow\")]\nmod after {{\n{inner}"));
+    assert_eq!(check(&[edited(LIB_PATH, &base, &after)]), vec![]);
+}
+
+#[test]
 fn swallowed_errors_are_found() {
     let it = edit(
         IT,

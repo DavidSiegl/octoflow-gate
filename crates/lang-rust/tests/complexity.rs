@@ -242,6 +242,17 @@ fn outer() {
 }
 
 #[test]
+fn a_call_of_another_type_s_fn_of_the_same_name_is_no_recursion() {
+    let scores = scores_of(r#"
+struct S;
+struct U;
+impl S { fn make() {} }
+impl U { fn make() { S::make() } }
+"#);
+    assert_eq!(scores, named(&[("S::make", 0), ("U::make", 0)]));
+}
+
+#[test]
 fn recursion_adds_one_to_each_fn_on_a_cycle_of_calls_in_its_file() {
     let scores = scores_of(r#"
 fn countdown(n: u8) { if n > 0 { countdown(n - 1) } }    // +1, +1

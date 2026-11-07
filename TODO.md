@@ -164,6 +164,11 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   (gate-standalone/13), whose two such literals are wrapped so that no line starts with one. Closes with the line
   read as a statement's attribute only where no string literal of the test's body spans it: the Rust gate can ask
   tree-sitter, gate.py would need the helper to list the bodies' string spans.
+- **A skipping attribute on the line of the `mod` it turns off is not seen.** `_rust_attribute_place` (`gate.py`) and
+  `attribute_place` (`crates/lang-rust/src/skips.rs`) judge a holding module's outer attributes only on the lines
+  before its `mod` line, so `#[cfg(miri)] mod tests {` added on one line, as rustfmt never writes it but a hand can,
+  turns the module's tests off with no finding. Found 2026-11-07 by a surviving mutant (`<` to `<=` there,
+  gate-standalone/13). Closes with the attributes on the `mod` line before the `mod` keyword judged too, in both.
 - **`GateChange.rust_files` starts one `git cat-file` per base `.rs` file.** `_rust_paths` in `gate.py` copies each
   base side out of git with its own process, so a change to N Rust files starts N git processes before the helper's
   one run; about 5 ms each here. Raised by cross-review 106 (F5, 2026-10-30): "one `cat-file --batch` or `git archive`

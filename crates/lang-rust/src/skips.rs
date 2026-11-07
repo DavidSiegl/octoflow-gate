@@ -383,6 +383,7 @@ mod tests {
         assert_eq!(attribute("#[cfg(unix)] fn f() {}", &[]), ("#[cfg(unix)]".into(), Some(0)));
         assert_eq!(attribute("#[cfg(any(", &["  unix,", "  windows", "))]"]), ("#[cfg(any( unix, windows ))]".into(), Some(3)));
         assert_eq!(attribute("#[doc = \"]\"]", &[]), ("#[doc = \"]\"]".into(), Some(0)));
+        assert_eq!(attribute("#[doc = \"\\\"]\"]", &[]), ("#[doc = \"\\\"]\"]".into(), Some(0)));
         assert_eq!(attribute("#[cfg(", &["unix"]), ("#[cfg( unix".into(), None));
         assert_eq!(
             line_attributes("#[cfg(any(", &["  unix,", "  #[ignore] windows", "))]"]),

@@ -3,7 +3,7 @@
 //! rules each language's constructs map onto are in docs/quality-gate.md, "Cognitive complexity".
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 
 use model::{Flow, Function, SourceFile};
 
@@ -25,10 +25,8 @@ const CHECK: &str = "cognitive-complexity";
 /// any other does.
 pub fn too_complex(files: &[ChangedFile], exempt: &dyn Fn(&OsStr) -> bool) -> Vec<Finding> {
     let mut out = vec![];
-    let mut scored: Vec<Vec<Scored>> = vec![];
     let mut judged = vec![];
     for (k, file) in files.iter().enumerate() {
-        scored.push(file.now().map(scored_functions).unwrap_or_default());
         let Some(after) = file.after.as_ref().filter(|a| !file.added.is_empty() && !exempt(&a.path)) else {
             continue;
         };
@@ -44,37 +42,40 @@ pub fn too_complex(files: &[ChangedFile], exempt: &dyn Fn(&OsStr) -> bool) -> Ve
             )),
         }
     }
-    let over_limit = |k: usize| -> Vec<usize> {
-        let added = &files[k].added;
-        let over = scored[k].iter().enumerate().filter(|(_, s)| {
-            !s.function.exempt
-                && s.score > LIMIT
-                && added.range(s.function.lines.first..=s.function.lines.last).next().is_some()
-        });
-        over.map(|(i, _)| i).collect()
-    };
+    let scored: Vec<Vec<Scored>> = files.iter().map(|f| f.now().map(scored_functions).unwrap_or_default()).collect();
+    let over_limit = |k: usize| edited_over_limit(&files[k], &scored[k]);
     if judged.iter().all(|&k| over_limit(k).is_empty()) {
         return out;
     }
     let bases = base_scores(files, &scored, &judged, &over_limit, exempt);
     for &k in &judged {
         let path = files[k].after.as_ref().map(|a| &a.path);
-        for i in over_limit(k) {
-            let s = &scored[k][i];
-            let was = bases.get(&(k, i)).copied();
-            if was.is_none_or(|was| s.score > was) {
-                let base = match was {
-                    None => "a new function".to_string(),
-                    Some(was) => format!("{was} at the base"),
-                };
-                let message =
-                    format!("`{}`: cognitive complexity {}, {base}; the limit is {LIMIT}.", s.function.name, s.score);
-                out.push(Finding::of(CHECK, "over-limit", true, path, Some(s.function.line), message));
-            }
-        }
+        let finding = |i: usize| over_limit_finding(path, &scored[k][i], bases.get(&(k, i)));
+        out.extend(over_limit(k).into_iter().filter_map(finding));
     }
     out.sort_by(|a, b| (&a.path, a.line).cmp(&(&b.path, b.line)));
     out
+}
+
+/// The indexes in `scored`, the working-tree functions of `file`, of those over [`LIMIT`] that are not test code and
+/// that the change adds a line to.
+fn edited_over_limit(file: &ChangedFile, scored: &[Scored]) -> Vec<usize> {
+    let edited = |f: &Function| file.added.range(f.lines.first..=f.lines.last).next().is_some();
+    let over = scored.iter().enumerate().filter(|(_, s)| !s.function.exempt && s.score > LIMIT && edited(s.function));
+    over.map(|(i, _)| i).collect()
+}
+
+/// The over-limit finding on `scored`, a function over [`LIMIT`] of the file at `path`, whose base scored `was`, None
+/// for a new function; None when it is no worse than its base.
+fn over_limit_finding(path: Option<&OsString>, scored: &Scored, was: Option<&u32>) -> Option<Finding> {
+    let base = match was {
+        Some(&was) if scored.score <= was => return None,
+        Some(was) => format!("{was} at the base"),
+        None => "a new function".to_string(),
+    };
+    let (name, score) = (&scored.function.name, scored.score);
+    let message = format!("`{name}`: cognitive complexity {score}, {base}; the limit is {LIMIT}.");
+    Some(Finding::of(CHECK, "over-limit", true, path, Some(scored.function.line), message))
 }
 
 /// A function of a [`SourceFile`] with its score.
@@ -152,34 +153,10 @@ fn strong_components(edges: &[Vec<usize>]) -> Vec<Vec<usize>> {
             reverse[w].push(v);
         }
     }
-    // Each vertex in the order a depth-first search from each unvisited vertex in turn finishes it.
-    let mut order = vec![];
-    let mut seen = vec![false; edges.len()];
-    for root in 0..edges.len() {
-        if seen[root] {
-            continue;
-        }
-        seen[root] = true;
-        let mut walk = vec![(root, 0)];
-        while let Some((v, next)) = walk.last_mut() {
-            let v = *v;
-            match edges[v][*next..].iter().position(|&w| !seen[w]) {
-                Some(k) => {
-                    let w = edges[v][*next + k];
-                    *next += k + 1;
-                    seen[w] = true;
-                    walk.push((w, 0));
-                }
-                None => {
-                    walk.pop();
-                    order.push(v);
-                }
-            }
-        }
-    }
+    // Kosaraju's second pass: each vertex not yet in a component, latest finished first, gathers those that reach it.
     let mut seen = vec![false; edges.len()];
     let mut components = vec![];
-    for &v in order.iter().rev() {
+    for v in finishing_order(edges).into_iter().rev() {
         if seen[v] {
             continue;
         }
@@ -198,6 +175,37 @@ fn strong_components(edges: &[Vec<usize>]) -> Vec<Vec<usize>> {
         components.push(component);
     }
     components
+}
+
+/// Each vertex of the graph `edges` gives, as [`recursing`] reads it, in the order a depth-first search from each
+/// unvisited vertex in turn, lowest first, finishes it: Kosaraju's first pass.
+fn finishing_order(edges: &[Vec<usize>]) -> Vec<usize> {
+    let mut order = vec![];
+    let mut seen = vec![false; edges.len()];
+    for root in 0..edges.len() {
+        if seen[root] {
+            continue;
+        }
+        seen[root] = true;
+        // The path from root to the vertex being searched, each with the index in its edges of the next to try.
+        let mut walk = vec![(root, 0)];
+        while let Some((v, next)) = walk.last_mut() {
+            let v = *v;
+            match edges[v][*next..].iter().position(|&w| !seen[w]) {
+                Some(k) => {
+                    let w = edges[v][*next + k];
+                    *next += k + 1;
+                    seen[w] = true;
+                    walk.push((w, 0));
+                }
+                None => {
+                    walk.pop();
+                    order.push(v);
+                }
+            }
+        }
+    }
+    order
 }
 
 /// The order in which [`base_scores`] pairs a function with a base function of its body, each as (of its name, in its
@@ -233,15 +241,13 @@ fn base_scores(
 ) -> HashMap<(usize, usize), u32> {
     let mut pool = BasePool::new(files, scored, exempt);
     let is_judged = |k: usize, i: usize| judged.contains(&k) && !scored[k][i].function.exempt;
+    // Every function of the working tree by (file, function) index, the ones not judged first.
+    let mut everyone: Vec<(usize, usize)> =
+        scored.iter().enumerate().flat_map(|(k, functions)| (0..functions.len()).map(move |i| (k, i))).collect();
+    everyone.sort_by_key(|&(k, i)| is_judged(k, i));
     for (same_name, same_file) in BODY_STEPS {
-        for judged_now in [false, true] {
-            for (k, functions) in scored.iter().enumerate() {
-                for (i, s) in functions.iter().enumerate() {
-                    if is_judged(k, i) == judged_now {
-                        pool.lend_by_body((k, i), s, same_name, same_file, judged_now);
-                    }
-                }
-            }
+        for &(k, i) in &everyone {
+            pool.lend_by_body((k, i), &scored[k][i], same_name, same_file, is_judged(k, i));
         }
     }
     for &k in judged {

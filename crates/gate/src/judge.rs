@@ -156,15 +156,7 @@ pub fn judge_change(cwd: &Path, base: &str, given: &Given) -> Result<QualityRepo
     for (path, n, end) in stray_line_ends(&root, changed, &reads)? {
         conditions.push(stray_line_end_condition(&path, n, end));
     }
-    let mut to_weigh = vec![];
-    for found in run_checks(&change)? {
-        let (errors, weighed): (Vec<Finding>, Vec<Finding>) = found.into_iter().partition(|f| f.severity == "error");
-        if let Some(first) = errors.first() {
-            conditions.push(format!("{} findings of the `{}` check; each is listed below.", errors.len(), first.check()));
-        }
-        issues.extend(errors);
-        to_weigh.extend(weighed);
-    }
+    let to_weigh = judge_checks(&change, &mut conditions, &mut issues)?;
 
     conditions.extend(tests.problems);
     if let Some(failing) = tests.failing.as_ref().filter(|failing| !failing.is_empty()) {
@@ -194,6 +186,26 @@ pub fn judge_change(cwd: &Path, base: &str, given: &Given) -> Result<QualityRepo
         settings_from,
         config_notes: change.settings.build_config.clone(),
     })
+}
+
+/// Judges the parser checks' findings on `change` (parser_checks::run_checks): appends to `conditions` a failed
+/// condition for each check with findings of severity "error", in the order the checks run, and to `issues` those
+/// findings; returns the others, to weigh. Errs as run_checks does, having appended nothing.
+fn judge_checks(
+    change: &Change,
+    conditions: &mut Vec<String>,
+    issues: &mut Vec<Finding>,
+) -> Result<Vec<Finding>, Unjudged> {
+    let mut to_weigh = vec![];
+    for found in run_checks(change)? {
+        let (errors, weighed): (Vec<Finding>, Vec<Finding>) = found.into_iter().partition(|f| f.severity == "error");
+        if let Some(first) = errors.first() {
+            conditions.push(format!("{} findings of the `{}` check; each is listed below.", errors.len(), first.check()));
+        }
+        issues.extend(errors);
+        to_weigh.extend(weighed);
+    }
+    Ok(to_weigh)
 }
 
 /// What git printed, up to the newline that ends its one line.

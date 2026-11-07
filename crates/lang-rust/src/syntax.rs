@@ -193,19 +193,7 @@ impl Walk<'_> {
                 let name = self.bind_name(node, text, false);
                 self.inside(Holder::Trait(name), |w| w.items_of(node, text));
             }
-            "const_item" | "static_item" => {
-                let name = self.bind_name(node, text, false);
-                // An associated const has no holder of its own, as syn's walk gives none.
-                let holder = match (assoc, node.kind()) {
-                    (true, _) => None,
-                    (false, "const_item") => Some(Holder::Const(name)),
-                    (false, _) => Some(Holder::Static(name)),
-                };
-                match holder {
-                    Some(holder) => self.inside(holder, |w| w.children(node, text)),
-                    None => self.children(node, text),
-                }
-            }
+            "const_item" | "static_item" => self.const_or_static(node, text, assoc),
             "struct_item" | "enum_item" | "union_item" | "type_item" | "associated_type" => {
                 self.bind_name(node, text, false);
                 self.children(node, text);
@@ -225,24 +213,11 @@ impl Walk<'_> {
                 self.children(node, text);
             }
             "match_arm" => {
-                if let Some(pattern) = node.child_by_field_name("pattern") {
-                    // A match_pattern: the pattern, then the guard as its `condition`.
-                    let guard = pattern.child_by_field_name("condition");
-                    for part in named(pattern).into_iter().filter(|p| Some(*p) != guard) {
-                        self.bind_pattern(part, text, false);
-                    }
-                }
+                self.bind_arm_pattern(node, text);
                 self.children(node, text);
             }
             "closure_expression" => {
-                if let Some(params) = node.child_by_field_name("parameters") {
-                    for param in named(params) {
-                        let pattern = if param.kind() == "parameter" { param.child_by_field_name("pattern") } else { Some(param) };
-                        if let Some(pattern) = pattern {
-                            self.bind_pattern(pattern, text, false);
-                        }
-                    }
-                }
+                self.bind_closure_parameters(node, text);
                 self.children(node, text);
             }
             "let_condition" => {
@@ -257,6 +232,39 @@ impl Walk<'_> {
     fn children(&mut self, node: Node, text: Text) {
         for child in named(node) {
             self.node(child, text, false);
+        }
+    }
+
+    /// Walks a `const` or `static` item, `node`, inside a holder of its name; `assoc` as [`Walk::node`] says.
+    fn const_or_static(&mut self, node: Node, text: Text, assoc: bool) {
+        let name = self.bind_name(node, text, false);
+        // An associated const has no holder of its own, as syn's walk gives none.
+        match (assoc, node.kind()) {
+            (true, _) => self.children(node, text),
+            (false, "const_item") => self.inside(Holder::Const(name), |w| w.children(node, text)),
+            (false, _) => self.inside(Holder::Static(name), |w| w.children(node, text)),
+        }
+    }
+
+    /// Binds the names the pattern of `arm`, a match arm, binds; its guard binds none of its own.
+    fn bind_arm_pattern(&mut self, arm: Node, text: Text) {
+        let Some(pattern) = arm.child_by_field_name("pattern") else { return };
+        // A match_pattern: the pattern, then the guard as its `condition`.
+        let guard = pattern.child_by_field_name("condition");
+        for part in named(pattern).into_iter().filter(|p| Some(*p) != guard) {
+            self.bind_pattern(part, text, false);
+        }
+    }
+
+    /// Binds the names the parameters of `closure` bind.
+    fn bind_closure_parameters(&mut self, closure: Node, text: Text) {
+        let Some(params) = closure.child_by_field_name("parameters") else { return };
+        for param in named(params) {
+            // A typed parameter holds its pattern; an untyped one is the pattern.
+            let pattern = if param.kind() == "parameter" { param.child_by_field_name("pattern") } else { Some(param) };
+            if let Some(pattern) = pattern {
+                self.bind_pattern(pattern, text, false);
+            }
         }
     }
 
@@ -475,51 +483,20 @@ impl FlowWalk<'_> {
     fn node(&mut self, node: Node, text: Text, out: &mut Vec<Flow>) {
         match node.kind() {
             "if_expression" => self.if_chain(node, text, out),
-            "let_declaration" => {
-                if let Some(value) = node.child_by_field_name("value") {
-                    self.node(value, text, out);
-                }
-                if let Some(otherwise) = node.child_by_field_name("alternative") {
-                    let nested = self.part(otherwise, text);
-                    out.push(Flow::Increment { nesting: true, level: vec![], nested });
-                }
-            }
-            "match_expression" => {
-                let level = node.child_by_field_name("value").map(|v| self.part(v, text)).unwrap_or_default();
-                let mut nested = vec![];
-                for arm in node.child_by_field_name("body").map(named).unwrap_or_default() {
-                    if arm.kind() != "match_arm" {
-                        continue;
-                    }
-                    let guard = arm.child_by_field_name("pattern").and_then(|p| p.child_by_field_name("condition"));
-                    for part in guard.into_iter().chain(arm.child_by_field_name("value")) {
-                        self.node(part, text, &mut nested);
-                    }
-                }
-                out.push(Flow::Increment { nesting: true, level, nested });
-            }
+            "let_declaration" => self.let_else(node, text, out),
+            "match_expression" => self.match_flow(node, text, out),
             "loop_expression" | "while_expression" | "for_expression" => {
                 let head = node.child_by_field_name(if node.kind() == "for_expression" { "value" } else { "condition" });
                 let level = head.map(|h| self.part(h, text)).unwrap_or_default();
                 let nested = node.child_by_field_name("body").map(|b| self.part(b, text)).unwrap_or_default();
                 out.push(Flow::Increment { nesting: true, level, nested });
             }
-            "break_expression" | "continue_expression" => {
-                let parts = named(node);
-                if parts.iter().any(|p| p.kind() == "label") {
-                    out.push(Flow::Increment { nesting: false, level: vec![], nested: vec![] });
-                }
-                for value in parts.into_iter().filter(|p| p.kind() != "label") {
-                    self.node(value, text, out);
-                }
-            }
+            "break_expression" | "continue_expression" => self.jump(node, text, out),
             "binary_expression" | "let_chain" if logical(node, text).is_some() => {
                 let (mut ands, mut operands) = (vec![], vec![]);
                 logical_run(node, text, &mut ands, &mut operands);
                 let mut held = vec![];
-                for operand in operands {
-                    self.node(operand, text, &mut held);
-                }
+                self.each(operands, text, &mut held);
                 out.push(Flow::Booleans { ands, operands: held });
             }
             "closure_expression" => {
@@ -527,28 +504,14 @@ impl FlowWalk<'_> {
                 out.push(Flow::Nesting { recursive: false, body });
             }
             "function_item" => self.nested_fn(node, text, false, out),
-            "impl_item" | "trait_item" => {
-                for item in node.child_by_field_name("body").map(named).unwrap_or_default() {
-                    if item.kind() == "function_item" {
-                        self.nested_fn(item, text, true, out);
-                    } else {
-                        self.node(item, text, out);
-                    }
-                }
-            }
+            "impl_item" | "trait_item" => self.items_of(node, text, out),
             "call_expression" => {
                 if let Some(path) = node.child_by_field_name("function").and_then(|f| call_path(f, text)) {
                     self.calls.push(path);
                 }
                 self.children(node, text, out);
             }
-            "macro_invocation" => {
-                for (tree, bytes, shift) in macro_args(node, text, self.parser) {
-                    if let Some(arg) = wrapped_arg(&tree) {
-                        self.node(arg, Text { bytes: &bytes, shift }, out);
-                    }
-                }
-            }
+            "macro_invocation" => self.macro_call(node, text, out),
             "foreign_mod_item" | "macro_definition" | "attribute_item" | "inner_attribute_item"
             | "function_signature_item" => {}
             _ => self.children(node, text, out),
@@ -556,8 +519,67 @@ impl FlowWalk<'_> {
     }
 
     fn children(&mut self, node: Node, text: Text, out: &mut Vec<Flow>) {
-        for child in named(node) {
-            self.node(child, text, out);
+        self.each(named(node), text, out);
+    }
+
+    fn each(&mut self, nodes: Vec<Node>, text: Text, out: &mut Vec<Flow>) {
+        for node in nodes {
+            self.node(node, text, out);
+        }
+    }
+
+    /// A `let`, `node`: its value, and its `else` block, which nests, when it is a let-else.
+    fn let_else(&mut self, node: Node, text: Text, out: &mut Vec<Flow>) {
+        if let Some(value) = node.child_by_field_name("value") {
+            self.node(value, text, out);
+        }
+        if let Some(otherwise) = node.child_by_field_name("alternative") {
+            let nested = self.part(otherwise, text);
+            out.push(Flow::Increment { nesting: true, level: vec![], nested });
+        }
+    }
+
+    /// A `match`, `node`: one increment for all its arms, its scrutinee at its level and each arm's guard and value
+    /// nested.
+    fn match_flow(&mut self, node: Node, text: Text, out: &mut Vec<Flow>) {
+        let level = node.child_by_field_name("value").map(|v| self.part(v, text)).unwrap_or_default();
+        let mut nested = vec![];
+        let arms = node.child_by_field_name("body").map(named).unwrap_or_default();
+        for arm in arms.into_iter().filter(|a| a.kind() == "match_arm") {
+            let guard = arm.child_by_field_name("pattern").and_then(|p| p.child_by_field_name("condition"));
+            for part in guard.into_iter().chain(arm.child_by_field_name("value")) {
+                self.node(part, text, &mut nested);
+            }
+        }
+        out.push(Flow::Increment { nesting: true, level, nested });
+    }
+
+    /// A `break` or `continue`, `node`: an increment when it names a label, and the flow of its value.
+    fn jump(&mut self, node: Node, text: Text, out: &mut Vec<Flow>) {
+        let (labels, values): (Vec<Node>, Vec<Node>) = named(node).into_iter().partition(|p| p.kind() == "label");
+        if !labels.is_empty() {
+            out.push(Flow::Increment { nesting: false, level: vec![], nested: vec![] });
+        }
+        self.each(values, text, out);
+    }
+
+    /// The items of an `impl` or a `trait`, `node`: each fn a method the walked fn holds.
+    fn items_of(&mut self, node: Node, text: Text, out: &mut Vec<Flow>) {
+        for item in node.child_by_field_name("body").map(named).unwrap_or_default() {
+            if item.kind() == "function_item" {
+                self.nested_fn(item, text, true, out);
+            } else {
+                self.node(item, text, out);
+            }
+        }
+    }
+
+    /// The arguments of a macro call, `node`, each that reads as an expression read as one.
+    fn macro_call(&mut self, node: Node, text: Text, out: &mut Vec<Flow>) {
+        for (tree, bytes, shift) in macro_args(node, text, self.parser) {
+            if let Some(arg) = wrapped_arg(&tree) {
+                self.node(arg, Text { bytes: &bytes, shift }, out);
+            }
         }
     }
 
@@ -757,25 +779,28 @@ fn pattern_names<'t>(pattern: Node<'t>, text: Text) -> Vec<Node<'t>> {
             }
             "scoped_identifier" | "scoped_type_identifier" | "generic_type" | "type_identifier" | "macro_invocation"
             | "range_pattern" | "const_block" | "field_identifier" => {}
-            _ => {
-                // The path of a tuple-struct or struct pattern, its `type`, names a type, not a binding.
-                let mut parts = vec![];
-                let mut cursor = node.walk();
-                if cursor.goto_first_child() {
-                    loop {
-                        if cursor.node().is_named() && cursor.field_name() != Some("type") {
-                            parts.push(cursor.node());
-                        }
-                        if !cursor.goto_next_sibling() {
-                            break;
-                        }
-                    }
-                }
-                pending.extend(parts.into_iter().rev());
-            }
+            _ => pending.extend(sub_patterns(node).into_iter().rev()),
         }
     }
     out
+}
+
+/// The named children of `node`, a pattern, in order, but its `type`: the path of a tuple-struct or struct pattern,
+/// which names a type, not a binding.
+fn sub_patterns(node: Node) -> Vec<Node> {
+    let mut out = vec![];
+    let mut cursor = node.walk();
+    if !cursor.goto_first_child() {
+        return out;
+    }
+    loop {
+        if cursor.node().is_named() && cursor.field_name() != Some("type") {
+            out.push(cursor.node());
+        }
+        if !cursor.goto_next_sibling() {
+            return out;
+        }
+    }
 }
 
 /// The attribute items right before the item `node`, in order: tree-sitter makes them its siblings.

@@ -48,12 +48,7 @@ pub fn weakened_tests(files: &[ChangedFile], code_changed: bool) -> Vec<Finding>
         }
         before.extend(keyed(k, base));
         after.extend(keyed(k, now));
-        if let (Some(now), Some(side)) = (now, &file.after) {
-            for w in now.weakenings.iter().filter(|w| file.added.contains(&w.line)) {
-                let fails = w.kind != WeakeningKind::PlatformOnly;
-                out.push(Finding::of(CHECK, w.kind.rule(), fails, Some(&side.path), Some(w.line), w.message.clone()));
-            }
-        }
+        out.extend(added_weakenings(file));
     }
     out.extend(removed_tests(files, &before, &after));
     let at_base: HashMap<Key, &Keyed> = before.iter().map(|t| (t.key(), t)).collect();
@@ -217,6 +212,18 @@ fn kept_test(path: Option<&OsString>, was: &Test, now: &Test, code_changed: bool
     out
 }
 
+/// The findings on the [`model::Weakening`]s of `file` in the working tree that lie on lines the change added.
+fn added_weakenings(file: &ChangedFile) -> Vec<Finding> {
+    let (Some(now), Some(side)) = (file.now(), &file.after) else { return vec![] };
+    let added = now.weakenings.iter().filter(|w| file.added.contains(&w.line));
+    added
+        .map(|w| {
+            let fails = w.kind != WeakeningKind::PlatformOnly;
+            Finding::of(CHECK, w.kind.rule(), fails, Some(&side.path), Some(w.line), w.message.clone())
+        })
+        .collect()
+}
+
 /// The (before, after) pairs of a test's assertions `was` and `now` that kept their shape but not their literals, the
 /// two aligned on their shapes by [`matching_pairs`].
 fn changed_literals<'a>(was: &'a [Assertion], now: &'a [Assertion]) -> Vec<(&'a Assertion, &'a Assertion)> {
@@ -232,22 +239,8 @@ fn matching_pairs<T: PartialEq>(a: &[T], b: &[T]) -> Vec<(usize, usize)> {
     let mut out = vec![];
     let mut todo = vec![(0, a.len(), 0, b.len())];
     while let Some((alo, ahi, blo, bhi)) = todo.pop() {
-        // The longest run, as (start in a, start in b, length), by SequenceMatcher.find_longest_match's ties.
-        let (mut i, mut j, mut k) = (alo, blo, 0);
-        let mut ending = vec![0; bhi - blo + 1];
-        for (x, ax) in a.iter().enumerate().take(ahi).skip(alo) {
-            let mut next = vec![0; bhi - blo + 1];
-            for (y, by) in b.iter().enumerate().take(bhi).skip(blo) {
-                if ax == by {
-                    let n = ending[y - blo] + 1;
-                    next[y - blo + 1] = n;
-                    if n > k {
-                        (i, j, k) = (x + 1 - n, y + 1 - n, n);
-                    }
-                }
-            }
-            ending = next;
-        }
+        let (i, j, k) = longest_match(&a[alo..ahi], &b[blo..bhi]);
+        let (i, j) = (alo + i, blo + j);
         if k == 0 {
             continue;
         }
@@ -257,6 +250,27 @@ fn matching_pairs<T: PartialEq>(a: &[T], b: &[T]) -> Vec<(usize, usize)> {
     }
     out.sort_unstable();
     out
+}
+
+/// The longest run of elements that `a` and `b` share, as (start in a, start in b, length), the earliest in `a` of
+/// the longest, then the earliest in `b`, as `difflib.SequenceMatcher.find_longest_match` breaks ties without junk;
+/// length 0 when they share none.
+fn longest_match<T: PartialEq>(a: &[T], b: &[T]) -> (usize, usize, usize) {
+    let (mut i, mut j, mut k) = (0, 0, 0);
+    // The length of the shared run ending at each element of b, after the previous element of a; shifted by one.
+    let mut ending = vec![0; b.len() + 1];
+    for (x, ax) in a.iter().enumerate() {
+        let mut next = vec![0; b.len() + 1];
+        for (y, _) in b.iter().enumerate().filter(|(_, by)| ax == *by) {
+            let n = ending[y] + 1;
+            next[y + 1] = n;
+            if n > k {
+                (i, j, k) = (x + 1 - n, y + 1 - n, n);
+            }
+        }
+        ending = next;
+    }
+    (i, j, k)
 }
 
 #[cfg(test)]

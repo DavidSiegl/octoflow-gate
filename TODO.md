@@ -157,6 +157,13 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   holds no `"` or `'`; or bound how far an attribute may span, to the lines before the next one that starts with `#[`
   or an item keyword. Moved from octoflow-ai on 2026-11-05. The Rust gate does not have it: its front end
   (`crates/lang-rust`) reads an attribute's literals as tree-sitter lexes them.
+- **A line of a string literal in a test's body that starts with a skipping attribute is read as a skip.**
+  `_rust_skips` (`gate.py`) and `skips` (`crates/lang-rust/src/skips.rs`) read each added line's text, so a test that
+  holds Rust source as a fixture, in a multi-line string, fails the gate with a `test-integrity skip` error on its
+  `#[cfg(...)]` or `#[ignore]` lines. Found 2026-11-07 on `crates/lang-rust/tests/{complexity,integrity}.rs`
+  (gate-standalone/13), whose two such literals are wrapped so that no line starts with one. Closes with the line
+  read as a statement's attribute only where no string literal of the test's body spans it: the Rust gate can ask
+  tree-sitter, gate.py would need the helper to list the bodies' string spans.
 - **`GateChange.rust_files` starts one `git cat-file` per base `.rs` file.** `_rust_paths` in `gate.py` copies each
   base side out of git with its own process, so a change to N Rust files starts N git processes before the helper's
   one run; about 5 ms each here. Raised by cross-review 106 (F5, 2026-10-30): "one `cat-file --batch` or `git archive`

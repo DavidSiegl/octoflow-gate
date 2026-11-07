@@ -117,9 +117,11 @@ fn an_inline_module_whose_tests_all_went_is_one_finding() {
 
 #[test]
 fn two_tests_of_one_name_are_two_tests() {
-    // Under cfgs that never hold together, as two platforms' versions of one test.
-    let twins = "#[cfg(unix)]\n#[test]\nfn twin() {\n    assert!(add(1, 1) == 2);\n}\n\n\
-                 #[cfg(not(unix))]\n#[test]\nfn twin() {\n    assert!(add(2, 2) == 4);\n    assert!(add(0, 2) == 2);\n}\n";
+    // Under cfgs that never hold together, as two platforms' versions of one test. Wrapped so that no line starts
+    // with a cfg, which the gate would read as a skip added to this test's body (TODO.md, "A line of a string
+    // literal in a test's body...").
+    let twins = "#[cfg(unix)]\n#[test]\nfn twin() {\n    assert!(add(1, 1) == 2);\n}\n\n#[cfg(not(unix))]\n\
+                 #[test]\nfn twin() {\n    assert!(add(2, 2) == 4);\n    assert!(add(0, 2) == 2);\n}\n";
     let base = format!("use tiny::add;\n\n{twins}");
     let path = "crate/tests/twins.rs";
     let fewer = edit(&base, "    assert!(add(0, 2) == 2);\n", "");

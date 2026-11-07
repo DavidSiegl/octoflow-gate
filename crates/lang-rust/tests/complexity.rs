@@ -242,6 +242,15 @@ fn outer() {
 }
 
 #[test]
+fn a_fn_calling_itself_before_another_on_its_cycle_adds_one() {
+    let scores = scores_of(r#"
+fn ping(n: u8) { ping(n); pong(n) }      // +1
+fn pong(n: u8) { ping(n) }               // +1
+"#);
+    assert_eq!(scores, named(&[("ping", 1), ("pong", 1)]));
+}
+
+#[test]
 fn a_call_of_another_type_s_fn_of_the_same_name_is_no_recursion() {
     let scores = scores_of(r#"
 struct S;

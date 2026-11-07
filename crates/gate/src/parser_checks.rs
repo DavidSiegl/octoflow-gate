@@ -2,6 +2,7 @@
 //! each file, and the checks run over them. Rust is the one language read so far (crates/lang-rust); Python comes
 //! with gate-standalone/15-16.
 
+use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
@@ -37,15 +38,19 @@ pub fn run_checks(change: &Change) -> Result<Vec<Vec<Finding>>, Unjudged> {
 }
 
 /// Each file of `change` with a .rs path on a side, in the change's order, read with crates/lang-rust: at the base as
-/// git stores it, in the working tree where it is a regular file. A side that is not .rs, or in the working tree is a
-/// symlink, a directory or a special file, is None: a symlink's change is the name it points to, and reading a FIFO or
-/// a device could block or never end. A file gate.toml's `test-files.rust` matches is read as test code whole.
+/// git stores it, in the working tree, each where it is a regular file. A side that is not .rs, or is a symlink, a
+/// submodule, a directory or a special file, is None: a symlink's change is the name it points to, a submodule's
+/// object is a commit, and reading a FIFO or a device could block or never end. A file gate.toml's `test-files.rust`
+/// matches is read as test code whole.
 fn rust_files(change: &Change) -> Result<Vec<ChangedFile>, Unjudged> {
     let rs = |path: &Option<OsString>| path.clone().filter(|p| p.as_bytes().ends_with(b".rs"));
     let removed = removed_lines(&change.diff);
+    let base_rs: Vec<OsString> = change.files.iter().filter_map(|f| rs(&f.before)).collect();
+    let regular_at_base = regular_files_at_base(change, &base_rs)?;
     let mut out = vec![];
     for file in &change.files {
-        let (before, after) = (rs(&file.before), rs(&file.after));
+        let before = rs(&file.before).filter(|p| regular_at_base.contains(p));
+        let after = rs(&file.after);
         if before.is_none() && after.is_none() {
             continue;
         }
@@ -82,6 +87,21 @@ fn rust_files(change: &Change) -> Result<Vec<ChangedFile>, Unjudged> {
         });
     }
     Ok(out)
+}
+
+/// Those of `paths`, each a path of the tree at `change`'s base, that are regular files there, as git's tree records
+/// them: not a symlink or a submodule. Errs when git cannot list the base's tree.
+fn regular_files_at_base(change: &Change, paths: &[OsString]) -> Result<HashSet<OsString>, Unjudged> {
+    if paths.is_empty() {
+        return Ok(HashSet::new());
+    }
+    let mut args: Vec<&OsStr> = ["--literal-pathspecs", "ls-tree", "-z", &change.base, "--"].map(OsStr::new).to_vec();
+    args.extend(paths.iter().map(|p| p.as_os_str()));
+    let listed = git::output(&change.root, &args)?;
+    // Each entry is `<mode> <type> <object>\t<path>`, NUL-ended; a regular file's mode is 100644 or 100755.
+    let regular = listed.split(|&b| b == 0).filter(|entry| entry.starts_with(b"100"));
+    let paths = regular.filter_map(|entry| entry.iter().position(|&b| b == b'\t').map(|k| &entry[k + 1..]));
+    Ok(paths.map(|p| OsStr::from_bytes(p).to_os_string()).collect())
 }
 
 /// Whether `path` is a regular file, not a symlink to one.

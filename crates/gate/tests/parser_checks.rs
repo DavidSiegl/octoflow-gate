@@ -210,6 +210,21 @@ fn a_symlinked_rust_file_is_not_read_in_the_working_tree() {
 }
 
 #[test]
+fn a_base_entry_that_is_no_regular_file_is_not_read() {
+    let repo = package(&[]);
+    // A symlink whose target, as git stores it, reads as a test; read, the change would remove it.
+    std::os::unix::fs::symlink("#[test] fn t() {}", repo.repo.join("crate/tests/link.rs")).unwrap();
+    // A submodule's entry, whose object is a commit that `git cat-file blob` refuses.
+    let head = repo.git(&["rev-parse", "HEAD"]);
+    repo.git(&["update-index", "--add", "--cacheinfo", &format!("160000,{},crate/src/sub.rs", head.trim())]);
+    repo.git(&["add", "crate/tests/link.rs"]);
+    repo.git(&["commit", "--quiet", "-m", "links"]);
+    std::fs::remove_file(repo.repo.join("crate/tests/link.rs")).unwrap();
+    repo.git(&["rm", "--quiet", "--cached", "crate/src/sub.rs"]);
+    assert_eq!(found(&repo), vec![]);
+}
+
+#[test]
 fn each_check_says_which_of_its_findings_fail_the_gate() {
     let repo = package(&[]);
     edit(&repo, "crate/tests/it.rs", "#[test]\nfn negative", "#[test]\n#[ignore]\nfn negative");

@@ -18,9 +18,10 @@ runs the checks of `crates/checks` over it.
   Rust (unexpected `...`)" or "(expected `...`)" where gate.py quotes syn's message. tree-sitter is the more lenient
   inside a macro's arguments, such as `Foo { .. }` read as an expression.
 - **A file that is not UTF-8** is one that "is not UTF-8", with no line, where gate.py names the helper's error.
-- **A symlinked `.rs` file in the working tree is not read**, nor a directory or a special file: a symlink's change is
-  the name it points to, and reading a FIFO or a device could block. gate.py hands the helper the path, which follows
-  the link.
+- **A symlinked `.rs` file is not read**, at the base or in the working tree, nor a submodule, a directory or a special
+  file: a symlink's change is the name it points to, a submodule's object is a commit, and reading a FIFO or a device
+  could block. gate.py hands the helper the working tree's path, which follows the link, reads a base symlink's target
+  as Rust, and cannot read a submodule at the base.
 - **A working-tree file that cannot be read stops the gate** (exit 2), as an unreadable file stops it elsewhere;
   gate.py lists it as a finding of the check.
 - **No `not-run` findings.** They report a helper that was not given, is missing, fails or outlives its time; the

@@ -526,6 +526,23 @@ fn a_fn_left_in_a_file_the_change_adds_no_line_to_keeps_its_base_before_a_copy_c
 }
 
 #[test]
+fn a_fn_moved_unchanged_into_the_tests_keeps_its_base_before_a_copy_can() {
+    // Test code stays in the base pool though it is not judged (ticket gate-standalone/13, ruling 2): big moved
+    // among the tests is still itself, so the copy is new.
+    let calc = format!("{}\n{}", flat("grow", 14), flat("small", 3));
+    let copy = "engine/src/copy.rs";
+    let why = "`big`: cognitive complexity 20, a new function; the limit is 15.";
+    let module = format!("{calc}#[cfg(test)]\nmod tests {{\n{}}}\n", flat("big", 20));
+    for moved in [
+        vec![edited(CALC, &base(), &calc), added("engine/tests/big.rs", &flat("big", 20))],
+        vec![edited(CALC, &base(), &module)],
+    ] {
+        let files = [moved, vec![added(copy, &flat("big", 20))]].concat();
+        assert_eq!(found(&files), vec![finding(copy, 1, why)]);
+    }
+}
+
+#[test]
 fn the_tests_are_not_judged() {
     let big = flat("big_test", 20);
     let calc = format!("{}#[cfg(test)]\nmod tests {{\n{big}}}\n", base());

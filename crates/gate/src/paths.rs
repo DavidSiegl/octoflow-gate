@@ -70,8 +70,8 @@ pub fn abs_path(path: &Path) -> PathBuf {
     normpath(&absolute(path))
 }
 
-/// `path` made absolute from the current directory, `..` kept; `path` as written when the current directory cannot
-/// be read.
+/// `path` made absolute from the current directory, `..` kept; `path` as written when it is empty or the current
+/// directory cannot be read.
 fn absolute(path: &Path) -> PathBuf {
     std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
 }

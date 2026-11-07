@@ -15,6 +15,10 @@ const BASE: &[(&str, &str)] = &[
     ("run-tests.sh", "#!/bin/sh\n# No tests yet.\necho '<testsuite name=\"suite\" tests=\"0\"/>' > junit.xml\n"),
     ("README.md", "# Fixture\n\nThe change `cargo xtask compare` judges.\n"),
     (".github/workflows/ci.yml", WORKFLOW),
+    ("tiny/Cargo.toml", "[package]\nname = \"tiny\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"),
+    ("tiny/src/lib.rs", TINY_LIB),
+    ("tiny/tests/it.rs", TINY_IT),
+    ("tiny/tests/golden/sum.txt", "3\n"),
 ];
 
 /// The change the working tree makes since `main`: each file it adds or rewrites, by path in the tree, then its new
@@ -46,10 +50,29 @@ fn change() -> Vec<(&'static str, String)> {
         // What gate.py's checks of Python report, which the Rust gate does not port yet and the comparison leaves
         // out: ruff's F401 on line 1, ahead of every ported finding in gate.py's list.
         ("a.py", "import os\n".into()),
+        // What the parser checks report of Rust, in a change to its code: a function over the cognitive-complexity
+        // limit, with a vague name in it, on lines 5-56 of lib.rs; and in its tests, a test removed, an `#[ignore]`
+        // added on line 4 of it.rs, an expected value changed on line 6, and a golden file changed.
+        ("tiny/src/lib.rs", tiny_lib_changed()),
+        ("tiny/tests/it.rs", TINY_IT.replace("#[test]\nfn negative", "#[test]\n#[ignore]\nfn negative").replace(
+            "-2);\n}\n\n#[test]\nfn zero() {\n    assert!(add(0, 0) == 0);\n}\n", "-3);\n}\n",
+        )),
+        ("tiny/tests/golden/sum.txt", "4\n".into()),
         // A file under mutmut's state.
         ("mutants/notes.txt", "left by a mutation run\n".into()),
     ]
 }
+
+const TINY_LIB: &str = "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n";
+
+/// lib.rs with `big`, a function of 16 ifs one after another, and so of cognitive complexity 16, added after `add`.
+fn tiny_lib_changed() -> String {
+    let ifs: String = (0..16).map(|k| format!("    if x == {k} {{\n        x += {k};\n    }}\n")).collect();
+    format!("{TINY_LIB}\npub fn big(mut x: u32) -> u32 {{\n    let data = x;\n{ifs}    x + data\n}}\n")
+}
+
+const TINY_IT: &str = "use tiny::add;\n\n#[test]\nfn negative() {\n    assert_eq!(add(-1, -1), -2);\n}\n\n\
+                       #[test]\nfn zero() {\n    assert!(add(0, 0) == 0);\n}\n";
 
 const GATE_TOML: &str = r#"[[test]]
 name = "suite"

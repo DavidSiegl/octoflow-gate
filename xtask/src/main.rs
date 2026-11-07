@@ -10,8 +10,8 @@
 //! their quality.json and their quality file in the parts the Rust gate has ported so far ([`ported`],
 //! [`ported_markdown`]). It exits 0 when they agree, 1 when they differ, printing each part that does, and 2 when
 //! either gate could not judge the change or the arguments are bad. Both run in this workspace's Python environment,
-//! with its dev tools on PATH: gate.py as `uv run --project <workspace> python <workspace>/gate.py`, and `gate` as
-//! `uv run --project <workspace> cargo run`. Each gate runs the tree's `[[test]]` commands unless GATE_ARGS gives
+//! with its dev tools on PATH: gate.py as `uv run --project <workspace> python <workspace>/gate.py`, reading Rust with
+//! the gate-rust helper built from the workspace's gate-rust/, and `gate` as `uv run --project <workspace> cargo run`. Each gate runs the tree's `[[test]]` commands unless GATE_ARGS gives
 //! `--tests` or `--coverage`; `-- --mutation-budget 1 --base-run-budget 1` keeps gate.py's mutation and base runs,
 //! which the Rust gate does not port yet, short. A change between two commits is compared with the later one checked
 //! out.
@@ -120,9 +120,10 @@ fn judge_twice(
         command.args(["run", "--quiet", "--project"]).arg(workspace).arg(program);
         command
     };
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let mut python = in_uv("python".as_ref());
-    python.arg(workspace.join("gate.py"));
-    let mut rust = in_uv(&std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
+    python.arg(workspace.join("gate.py")).arg("--rust-syntax").arg(gate_rust(workspace, &cargo)?);
+    let mut rust = in_uv(&cargo);
     rust.args(["run", "--quiet", "--package", "gate", "--manifest-path"]).arg(workspace.join("Cargo.toml")).arg("--");
     let mut reports = vec![];
     for (name, mut command) in [("gate.py", python), ("gate", rust)] {
@@ -147,6 +148,27 @@ fn judge_twice(
     let rust = reports.pop().ok_or("no report of gate")?;
     let python = reports.pop().ok_or("no report of gate.py")?;
     Ok((python, rust))
+}
+
+/// The path of the gate-rust helper, with which gate.py reads Rust, built from the workspace's gate-rust/ with `cargo`:
+/// a debug build, wherever CARGO_TARGET_DIR puts it, as tests/test_gate.py's gate_rust builds it. Errs when it does
+/// not build.
+fn gate_rust(workspace: &Path, cargo: &OsStr) -> Result<PathBuf, String> {
+    let built = Command::new(cargo)
+        .args(["build", "--locked", "--quiet", "--message-format=json", "--manifest-path"])
+        .arg(workspace.join("gate-rust/Cargo.toml"))
+        .output()
+        .map_err(|e| format!("cannot run cargo to build the gate-rust helper: {e}"))?;
+    if !built.status.success() {
+        let why = String::from_utf8_lossy(&built.stderr);
+        return Err(format!("cargo could not build the gate-rust helper: {why}"));
+    }
+    // The executable's path from cargo's own report, wherever CARGO_TARGET_DIR puts it.
+    let messages = built.stdout.split(|&b| b == b'\n').filter_map(|line| serde_json::from_slice::<Value>(line).ok());
+    let mut executables = messages
+        .filter(|m| m["reason"] == "compiler-artifact")
+        .filter_map(|m| m["executable"].as_str().map(PathBuf::from));
+    executables.next().ok_or_else(|| "cargo built no gate-rust helper executable".into())
 }
 
 /// The linters the Rust gate runs; gate.py's findings of any other are not compared.
@@ -230,12 +252,13 @@ fn list_item(line: &str) -> Option<&str> {
 }
 
 /// Whether quality.json's failed condition `c` is compared, given whether it is gate.py's: not the count of the
-/// linters' findings on added lines, which counts what was not ported too, and of gate.py's, only those that
-/// [`ported_condition_of_python`] keeps.
+/// linters' findings on added lines, nor of a check's findings, which count what was not ported too, and of
+/// gate.py's, only those that [`ported_condition_of_python`] keeps.
 fn ported_condition(c: &Value, from_python: bool) -> bool {
     let c = c.as_str().unwrap_or_default();
-    !c.ends_with(" findings on lines the change added; each is listed below.")
-        && (!from_python || ported_condition_of_python(c))
+    let counts_findings = c.ends_with(" findings on lines the change added; each is listed below.")
+        || (c.contains(" findings of the `") && c.ends_with("` check; each is listed below."));
+    !counts_findings && (!from_python || ported_condition_of_python(c))
 }
 
 /// Whether gate.py's failed condition `c` comes of a part the Rust gate has ported: a ported linter that could not
@@ -250,10 +273,20 @@ fn ported_condition_of_python(c: &str) -> bool {
         || c.contains(", which a linter that reads the file ends a line at and git does not.")
 }
 
+/// The checks the Rust gate runs over Rust (gate::parser_checks); gate.py's findings of any other are not compared.
+const PORTED_CHECKS: [&str; 3] = ["test-integrity", "cognitive-complexity", "vague-names"];
+
 /// Whether quality.json's finding `f` is compared, given whether it is gate.py's: of gate.py's, only a ported
-/// linter's.
+/// linter's, and a ported check's on a .rs file or a golden file. gate.py lists a changed golden file when the change
+/// edits the code under test in any language, the Rust gate only when it edits Rust's, so the two agree on golden
+/// files only where the change edits Rust code, or no code at all.
 fn ported_finding(f: &Value, from_python: bool) -> bool {
-    !from_python || f["check"].as_str().is_some_and(|c| PORTED_LINTERS.contains(&c))
+    let check = f["check"].as_str().unwrap_or_default();
+    let path = f["path"].as_str().unwrap_or_default();
+    let golden = f["rule"] == "test-integrity expected-value-changed" && f["line"].is_null();
+    !from_python
+        || PORTED_LINTERS.contains(&check)
+        || (PORTED_CHECKS.contains(&check) && (path.ends_with(".rs") || golden))
 }
 
 /// Whether quality.json's suppression `s` is compared, given whether it is gate.py's: of gate.py's, only one in a

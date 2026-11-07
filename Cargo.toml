@@ -1,9 +1,10 @@
 # The Rust port of gate.py (gate-standalone/12-16), which judges beside gate.py until the cutover (18): crates/gate
-# is the `gate` binary, and xtask the workspace's own tasks, such as `cargo xtask compare`. gate-rust, the helper
-# gate.py reads Rust with, is a crate of its own, built and released alone (ci/package.sh), so it stays out of this
-# workspace.
+# is the `gate` binary; crates/checks its parser checks, over crates/model, the model of a source file that each
+# language's front end, such as crates/lang-rust, reads; and xtask the workspace's own tasks, such as `cargo xtask
+# compare`. gate-rust, the helper gate.py reads Rust with, is a crate of its own, built and released alone
+# (ci/package.sh), so it stays out of this workspace.
 [workspace]
-members = ["crates/gate", "xtask"]
+members = ["crates/gate", "crates/model", "crates/checks", "crates/lang-rust", "xtask"]
 exclude = ["gate-rust"]
 resolver = "2"
 

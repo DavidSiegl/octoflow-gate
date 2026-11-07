@@ -138,17 +138,6 @@ A CI that passes `main`'s `pyproject.toml` with `--config` judges by the `gate.t
 where there is none, never by the change's own, so a change cannot loosen its own settings: put `main`'s `gate.toml`
 beside `main`'s `pyproject.toml`.
 
-## Developing it
-
-```bash
-uv sync
-ci/install-tools.sh <dir on PATH>   # cargo-nextest, cargo-llvm-cov, cargo-mutants, which some tests run
-uv run pytest
-cargo test --manifest-path gate-rust/Cargo.toml
-scripts/gate                         # as Jenkins runs it: the release main pins (ci/gate.pin) judges the change
-uv run python ci/smoke-release.py "$(ci/package.sh dist)"  # the release tarball, as Jenkins builds and checks it
-```
-
 ## License
 
 MIT or Apache-2.0, at your option: [LICENSE-MIT](LICENSE-MIT), [LICENSE-APACHE](LICENSE-APACHE).

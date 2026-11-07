@@ -1,0 +1,7 @@
+# cargo-mutants' configuration for this workspace (https://mutants.rs/config.html), read by the gate's surviving-mutants
+# check as by a run by hand.
+#
+# Every mutant runs the whole workspace's tests, not only its own package's: the checks' tests live in
+# crates/lang-rust/tests, since they need a front end to build the model they read, so a run of crates/checks's own
+# tests would leave each of its mutants surviving.
+test_workspace = true

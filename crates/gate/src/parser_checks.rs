@@ -22,7 +22,7 @@ use crate::{git, text, Unjudged};
 /// first, by path, and then the findings on Rust, by path and line, as gate.py's `weakened_tests` lists golden files
 /// before each language's findings.
 ///
-/// Errs when git cannot show a file at the base, or a file of the working tree cannot be read.
+/// Errs when git cannot list the base's tree or show a file of it, or a file of the working tree cannot be read.
 pub fn run_checks(change: &Change) -> Result<Vec<Vec<Finding>>, Unjudged> {
     let rust = rust_files(change)?;
     let gone: Vec<&OsString> =
@@ -95,13 +95,14 @@ fn regular_files_at_base(change: &Change, paths: &[OsString]) -> Result<HashSet<
     if paths.is_empty() {
         return Ok(HashSet::new());
     }
-    let mut args: Vec<&OsStr> = ["--literal-pathspecs", "ls-tree", "-z", &change.base, "--"].map(OsStr::new).to_vec();
-    args.extend(paths.iter().map(|p| p.as_os_str()));
-    let listed = git::output(&change.root, &args)?;
+    // The whole tree, listed once: naming the paths instead would put as many on one command line as the change
+    // touches, more than the system allows (E2BIG) for a change to a large vendored tree.
+    let listed = git::output(&change.root, &["ls-tree", "-r", "-z", "--full-tree", &change.base])?;
+    let wanted: HashSet<&[u8]> = paths.iter().map(|p| p.as_bytes()).collect();
     // Each entry is `<mode> <type> <object>\t<path>`, NUL-ended; a regular file's mode is 100644 or 100755.
     let regular = listed.split(|&b| b == 0).filter(|entry| entry.starts_with(b"100"));
     let paths = regular.filter_map(|entry| entry.iter().position(|&b| b == b'\t').map(|k| &entry[k + 1..]));
-    Ok(paths.map(|p| OsStr::from_bytes(p).to_os_string()).collect())
+    Ok(paths.filter(|p| wanted.contains(p)).map(|p| OsStr::from_bytes(p).to_os_string()).collect())
 }
 
 /// Whether `path` is a regular file, not a symlink to one.

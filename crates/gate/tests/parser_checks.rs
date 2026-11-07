@@ -312,7 +312,8 @@ fn a_test_file_that_is_not_utf_8_on_a_side_fails_the_gate_as_unreadable() {
 
 #[test]
 fn a_base_file_is_read_as_git_stores_its_bytes() {
-    // Not UTF-8 at the base, so its tests are not read there, and the test the working tree removes is no finding.
+    // Not UTF-8 at the base, so its tests are not read there, and the test the working tree removes is no finding: no
+    // side of src/lib.rs is a test file that could be read, nor is it placed among the tests.
     let latin1 = b"#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {}\n}\n// caf\xe9\n";
     let repo = Repo::with(&[("src/lib.rs", latin1)]);
     repo.put("src/lib.rs", b"// caf\xc3\xa9\n");

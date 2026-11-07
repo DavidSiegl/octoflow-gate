@@ -27,9 +27,9 @@ const CHECK: &str = "test-integrity";
 ///   check says of it; a base that does not parse has no tests to lose.
 ///
 /// `code_changed` says whether the change also edits the code under test, which [`edits_code`] tells per file and the
-/// caller decides over the whole change. Only the files with test code on a side take part. A removed test, fewer
-/// assertions, a changed expected value and a platform-only cfg are what a spec can ask for, so the gate weighs them;
-/// the rest fail it.
+/// caller decides over the whole change. Only the test files take part: those with test code on a side, and those an
+/// unreadable finding is about. A removed test, fewer assertions, a changed expected value and a platform-only cfg are
+/// what a spec can ask for, so the gate weighs them; the rest fail it.
 pub fn weakened_tests(files: &[ChangedFile], code_changed: bool) -> Vec<Finding> {
     let mut out = vec![];
     // The tests of each file the check reads, at the base and in the working tree, by its index in files.

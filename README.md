@@ -1,10 +1,10 @@
 # octoflow-gate
 
-A quality gate for a change to a Python or Rust project: `gate.py` judges what a git working tree changed since a
-commit and writes its report twice: as the quality file, Markdown whose first line is `GATE: OK` or `GATE: ERROR`,
-for the people and agents who answer it, and as `quality.json`, the same report as data for a program to read. It was
-written for [octoflow](https://github.com/DavidSiegl/octoflow-ai), whose agents answer the quality file in a loop,
-and runs in any project as one stdlib-only Python file.
+octoflow-gate is a quality gate for changes to Python and Rust projects. `gate.py` judges what a git working tree
+changed since a commit and writes its report twice: as the quality file, Markdown whose first line is `GATE: OK` or
+`GATE: ERROR`, for the people and agents who answer it, and as `quality.json`, the same report as data for a program to
+read. It was written for [octoflow](https://github.com/DavidSiegl/octoflow-ai), whose agents answer the quality file in
+a loop, and runs in any project as one stdlib-only Python file.
 
 ## What it judges
 

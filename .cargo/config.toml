@@ -1,0 +1,3 @@
+# `cargo xtask <task>` runs the workspace's own tasks (xtask/src/main.rs says which).
+[alias]
+xtask = "run --quiet --package xtask --"

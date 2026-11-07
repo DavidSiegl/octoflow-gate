@@ -1,0 +1,21 @@
+[package]
+name = "gate"
+version = "0.5.0"
+description = "The quality gate as one binary: the Rust port of gate.py (docs/quality-gate.md)"
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+libc = "0.2.191"
+quick-xml = "0.42.0"
+regex = "1.13.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+toml = { version = "1.2.1", features = ["preserve_order"] }
+
+[dev-dependencies]
+proptest = "1.12.0"

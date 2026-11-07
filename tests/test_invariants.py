@@ -76,6 +76,14 @@ class TestInvariants(unittest.TestCase):
         self.assertEqual(gate.GATE_VERSION, version, "a release raises gate.py's GATE_VERSION with pyproject.toml's "
                                                      "version, for quality.json to name it (CLAUDE.md, Releases)")
 
+    def test_the_rust_gate_s_version_is_the_project_s(self):
+        with open(ROOT / "pyproject.toml", "rb") as f:
+            version = tomllib.load(f)["project"]["version"]
+        with open(ROOT / "crates" / "gate" / "Cargo.toml", "rb") as f:
+            crate = tomllib.load(f)["package"]["version"]
+        self.assertEqual(crate, version, "a release raises crates/gate/Cargo.toml's version with pyproject.toml's, "
+                                         "for the Rust gate's quality.json to name it (CLAUDE.md, Releases)")
+
     def test_coverage_records_with_the_c_tracer(self):
         with open(ROOT / "pyproject.toml", "rb") as f:
             run = tomllib.load(f)["tool"]["coverage"]["run"]

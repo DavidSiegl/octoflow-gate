@@ -41,6 +41,37 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   per-file boolean as `_rust_attribute_place` already takes `test_file`, would keep the signatures." Left for the Rust
   port (gate-standalone/12–14), which rewrites these helpers. Closes with the checks given which files are Rust tests
   once, rather than the settings that decide it.
+- **The Rust gate's quality file says `gate.py` judged the tree.** `QualityReport`'s `intro`
+  (`crates/gate/src/report.rs`) keeps gate.py's sentence so that the Rust gate reproduces gate.py's golden files byte
+  for byte (gate-standalone/12, 2026-11-06). Closes at the cutover (gate-standalone/18), with the intro naming `gate`
+  and the golden files rewritten.
+- **The Rust gate words some failures and accepts some arguments differently from gate.py.** Found while porting
+  (gate-standalone/12, 2026-11-06), all outside quality.json's contract:
+  - an OS error reads as Rust prints it (`Permission denied (os error 13)`), not as Python does (`[Errno 13]
+    Permission denied: '…'`), in "could not be started", "cannot write" and the like;
+  - a linter's first line, which a "failed" condition quotes up to 200 characters, counts a byte that is not UTF-8,
+    written `\xNN`, as four characters, where gate.py counts one;
+  - a git command past its minute ends "did not finish within 60 seconds" where gate.py's ends with Python's
+    `TimeoutExpired` text ("timed out after 60 seconds");
+  - `crates/gate/src/main.rs`'s `parse_args` takes no abbreviation of an option (`--cov` for `--coverage`), as
+    argparse does, and takes a value that starts with `-`, which argparse refuses.
+  Closes at the cutover, with each kept or matched on purpose.
+- **`cargo xtask compare` tells gate.py's ported conditions by their wording.** `ported_condition_of_python` in
+  `xtask/src/main.rs` matches the start or end of each failed-condition sentence; a condition gate.py rewords drops
+  out of the comparison without a word, and the Rust gate's then shows as one gate.py lacks. Closes with the
+  cutover, which retires gate.py and the comparison.
+- **The Rust gate reads an XML report only in UTF-8, or in UTF-16 that opens with a byte-order mark.** As
+  cross-review 09 put it (F21, 2026-11-07): "Without a UTF-16 byte-order mark, `report_format` takes every report as
+  UTF-8: one that declares another encoding (`<?xml version='1.0' encoding='ISO-8859-1'?>` and a byte such as `E9` in
+  a path) fails `String::from_utf8` … UTF-16LE without a mark (`3C 00 3F 00 …`) passes `from_utf8`, since NUL is
+  UTF-8, and then fails in `xml::parse`; UTF-16BE without a mark (`00 3C 00 3F …`) does not start with `<` past ASCII
+  whitespace, so it goes to `lcov_lines` and fails". gate.py's `ElementTree.parse` reads all three. The JUnit reader,
+  `xml::parse_file` (`crates/gate/src/xml.rs`), refuses everything that is not UTF-8, so a JUnit report has the same
+  gap; `report_format` (`crates/gate/src/coverage.rs`) is the Cobertura one. Deferred by the user (2026-11-07): the
+  tools the gate is meant for, coverage.py, cargo-llvm-cov and cargo-nextest, write UTF-8, and the fix adds a
+  dependency outside spec decision 7's set. Closes by decoding in `xml.rs` for both readers, from the mark and the
+  declaration, as quick-xml's `encoding` feature (encoding_rs) does, `report_format` then keeping only the test of
+  XML against LCOV.
 
 - **`gate.py` and docs/quality-gate.md still speak in octoflow's words.** The quality file is written for the
   Builder to answer and the Reviewer to judge (`TO_WEIGH_NOTE`'s comment, the suppressions' comment),

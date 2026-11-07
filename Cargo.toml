@@ -1,0 +1,22 @@
+# The Rust port of gate.py (gate-standalone/12-16), which judges beside gate.py until the cutover (18): crates/gate
+# is the `gate` binary, and xtask the workspace's own tasks, such as `cargo xtask compare`. gate-rust, the helper
+# gate.py reads Rust with, is a crate of its own, built and released alone (ci/package.sh), so it stays out of this
+# workspace.
+[workspace]
+members = ["crates/gate", "xtask"]
+exclude = ["gate-rust"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+publish = false
+
+# clippy's rules for the workspace, as gate-rust's own: its defaults, and the lints below at warn.
+[workspace.lints.rust]
+unsafe_code = "warn"
+
+[workspace.lints.clippy]
+# A suppression says why it stands: `#[allow(lint, reason = "...")]`.
+allow_attributes_without_reason = "warn"
+dbg_macro = "warn"
+todo = "warn"

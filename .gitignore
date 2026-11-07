@@ -12,6 +12,7 @@ dist/
 .coverage
 coverage.xml
 coverage-rust.xml
+coverage-gate.xml
 test-results.xml
 quality.md
 quality.json

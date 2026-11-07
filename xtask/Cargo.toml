@@ -1,0 +1,12 @@
+[package]
+name = "xtask"
+version = "0.0.0"
+description = "The workspace's own tasks, run as `cargo xtask <task>` (.cargo/config.toml)"
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde_json = "1.0.154"

@@ -9,8 +9,8 @@ as GitHub release `v<version>`, whose assets `ci/package.sh` builds (Jenkinsfile
   also updates `uv.lock`: `patch` for a fix, `minor` for a new check, finding or flag, and, while the version is 0.x,
   `minor` too for a change that breaks existing flags, exit statuses or quality.json's contract
   (docs/quality-gate.md, "The report as a contract"). `major` makes it 1.0.0, a deliberate release decision.
-- The bump also sets `GATE_VERSION` in `gate.py` to the new version, which quality.json names;
-  `tests/test_invariants.py` fails while the two differ.
+- The bump also sets `GATE_VERSION` in `gate.py`, and the version in `crates/gate/Cargo.toml` (then `cargo update -w`
+  for `Cargo.lock`), to the new version, which quality.json names; `tests/test_invariants.py` fails while they differ.
 - Changes only to docs, tests, CI or repository tooling raise nothing, a shipped doc such as README.md included: its
   edit goes out with the next release.
 - `ci/gate.pin` names the release that judges this repo's changes. Raise it only to a release that exists, with the

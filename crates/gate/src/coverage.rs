@@ -85,7 +85,7 @@ impl NewCoverage {
 /// from the coverage `reports`, merged by path and line: a line is coverable when any report lists it, and covered
 /// when any report covers it; its branch outcomes are the most any report counts, and the most any report covers.
 ///
-/// A report is LCOV unless its first character past a byte-order mark and any whitespace is `<`, Cobertura then. A
+/// A report is Cobertura when it is XML, LCOV otherwise, as [`report_format`] tells them. A
 /// Cobertura report's paths are relative to its `<source>` directories, or to `root`, the tree's top, when it lists
 /// none; an LCOV report's are as its `SF:` lines give them. A relative path, or source, is taken from the current
 /// directory; each is matched to the tree's paths through its real path, so cargo-llvm-cov's report, whose source is
@@ -139,14 +139,52 @@ fn changed_line_coverage(
 ) -> Result<Vec<LineCoverage>, Unjudged> {
     let cannot = |why: String| Unjudged(format!("cannot read the coverage report {}: {why}", report.display()));
     let bytes = std::fs::read(report).map_err(|e| cannot(e.to_string()))?;
-    // A byte-order mark may open an XML document (https://www.w3.org/TR/xml/#sec-guessing).
-    let start = bytes.strip_prefix("\u{feff}".as_bytes()).unwrap_or(&bytes);
-    if start.trim_ascii_start().starts_with(b"<") {
-        let doc = xml::parse(&String::from_utf8(bytes).map_err(|e| cannot(e.to_string()))?).map_err(cannot)?;
-        cobertura_lines(&doc, root, real_root, changed)
-            .map_err(|e| Unjudged(format!("the coverage report {} has a line it cannot read: {e}", report.display())))
-    } else {
-        lcov_lines(&bytes, real_root, changed).map_err(cannot)
+    match report_format(&bytes).map_err(cannot)? {
+        Report::Xml(text) => {
+            let doc = xml::parse(&text).map_err(cannot)?;
+            cobertura_lines(&doc, root, real_root, changed).map_err(|e| {
+                Unjudged(format!("the coverage report {} has a line it cannot read: {e}", report.display()))
+            })
+        }
+        Report::Lcov(lcov) => lcov_lines(lcov, real_root, changed).map_err(cannot),
+    }
+}
+
+/// A coverage report's content, by its format.
+enum Report<'a> {
+    /// A Cobertura document's text.
+    Xml(String),
+    /// An LCOV report's bytes, past any byte-order mark.
+    Lcov(&'a [u8]),
+}
+
+/// What `bytes`, a coverage report, holds: an XML document when, past a byte-order mark and any whitespace, it
+/// starts with `<`, decoded as the mark says, UTF-8 or UTF-16 in either byte order, as XML lets a document say
+/// (https://www.w3.org/TR/xml/#sec-guessing), and as UTF-8 without one; LCOV otherwise. Errs, with why, on XML that
+/// does not decode, or on UTF-16 that is not XML, as LCOV never is.
+fn report_format(bytes: &[u8]) -> Result<Report<'_>, String> {
+    let utf16 = |rest: &[u8], unit: fn([u8; 2]) -> u16| {
+        let (pairs, odd) = rest.as_chunks::<2>();
+        if !odd.is_empty() {
+            return Err("its UTF-16 has an odd number of bytes".to_string());
+        }
+        let units: Vec<u16> = pairs.iter().map(|&pair| unit(pair)).collect();
+        let text = String::from_utf16(&units).map_err(|e| e.to_string())?;
+        match text.trim_start().starts_with('<') {
+            true => Ok(Report::Xml(text)),
+            false => Err("it is UTF-16, but not XML".to_string()),
+        }
+    };
+    match bytes {
+        [0xff, 0xfe, rest @ ..] => utf16(rest, u16::from_le_bytes),
+        [0xfe, 0xff, rest @ ..] => utf16(rest, u16::from_be_bytes),
+        _ => {
+            let rest = bytes.strip_prefix("\u{feff}".as_bytes()).unwrap_or(bytes);
+            if !rest.trim_ascii_start().starts_with(b"<") {
+                return Ok(Report::Lcov(rest));
+            }
+            Ok(Report::Xml(String::from_utf8(rest.to_vec()).map_err(|e| format!("not UTF-8: {e}"))?))
+        }
     }
 }
 
@@ -285,23 +323,19 @@ impl LcovRecord<'_> {
     /// or BRDA entry whose line number cannot be read, or, on an added line, the rest of whose fields cannot be.
     fn read(&mut self, line: &[u8]) -> Result<(), String> {
         let Some((_, added)) = self.file else { return Ok(()) };
-        let (is_da, fields) = match (line.strip_prefix(b"DA:"), line.strip_prefix(b"BRDA:")) {
-            (Some(fields), _) => (true, fields),
-            (_, Some(fields)) => (false, fields),
-            _ => return Ok(()),
-        };
-        let fields = std::str::from_utf8(fields).map_err(|e| e.to_string())?;
-        // The line's number comes first; the other fields are read only on a changed line.
-        let mut fields = fields.split(',');
-        let Some(number) = changed_line(fields.next().unwrap_or_default(), added)? else { return Ok(()) };
-        if is_da {
-            let count = fields.next().ok_or("no hit count")?;
+        // The line's number comes first, and is all that is read of an entry of a line the change did not add.
+        if let Some(entry) = line.strip_prefix(b"DA:") {
+            let fields: Vec<&[u8]> = entry.split(|&b| b == b',').collect();
+            let Some(number) = changed_line(utf8(fields[0])?, added)? else { return Ok(()) };
+            let count = utf8(fields.get(1).ok_or("no hit count")?)?;
             *self.hits.entry(number).or_default() |= py_int(count)? > 0;
-        } else {
-            let [_, _, taken] = fields.collect::<Vec<_>>()[..] else { return Err("not 4 fields".into()) };
+        } else if let Some(entry) = line.strip_prefix(b"BRDA:") {
+            let fields: Vec<&[u8]> = entry.split(|&b| b == b',').collect();
+            let Some(number) = changed_line(utf8(fields[0])?, added)? else { return Ok(()) };
+            let [_, _, _, taken] = fields[..] else { return Err("not 4 fields".into()) };
             let was = self.branches.entry(number).or_default();
             was.1 += 1;
-            was.0 += usize::from(!matches!(taken.trim(), "-" | "0"));
+            was.0 += usize::from(!matches!(utf8(taken)?.trim(), "-" | "0"));
         }
         Ok(())
     }
@@ -317,6 +351,11 @@ impl LcovRecord<'_> {
             })
             .collect()
     }
+}
+
+/// `field`, a field of an LCOV entry, as text; errs, with why, when it is not UTF-8.
+fn utf8(field: &[u8]) -> Result<&str, String> {
+    std::str::from_utf8(field).map_err(|e| format!("not UTF-8: {e}"))
 }
 
 /// The Python files `changed` adds lines to whose names are not UTF-8, in order: coverage.py collects no data for
@@ -338,7 +377,7 @@ mod tests {
         entries.iter().map(|(p, lines)| (OsString::from(p), lines.iter().copied().collect())).collect()
     }
 
-    fn scratch(name: &str, text: &str) -> PathBuf {
+    fn scratch(name: &str, text: impl AsRef<[u8]>) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("gate-coverage-{}-{name}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(name);
@@ -352,7 +391,7 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let cobertura = scratch(
             "c.xml",
-            &format!(
+            format!(
                 "<coverage><sources><source>{}</source></sources><packages><package><classes>\
                  <class filename='a.py'><lines><line number='1' hits='0'/>\
                  <line number='2' hits='1' branch='true' condition-coverage='50% (1/2)'/>\
@@ -362,7 +401,7 @@ mod tests {
         );
         let lcov = scratch(
             "l.info",
-            &format!(
+            format!(
                 "SF:{}\nDA:1,3\nDA:2,1\nBRDA:2,0,0,1\nBRDA:2,0,1,1\nBRDA:2,0,2,-\nend_of_record\n",
                 root.join("a.py").display()
             ),
@@ -380,7 +419,7 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let report = scratch(
             "cobertura.xml",
-            &format!(
+            format!(
                 "<coverage><sources><source> </source><source>{}</source></sources><packages><package><classes>\
                  <class filename='a.py'><lines><line number='1' hits='0'/>\
                  <line number='2' hits='1' branch='true' condition-coverage='50% (1/2)'/>\
@@ -402,15 +441,26 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let report = scratch(
             "bom.xml",
-            &format!(
+            format!(
                 "\u{feff}<?xml version='1.0'?><coverage><sources><source>{}</source></sources><packages><package>\
                  <classes><class filename='a.py'><lines><line number='1' hits='1'/></lines></class></classes>\
                  </package></packages></coverage>",
                 root.display()
             ),
         );
-        let got = new_coverage(&[report], &root, &changed(&[("a.py", &[1])])).unwrap();
+        let a = changed(&[("a.py", &[1])]);
+        let got = new_coverage(std::slice::from_ref(&report), &root, &a).unwrap();
         assert_eq!((got.lines, got.covered_lines), (1, 1));
+        // The same document in UTF-16, its byte-order mark first, little-endian and big-endian.
+        let text = std::fs::read_to_string(&report).unwrap();
+        let text = text.replace("version='1.0'", "version='1.0' encoding='UTF-16'");
+        let little: Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let big: Vec<u8> = text.encode_utf16().flat_map(u16::to_be_bytes).collect();
+        for (name, utf16) in [("le.xml", little), ("be.xml", big)] {
+            let got = new_coverage(&[scratch(name, utf16)], &root, &a).unwrap();
+            assert_eq!((got.lines, got.covered_lines), (1, 1), "{name}");
+        }
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
@@ -444,7 +494,7 @@ mod tests {
         );
         let lcov = scratch(
             "only-changed.info",
-            &format!(
+            format!(
                 "SF:{}\nDA:x,y\nBRDA:x\nend_of_record\nSF:{}\nDA:2,y\nDA:3,9000000000\nend_of_record\n",
                 root.join("other.py").display(),
                 root.join("a.py").display()
@@ -476,6 +526,11 @@ mod tests {
         assert_eq!((got.lines, got.covered_lines), (1, 1));
         let text = format!("SF:{}\nDA:1\nend_of_record\n", file.display());
         assert!(new_coverage(&[scratch("changed.info", &text)], &root, &a).is_err());
+        let mut text = format!("\u{feff}SF:{}\nDA:7,1,", file.display()).into_bytes();
+        text.extend(b"\xff\nBRDA:7,0,\xff,1\nDA:1,1\nend_of_record\n");
+        let got = new_coverage(&[scratch("not-utf8.info", text)], &root, &a).unwrap();
+        assert_eq!((got.lines, got.covered_lines), (1, 1));
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

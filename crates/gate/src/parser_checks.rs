@@ -51,7 +51,7 @@ fn rust_files(change: &Change) -> Result<Vec<ChangedFile>, Unjudged> {
         }
         let read = |path: OsString, bytes: &[u8]| {
             let among_tests = change.settings.rust_tests.matches(&path);
-            Side { source: lang_rust::read(bytes, among_tests), path }
+            Side { source: lang_rust::read(bytes, among_tests), path, among_tests }
         };
         let before = match before {
             Some(path) => {

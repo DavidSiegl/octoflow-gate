@@ -15,6 +15,7 @@ pub fn changed(before: Option<(&str, &str)>, after: Option<(&str, &str)>) -> Cha
     let side = |(path, text): (&str, &str)| Side {
         path: path.into(),
         source: lang_rust::read(text.as_bytes(), among_tests(path)),
+        among_tests: among_tests(path),
     };
     let (removed, added) = diff(&lines(before), &lines(after));
     ChangedFile { before: before.map(side), after: after.map(side), added, removed }

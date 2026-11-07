@@ -273,6 +273,29 @@ fn each_rs_file_the_change_touches_is_read_at_the_base_and_in_the_working_tree()
 }
 
 #[test]
+fn a_test_file_that_is_not_utf_8_on_a_side_fails_the_gate_as_unreadable() {
+    // Among the tests by its place: gate.py cannot decode its base, so it cannot tell which tests the change removes.
+    let latin1 = [IT.as_bytes(), b"// caf\xe9\n"].concat();
+    let repo = Repo::with(&[("crate/Cargo.toml", MANIFEST.as_bytes()), ("crate/tests/it.rs", &latin1)]);
+    repo.put("crate/tests/it.rs", b"use tiny::add;\n");
+    let unreadable_at = |path: &str| -> Vec<Found> {
+        vec![(Some(path.into()), None, "test-integrity unreadable".into(), "error".into())]
+    };
+    let unreadable = unreadable_at("crate/tests/it.rs");
+    assert_eq!(found(&repo), unreadable);
+    // And in the working tree.
+    repo.put("crate/tests/it.rs", &[&latin1[..], b"// more\n"].concat());
+    let integrity = |repo: &Repo| -> Vec<Found> {
+        found(repo).into_iter().filter(|f| f.2.starts_with("test-integrity")).collect()
+    };
+    assert_eq!(integrity(&repo), unreadable);
+    // A file with an inline test module at the base is a test file too, and the base's tests cannot be compared.
+    let repo = package(&[]);
+    repo.put("crate/src/lib.rs", &[LIB.as_bytes(), b"// caf\xe9\n"].concat());
+    assert_eq!(integrity(&repo), unreadable_at("crate/src/lib.rs"));
+}
+
+#[test]
 fn a_base_file_is_read_as_git_stores_its_bytes() {
     // Not UTF-8 at the base, so its tests are not read there, and the test the working tree removes is no finding.
     let latin1 = b"#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {}\n}\n// caf\xe9\n";

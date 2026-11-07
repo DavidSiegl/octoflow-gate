@@ -20,8 +20,11 @@ const CHECK: &str = "test-integrity";
 /// - expected-value-changed, when `code_changed`: an assertion of a kept test whose literals changed while the rest of
 ///   it stayed, the assertions of the two sides aligned as Python's difflib aligns sequences;
 /// - skip, platform-only and swallowed-error: each [`model::Weakening`] on a line the change added;
-/// - unparsable: a file its front end could not read in the working tree whose base held tests, which is all the check
-///   says of it.
+/// - unreadable: a test file, one the settings place among the tests or with test code on a side, that its front end
+///   could not read as a whole on a side ([`model::Unreadable`] with no line, as for one that is not UTF-8), which is
+///   all the check says of it: which tests the change removed or weakened cannot be told;
+/// - unparsable: a file its front end could not parse in the working tree whose base held tests, which is all the
+///   check says of it; a base that does not parse has no tests to lose.
 ///
 /// `code_changed` says whether the change also edits the code under test, which [`edits_code`] tells per file and the
 /// caller decides over the whole change. Only the files with test code on a side take part. A removed test, fewer
@@ -35,6 +38,10 @@ pub fn weakened_tests(files: &[ChangedFile], code_changed: bool) -> Vec<Finding>
     for (k, file) in files.iter().enumerate() {
         let (base, now) = (file.base(), file.now());
         let held = |source: Option<&SourceFile>| source.is_some_and(|s| !s.test_lines.is_empty());
+        if let Some(unreadable) = unreadable_test_file(file, held(base) || held(now)) {
+            out.push(unreadable);
+            continue;
+        }
         if !held(base) && !held(now) {
             continue;
         }
@@ -60,6 +67,21 @@ pub fn weakened_tests(files: &[ChangedFile], code_changed: bool) -> Vec<Finding>
     }
     out.sort_by(|a, b| (&a.path, a.line.unwrap_or(0)).cmp(&(&b.path, b.line.unwrap_or(0))));
     out
+}
+
+/// The unreadable finding on `file` when a side of it is one its front end could not read as a whole and it is a test
+/// file: among the tests by its path on a side, or, as `test_code` says, holding test code on a side it could read.
+/// On the working tree's path where it has one, else the base's. None for any other file.
+fn unreadable_test_file(file: &ChangedFile, test_code: bool) -> Option<Finding> {
+    let sides = [&file.after, &file.before];
+    let placed = sides.iter().filter_map(|s| s.as_ref()).any(|s| s.among_tests);
+    if !(placed || test_code) {
+        return None;
+    }
+    let why = sides.iter().filter_map(|s| s.as_ref()?.source.as_ref().err()).find(|e| e.line.is_none())?;
+    let path = sides.iter().find_map(|s| s.as_ref().map(|s| &s.path));
+    let message = format!("{}, so its tests were not checked.", why.why);
+    Some(Finding::of(CHECK, "unreadable", true, path, None, message))
 }
 
 /// Whether `file` edits the code under test rather than its tests: the change adds, deletes or renames it, or adds a

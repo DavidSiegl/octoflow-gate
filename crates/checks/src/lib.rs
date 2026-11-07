@@ -68,6 +68,9 @@ pub struct ChangedFile {
 pub struct Side {
     /// The file's path on this side, from the tree's top level.
     pub path: OsString,
+    /// Whether the project's settings place the file among the tests by its path, as its front end was told: the
+    /// only sign of a test file left where `source` is an error.
+    pub among_tests: bool,
     /// The file as its front end read it, or why it could not.
     pub source: Result<SourceFile, Unreadable>,
 }

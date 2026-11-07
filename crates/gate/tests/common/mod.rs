@@ -27,8 +27,8 @@ impl Repo {
         std::fs::create_dir_all(&outside).unwrap();
         let made = Repo { dir, repo, outside };
         made.git(&["init", "--quiet", "-b", "main", "."]);
-        for (key, value) in [("user.name", "t"), ("user.email", "t@example.com"), ("commit.gpgsign", "false")] {
-            made.git(&["config", key, value]);
+        for (key, setting) in [("user.name", "t"), ("user.email", "t@example.com"), ("commit.gpgsign", "false")] {
+            made.git(&["config", key, setting]);
         }
         for (path, contents) in files {
             made.put(path, contents);

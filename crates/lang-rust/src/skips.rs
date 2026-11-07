@@ -276,8 +276,8 @@ fn cfg_oses(tokens: &[&str], i: usize, outermost: bool, depth: usize) -> Option<
     let (oses, next) = match name {
         "unix" | "windows" => (family_oses(name), i + 1),
         "target_os" | "target_family" if tokens.get(i + 1) == Some(&"=") => {
-            let value = tokens.get(i + 2).filter(|v| v.starts_with('"') && v.len() >= 2)?;
-            let named = &value[1..value.len() - 1];
+            let quoted = tokens.get(i + 2).filter(|v| v.starts_with('"') && v.len() >= 2)?;
+            let named = &quoted[1..quoted.len() - 1];
             let oses = if name == "target_os" {
                 TARGET_OSES.iter().position(|(os, _)| *os == named).map_or(0, |k| 1 << k)
             } else {

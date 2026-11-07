@@ -385,9 +385,9 @@ impl Walk<'_> {
         if let Some(pattern) = pattern {
             self.bind_pattern(pattern, text, false);
         }
-        if let (Some(pattern), Some(value)) = (pattern, node.child_by_field_name("value")) {
+        if let (Some(pattern), Some(init)) = (pattern, node.child_by_field_name("value")) {
             if pattern.kind() == "_" {
-                self.discard("let _ = {};", value, text);
+                self.discard("let _ = {};", init, text);
             }
         }
         self.children(node, text);

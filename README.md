@@ -1,10 +1,10 @@
 # octoflow-gate
 
-A quality gate for a change to a Python or Rust project: `gate.py` judges what a git working tree changed since a
-commit and writes its report twice: as the quality file, Markdown whose first line is `GATE: OK` or `GATE: ERROR`,
-for the people and agents who answer it, and as `quality.json`, the same report as data for a program to read. It was
-written for [octoflow](https://github.com/DavidSiegl/octoflow-ai), whose agents answer the quality file in a loop,
-and runs in any project as one stdlib-only Python file.
+octoflow-gate is a quality gate for changes to Python and Rust projects. `gate.py` judges what a git working tree
+changed since a commit and writes its report twice: as the quality file, Markdown whose first line is `GATE: OK` or
+`GATE: ERROR`, for the people and agents who answer it, and as `quality.json`, the same report as data for a program to
+read. It was written for [octoflow](https://github.com/DavidSiegl/octoflow-ai), whose agents answer the quality file in
+a loop, and runs in any project as one stdlib-only Python file.
 
 ## What it judges
 
@@ -137,17 +137,6 @@ base-run = 120
 A CI that passes `main`'s `pyproject.toml` with `--config` judges by the `gate.toml` beside it, or by the defaults
 where there is none, never by the change's own, so a change cannot loosen its own settings: put `main`'s `gate.toml`
 beside `main`'s `pyproject.toml`.
-
-## Developing it
-
-```bash
-uv sync
-ci/install-tools.sh <dir on PATH>   # cargo-nextest, cargo-llvm-cov, cargo-mutants, which some tests run
-uv run pytest
-cargo test --manifest-path gate-rust/Cargo.toml
-scripts/gate                         # as Jenkins runs it: the release main pins (ci/gate.pin) judges the change
-uv run python ci/smoke-release.py "$(ci/package.sh dist)"  # the release tarball, as Jenkins builds and checks it
-```
 
 ## License
 

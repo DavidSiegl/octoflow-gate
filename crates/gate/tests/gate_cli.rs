@@ -90,6 +90,8 @@ fn a_finding_on_an_added_line_fails_the_gate_and_the_report_goes_to_standard_out
     assert!(out.contains("- 1 findings on lines the change added; each is listed below.\n"), "{out}");
     assert!(out.contains("1. `run.sh:2` warning shellcheck SC2000: New.\n"), "{out}");
     assert!(!out.contains("SC1000"), "{out}");
+    assert!(out.contains("\n1 other open issues in the project are not on lines this change added, so they are not \
+                          listed.\n"), "{out}");
     assert_eq!(done.stderr, b"");
 }
 

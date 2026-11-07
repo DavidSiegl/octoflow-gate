@@ -3,7 +3,7 @@
 //! whether the change edits Rust code under test, by the Cargo packages and settings of the tree, and which golden
 //! files go with it. TestRustWeakenedTests in tests/test_gate.py, for those cases.
 
-use gate::judge::Change;
+use gate::judge::{judge_change, Change, Given};
 use gate::parser_checks::run_checks;
 use gate::settings::Settings;
 
@@ -156,8 +156,10 @@ fn rust_of_a_cargo_package_the_change_deletes_is_code_under_test() {
 
 #[test]
 fn rust_outside_a_cargo_package_is_not_the_code_under_test() {
-    let repo = package(&[]);
+    let repo = package(&[("notes/README.md", "Sketches.\n")]);
     repo.put("notes/sketch.rs", b"fn sketch() {}\n");
+    // A file the change deletes that is no Cargo.toml puts no package around it.
+    repo.git(&["rm", "--quiet", "notes/README.md"]);
     change_negative(&repo);
     assert_eq!(found(&repo), vec![]);
 }
@@ -201,8 +203,8 @@ fn a_file_under_tests_that_is_not_rust_on_purpose_is_no_test_integrity_finding()
 #[test]
 fn a_symlinked_rust_file_is_not_read_in_the_working_tree() {
     let repo = package(&[]);
-    // Read, it would bind a vague name.
-    repo.put("crate/vague.txt", b"pub fn f() -> u32 {\n    let data = 1;\n    data\n}\n");
+    // Read, it would bind a vague name on its line 1, the line the change adds to the symlink.
+    repo.put("crate/vague.txt", b"pub fn f() -> u32 { let data = 1; data }\n");
     std::os::unix::fs::symlink("../vague.txt", repo.repo.join("crate/src/link.rs")).unwrap();
     assert_eq!(found(&repo), vec![]);
 }
@@ -217,6 +219,20 @@ fn each_check_says_which_of_its_findings_fail_the_gate() {
         ("test-integrity removed-test".into(), "warning".into()),
         ("test-integrity skip".into(), "error".into()),
     ]);
+}
+
+#[test]
+fn a_check_s_errors_fail_the_gate_and_its_warnings_are_to_weigh() {
+    let repo = package(&[("pyproject.toml", "[tool.ruff]\n")]);
+    edit(&repo, "crate/tests/it.rs", "#[test]\nfn negative", "#[test]\n#[ignore]\nfn negative");
+    let adds_large = "    #[test]\n    fn adds_large() {\n        assert_eq!(add(10, 20), 30);\n    }\n";
+    edit(&repo, "crate/src/lib.rs", adds_large, "");
+    repo.git(&["add", "-A"]);
+    let report = judge_change(&repo.repo, "HEAD", &Given::default()).unwrap();
+    assert_eq!(report.conditions, ["1 findings of the `test-integrity` check; each is listed below."]);
+    let rules = |found: &[gate::report::Finding]| -> Vec<String> { found.iter().map(|f| f.rule.clone()).collect() };
+    assert_eq!(rules(&report.issues), ["test-integrity skip"]);
+    assert_eq!(rules(&report.to_weigh), ["test-integrity removed-test"]);
 }
 
 #[test]

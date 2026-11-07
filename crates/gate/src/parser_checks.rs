@@ -25,7 +25,7 @@ use crate::{git, text, Unjudged};
 pub fn run_checks(change: &Change) -> Result<Vec<Vec<Finding>>, Unjudged> {
     let rust = rust_files(change)?;
     let gone: Vec<&OsString> =
-        change.files.iter().filter(|f| f.before.is_some() && f.before != f.after).filter_map(|f| f.before.as_ref()).collect();
+        change.files.iter().filter(|f| f.before != f.after).filter_map(|f| f.before.as_ref()).collect();
     let is_code = |side: &Option<Side>| {
         side.as_ref().is_some_and(|s| !change.settings.rust_tests.matches(&s.path) && in_cargo_package(change, &gone, &s.path))
     };

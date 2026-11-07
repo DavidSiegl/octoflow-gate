@@ -1,0 +1,9 @@
+[package]
+name = "model"
+version = "0.0.0"
+description = "What the gate's parser checks know of a source file, whatever its language"
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

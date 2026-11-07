@@ -1,0 +1,12 @@
+[package]
+name = "checks"
+version = "0.0.0"
+description = "The gate's parser checks, over the model of a change's source files: cognitive complexity, test integrity and vague names"
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+model = { path = "../model" }

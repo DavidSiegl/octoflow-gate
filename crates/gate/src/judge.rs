@@ -1,6 +1,6 @@
 //! The gate's judgement of one change: what it reads of the change, and the report it gives on it, as gate.py's
-//! judge_change does for the parts ported so far. The checks beside the linters (test-integrity and the rest) come
-//! with their languages (gate-standalone/13-16), so this runs none yet.
+//! judge_change does for the parts ported so far. Of the checks beside the linters, the parser checks run
+//! (parser_checks), over the languages ported so far; the others come with gate-standalone/14-16.
 
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
@@ -10,6 +10,7 @@ use crate::config_edits::{cargo_home_in, clippy_config_files, edited_config};
 use crate::coverage::new_coverage;
 use crate::diff::{change_diff, changed_files, changed_lines, ChangedFile, ChangedLines};
 use crate::linters::{tracked_from, Linter, LINTERS};
+use crate::parser_checks::run_checks;
 use crate::process::tool_env;
 use crate::report::{Finding, QualityReport};
 use crate::settings::{tree_s_own, Settings};
@@ -39,8 +40,7 @@ pub struct Given {
     pub coverage: Vec<PathBuf>,
 }
 
-/// The change the gate judges, as [`Change::from_tree`] reads it, and as each check (gate-standalone/13-16) will be
-/// given it.
+/// The change the gate judges, as [`Change::from_tree`] reads it, and as each check is given it.
 pub struct Change {
     /// The repository's top level; its working tree is the change's new side.
     pub root: PathBuf,
@@ -100,15 +100,17 @@ pub fn under_mutmut_state(path: &OsStr) -> bool {
 /// The gate is ERROR when the change adds or edits files under [`MUTMUT_STATE`], which is always mutmut's scratch
 /// state committed by accident; when there is such a linter finding; when a linter is missing, fails or prints
 /// nothing readable; when a file a linter reads and the change adds lines to holds a line end git does not count
-/// (suppressions::stray_line_ends); when a test fails, or a test command's tests could not be judged; or when the
-/// coverage reports put new code below the minimum (coverage::NewCoverage::condition). The tests are those
-/// test_commands::test_results gives, run before the linters. Suppressions the change added are listed, not counted
-/// against it.
+/// (suppressions::stray_line_ends); when a parser check (parser_checks::run_checks) has a finding of severity
+/// "error", each of which is listed beside the linters' while the others are listed to weigh; when a test fails, or a
+/// test command's tests could not be judged; or when the coverage reports put new code below the minimum
+/// (coverage::NewCoverage::condition). The tests are those test_commands::test_results gives, run before the
+/// linters. Suppressions the change added are listed, not counted against it.
 ///
 /// Errs when it cannot judge: `cwd` is not in a git work tree, `base` names no commit, there is no rules file, the
 /// settings cannot be read, a test or coverage report cannot be read, a report a test command names cannot be
-/// removed before it runs, or a file the change adds lines to cannot be read. Ctrl-C during a process it runs ends
-/// the gate (process::run).
+/// removed before it runs, a file the change adds lines to cannot be read, or a source file the parser checks read
+/// cannot be shown at the base or read in the working tree. Ctrl-C during a process it runs ends the gate
+/// (process::run).
 pub fn judge_change(cwd: &Path, base: &str, given: &Given) -> Result<QualityReport, Unjudged> {
     let done = git::run(cwd, &["rev-parse", "--show-toplevel"])?;
     if done.status != 0 {
@@ -146,13 +148,15 @@ pub fn judge_change(cwd: &Path, base: &str, given: &Given) -> Result<QualityRepo
         reads.push((linter, files));
     }
     let found = findings.len();
-    let issues = on_changed_lines(findings, changed);
+    let mut issues = on_changed_lines(findings, changed);
+    let elsewhere = found - issues.len();
     if !issues.is_empty() {
         conditions.insert(0, format!("{} findings on lines the change added; each is listed below.", issues.len()));
     }
     for (path, n, end) in stray_line_ends(&root, changed, &reads)? {
         conditions.push(stray_line_end_condition(&path, n, end));
     }
+    let to_weigh = judge_checks(&change, &mut conditions, &mut issues)?;
 
     conditions.extend(tests.problems);
     if let Some(failing) = tests.failing.as_ref().filter(|failing| !failing.is_empty()) {
@@ -165,9 +169,9 @@ pub fn judge_change(cwd: &Path, base: &str, given: &Given) -> Result<QualityRepo
         head: text::lossless(&first_line(git::output(&root, &["rev-parse", "HEAD"])?)),
         base: base_sha,
         conditions,
-        elsewhere: found - issues.len(),
+        elsewhere,
         issues,
-        to_weigh: vec![],
+        to_weigh,
         failing_tests: tests.failing,
         coverage,
         suppressions: added_suppressions(&root, changed)?,
@@ -182,6 +186,26 @@ pub fn judge_change(cwd: &Path, base: &str, given: &Given) -> Result<QualityRepo
         settings_from,
         config_notes: change.settings.build_config.clone(),
     })
+}
+
+/// Judges the parser checks' findings on `change` (parser_checks::run_checks): appends to `conditions` a failed
+/// condition for each check with findings of severity "error", in the order the checks run, and to `issues` those
+/// findings; returns the others, to weigh. Errs as run_checks does, having appended nothing.
+fn judge_checks(
+    change: &Change,
+    conditions: &mut Vec<String>,
+    issues: &mut Vec<Finding>,
+) -> Result<Vec<Finding>, Unjudged> {
+    let mut to_weigh = vec![];
+    for found in run_checks(change)? {
+        let (errors, weighed): (Vec<Finding>, Vec<Finding>) = found.into_iter().partition(|f| f.severity == "error");
+        if let Some(first) = errors.first() {
+            conditions.push(format!("{} findings of the `{}` check; each is listed below.", errors.len(), first.check()));
+        }
+        issues.extend(errors);
+        to_weigh.extend(weighed);
+    }
+    Ok(to_weigh)
 }
 
 /// What git printed, up to the newline that ends its one line.
@@ -220,47 +244,6 @@ fn on_changed_lines(findings: Vec<Finding>, changed: &ChangedLines) -> Vec<Findi
     out
 }
 
-/// An expected-value-changed finding, on the whole file, for each golden file (Settings::golden) that `change`
-/// edits or deletes, by path, its severity "error" and its rule without the check's name, as a check finds it.
-///
-/// The test-integrity check (gate-standalone/13, 15) lists them only when the change also edits code outside its
-/// tests, which only a language can tell: a golden file is then an expected value outside any assertion, which
-/// `UPDATE_GOLDEN=1` rewrites to whatever the code now writes. A golden file the change adds, or renames without
-/// editing, has no old value to lose. gate.py's `_changed_golden_files`.
-pub fn changed_golden_files(change: &Change) -> Vec<Finding> {
-    let removals = crate::diff::removal_points(&change.diff);
-    let finding = |path: &OsString, what: &str| Finding {
-        path: Some(path.clone()),
-        line: None,
-        severity: "error".into(),
-        rule: "expected-value-changed".into(),
-        message: format!("a golden file, the expected output of a test, {what}"),
-    };
-    let mut out = vec![];
-    for file in &change.files {
-        let Some(before) = file.before.as_ref().filter(|p| change.settings.golden.matches(p)) else { continue };
-        match &file.after {
-            None => out.push(finding(
-                before,
-                "deleted in a change that also edits the code under test; check that no test still needs it.",
-            )),
-            Some(after)
-                if change.changed.get(after).is_some_and(|l| !l.is_empty())
-                    || removals.get(after).is_some_and(|l| !l.is_empty()) =>
-            {
-                out.push(finding(
-                    after,
-                    "changed in a change that also edits the code under test; check that its diff is what the \
-                     change means the output to become.",
-                ))
-            }
-            Some(_) => {}
-        }
-    }
-    out.sort_by(|a, b| a.path.cmp(&b.path));
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -294,42 +277,6 @@ mod tests {
     fn the_mutmut_state_pathspecs_name_its_directory() {
         assert_eq!(OUTSIDE_MUTMUT_STATE, format!(":(top,exclude,literal){MUTMUT_STATE}"));
         assert_eq!(INSIDE_MUTMUT_STATE, format!(":(top,literal){MUTMUT_STATE}"));
-    }
-
-    #[test]
-    fn golden_files_edited_or_deleted_are_found_but_not_added_or_renamed_ones() {
-        let file = |before: Option<&str>, after: Option<&str>| ChangedFile {
-            before: before.map(OsString::from),
-            after: after.map(OsString::from),
-        };
-        let golden = |name: &str| format!("tests/golden/{name}");
-        let change = Change {
-            root: PathBuf::from("/"),
-            base: "b".into(),
-            // Removes the one line of `cut`; `edited` gains one.
-            diff: b"diff --git a/tests/golden/cut b/tests/golden/cut\n--- a/tests/golden/cut\n\
-                    +++ b/tests/golden/cut\n@@ -1 +0,0 @@\n-x\n"
-                .to_vec(),
-            changed: [(golden("edited").into(), [1].into()), (golden("cut").into(), [].into())].into(),
-            files: vec![
-                file(Some(&golden("gone")), None),
-                file(Some(&golden("edited")), Some(&golden("edited"))),
-                file(Some(&golden("cut")), Some(&golden("cut"))),
-                file(None, Some(&golden("new"))),
-                file(Some(&golden("old")), Some(&golden("moved"))),
-                file(Some("src/edited"), Some("src/edited")),
-            ],
-            mutmut_state: vec![],
-            settings: Settings::default(),
-        };
-        let found: Vec<(String, String)> = changed_golden_files(&change)
-            .into_iter()
-            .map(|f| (text::path(f.path.as_deref().unwrap()), f.message.split(" in a change").next().unwrap().into()))
-            .collect();
-        let expected = |name: &str, what: &str| {
-            (golden(name), format!("a golden file, the expected output of a test, {what}"))
-        };
-        assert_eq!(found, vec![expected("cut", "changed"), expected("edited", "changed"), expected("gone", "deleted")]);
     }
 
     #[test]

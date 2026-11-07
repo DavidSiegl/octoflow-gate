@@ -9,6 +9,9 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+checks = { path = "../checks" }
+lang-rust = { path = "../lang-rust" }
+model = { path = "../model" }
 libc = "0.2.191"
 quick-xml = "0.42.0"
 regex = "1.13.1"

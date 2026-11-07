@@ -4,6 +4,7 @@
 
 use std::ffi::OsString;
 
+pub use checks::Finding;
 use serde::Serialize;
 
 use crate::coverage::NewCoverage;
@@ -29,27 +30,6 @@ const FAILED_CONDITIONS: &str = "## Failed conditions";
 const FAILING_TESTS: &str = "## Failing tests";
 /// Leads the findings to weigh; a reader takes the numbered findings after it as ones that do not fail the gate.
 const TO_WEIGH_NOTE: &str = "These do not fail the gate. Fix each, or say in your report why it should stand.";
-
-/// One thing the gate found, as a linter or a check reports it.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Finding {
-    /// The file, from the tree's top level; None for a finding about the whole change.
-    pub path: Option<OsString>,
-    /// The line, from 1; None for a finding about the whole file.
-    pub line: Option<u32>,
-    /// What the gate does with it, "error" or "warning", or a linter's own grade where the finding is a linter's.
-    pub severity: String,
-    /// The tool or check that found it, then its own rule, space-separated: `ruff F401`, `test-integrity skip`.
-    pub rule: String,
-    pub message: String,
-}
-
-impl Finding {
-    /// The tool or check that found it: the rule's first word.
-    fn check(&self) -> &str {
-        self.rule.split(' ').next().unwrap_or("")
-    }
-}
 
 /// The gate's word on a change, the quality file's first line after `GATE: `.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]

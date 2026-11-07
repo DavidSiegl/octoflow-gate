@@ -14,9 +14,9 @@ const TIMEOUT: u64 = 60;
 
 /// `git -C cwd args`, run as [`process::run`] runs a program, for a command whose failure the caller interprets: its
 /// exit status and what it printed, as git printed it. Errs when git cannot be started or runs longer than a minute.
-pub fn run(cwd: &Path, args: &[&str]) -> Result<Finished, Unjudged> {
+pub fn run<S: AsRef<OsStr>>(cwd: &Path, args: &[S]) -> Result<Finished, Unjudged> {
     let mut argv: Vec<&OsStr> = vec![OsStr::new("git"), OsStr::new("-C"), cwd.as_os_str()];
-    argv.extend(args.iter().map(OsStr::new));
+    argv.extend(args.iter().map(AsRef::as_ref));
     match process::run(&argv, Path::new("."), Duration::from_secs(TIMEOUT)) {
         Err(e) => Err(Unjudged(format!("{}: {e}", command(cwd, args)))),
         Ok(done) if done.stopped => {
@@ -28,7 +28,7 @@ pub fn run(cwd: &Path, args: &[&str]) -> Result<Finished, Unjudged> {
 
 /// The standard output of `git -C cwd args`, as git printed it. Errs as [`run`] does, and when git exits with a
 /// status other than 0.
-pub fn output(cwd: &Path, args: &[&str]) -> Result<Vec<u8>, Unjudged> {
+pub fn output<S: AsRef<OsStr>>(cwd: &Path, args: &[S]) -> Result<Vec<u8>, Unjudged> {
     let done = run(cwd, args)?;
     if done.status != 0 {
         let said = text::lossless(&done.stderr);
@@ -38,9 +38,9 @@ pub fn output(cwd: &Path, args: &[&str]) -> Result<Vec<u8>, Unjudged> {
 }
 
 /// `git -C cwd args` as a shell would take it, for a message.
-fn command(cwd: &Path, args: &[&str]) -> String {
+fn command<S: AsRef<OsStr>>(cwd: &Path, args: &[S]) -> String {
     let mut words = vec!["git".to_string(), "-C".to_string(), text::lossless(cwd.as_os_str().as_bytes())];
-    words.extend(args.iter().map(|a| a.to_string()));
+    words.extend(args.iter().map(|a| text::lossless(a.as_ref().as_bytes())));
     words.iter().map(|w| shell_quote(w)).collect::<Vec<_>>().join(" ")
 }
 

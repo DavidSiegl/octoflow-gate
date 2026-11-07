@@ -23,8 +23,8 @@ pub fn real_path(path: &Path) -> PathBuf {
         });
         parts.collect::<Vec<_>>().into_iter().rev().collect()
     };
-    // Absolute but not normalized: a `..` after a link climbs out of the link's target, so it waits for the link.
-    let mut rest = names(&std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()));
+    // Not normalized: a `..` after a link climbs out of the link's target, so it waits for the link.
+    let mut rest = names(&absolute(path));
     let mut out = PathBuf::from("/");
     // What each link met so far resolves to; None while it is being resolved, so that meeting it again is a loop.
     let mut links: HashMap<PathBuf, Option<PathBuf>> = HashMap::new();
@@ -67,7 +67,13 @@ pub fn real_path(path: &Path) -> PathBuf {
 /// `os.path.abspath` gives it: no link is resolved, so `..` after a link climbs out of the link's name, not its
 /// target. `path` as written, normalized, when the current directory cannot be read.
 pub fn abs_path(path: &Path) -> PathBuf {
-    normpath(&std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()))
+    normpath(&absolute(path))
+}
+
+/// `path` made absolute from the current directory, `..` kept; `path` as written when the current directory cannot
+/// be read.
+fn absolute(path: &Path) -> PathBuf {
+    std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// `path` with `.` and empty components taken out and each `..` cancelling the name before it, as Python's

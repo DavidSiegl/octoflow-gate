@@ -15,9 +15,11 @@ use crate::{git, text, Unjudged};
 /// The findings of each parser check on `change`, one list per check, in the order the gate runs them: test-integrity,
 /// cognitive-complexity, vague-names. Each finding's severity says whether it fails the gate ([`Finding::severity`]).
 ///
-/// test-integrity also lists the golden files the change edits (judge::changed_golden_files) when the change edits the
+/// test-integrity also lists the golden files the change edits ([`changed_golden_files`]) when the change edits the
 /// code under test: a .rs file of a Cargo package that gate.toml's `test-files.rust` does not place among the tests,
-/// which the change adds, deletes, renames or edits outside its test code ([`integrity::edits_code`]).
+/// which the change adds, deletes, renames or edits outside its test code ([`integrity::edits_code`]). They come
+/// first, by path, and then the findings on Rust, by path and line, as gate.py's `weakened_tests` lists golden files
+/// before each language's findings.
 ///
 /// Errs when git cannot show a file at the base, or a file of the working tree cannot be read.
 pub fn run_checks(change: &Change) -> Result<Vec<Vec<Finding>>, Unjudged> {
@@ -28,11 +30,8 @@ pub fn run_checks(change: &Change) -> Result<Vec<Vec<Finding>>, Unjudged> {
         side.as_ref().is_some_and(|s| !change.settings.rust_tests.matches(&s.path) && in_cargo_package(change, &gone, &s.path))
     };
     let code_changed = rust.iter().any(|f| (is_code(&f.before) || is_code(&f.after)) && integrity::edits_code(f));
-    let mut weakened = integrity::weakened_tests(&rust, code_changed);
-    if code_changed {
-        weakened.extend(changed_golden_files(change));
-    }
-    weakened.sort_by(|a, b| (&a.path, a.line.unwrap_or(0)).cmp(&(&b.path, b.line.unwrap_or(0))));
+    let mut weakened = if code_changed { changed_golden_files(change) } else { vec![] };
+    weakened.extend(integrity::weakened_tests(&rust, code_changed));
     let exempt = |path: &OsStr| change.settings.complexity_exempt.matches(path);
     Ok(vec![weakened, complexity::too_complex(&rust, &exempt), names::vague_names(&rust, true)])
 }

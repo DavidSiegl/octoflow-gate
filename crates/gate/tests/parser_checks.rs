@@ -178,6 +178,16 @@ fn a_golden_file_changed_with_rust_code_is_an_expected_value_changed() {
 }
 
 #[test]
+fn golden_files_are_listed_before_the_findings_on_rust_whatever_their_paths() {
+    let repo = package(&[("crate/tests/golden/sum.txt", "3\n")]);
+    repo.put("crate/tests/golden/sum.txt", b"4\n");
+    edit(&repo, "crate/src/lib.rs", "    a + b\n", "    a + b + 1\n");
+    edit(&repo, "crate/src/lib.rs", "    #[test]\n    fn adds_large() {\n        assert_eq!(add(10, 20), 30);\n    }\n", "");
+    let paths: Vec<Option<String>> = found(&repo).into_iter().map(|(path, ..)| path).collect();
+    assert_eq!(paths, [Some("crate/tests/golden/sum.txt".into()), Some("crate/src/lib.rs".into())]);
+}
+
+#[test]
 fn a_file_under_tests_that_is_not_rust_on_purpose_is_no_test_integrity_finding() {
     let broken = "// A fixture of a parser's error.\nfn broken( {\n";
     let repo = package(&[("crate/tests/fixtures/broken.rs", broken)]);

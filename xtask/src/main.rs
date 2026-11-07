@@ -11,10 +11,10 @@
 //! [`ported_markdown`]). It exits 0 when they agree, 1 when they differ, printing each part that does, and 2 when
 //! either gate could not judge the change or the arguments are bad. Both run in this workspace's Python environment,
 //! with its dev tools on PATH: gate.py as `uv run --project <workspace> python <workspace>/gate.py`, reading Rust with
-//! the gate-rust helper built from the workspace's gate-rust/, and `gate` as `uv run --project <workspace> cargo run`. Each gate runs the tree's `[[test]]` commands unless GATE_ARGS gives
-//! `--tests` or `--coverage`; `-- --mutation-budget 1 --base-run-budget 1` keeps gate.py's mutation and base runs,
-//! which the Rust gate does not port yet, short. A change between two commits is compared with the later one checked
-//! out.
+//! the gate-rust helper built from the workspace's gate-rust/, and `gate` as `uv run --project <workspace> cargo run`.
+//! Each gate runs the tree's `[[test]]` commands unless GATE_ARGS gives `--tests` or `--coverage`;
+//! `-- --mutation-budget 1 --base-run-budget 1` keeps gate.py's mutation and base runs, which the Rust gate does not
+//! port yet, short. A change between two commits is compared with the later one checked out.
 //!
 //! `fixture` makes DIR, which must not exist, a git repository whose working tree holds a change since its branch
 //! `main` that gives every part ported so far something to report ([`fixture`]), for `cargo xtask compare --repo DIR

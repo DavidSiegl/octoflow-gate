@@ -29,6 +29,7 @@ pub struct Text<'t> {
 }
 
 impl<'t> Text<'t> {
+    /// The text of a whole file, `bytes`, whose offsets are the file's.
     pub fn of_file(bytes: &'t [u8]) -> Text<'t> {
         Text { bytes, shift: 0 }
     }
@@ -38,6 +39,7 @@ impl<'t> Text<'t> {
         node.start_byte().checked_add_signed(self.shift).unwrap_or(0)
     }
 
+    /// The offset in the file just past where `node` ends: exclusive, so its last byte is at one less.
     pub fn end(&self, node: Node) -> usize {
         node.end_byte().checked_add_signed(self.shift).unwrap_or(0)
     }
@@ -980,6 +982,7 @@ pub fn unraw(name: &str) -> &str {
     name.strip_prefix("r#").unwrap_or(name)
 }
 
+/// `node`'s children, named and anonymous alike (punctuation and keywords too), in source order.
 pub fn children(node: Node) -> Vec<Node> {
     node.children(&mut node.walk()).collect()
 }

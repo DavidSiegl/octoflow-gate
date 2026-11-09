@@ -69,8 +69,12 @@ runs the checks of `crates/checks` over it.
   not unpack the base: ...", where gate.py quotes Python's `OSError` or `TarError`.
 - **A copied file keeps its permissions but not its times**: the Rust gate copies with `std::fs::copy`, gate.py with
   `shutil.copy2`, which keeps both.
-- **A special file in the tree, such as a named pipe, is refused**, "cannot copy PATH: it is no regular file, link or
-  directory", where gate.py's `shutil` raises `SpecialFileError`, or `shutil.Error` inside a copied directory.
+- **A special file in the tree is refused**, "cannot copy PATH: it is no regular file, link or directory", whatever
+  its kind. gate.py's `shutil.copy2` differs by kind: it raises `SpecialFileError` on a named pipe and `OSError`
+  (ENXIO) on a Unix socket, both ending as the same not-run finding in other words, but it copies a device as a
+  regular file holding what reading it gives, so the check runs where the Rust gate's is not run, and on a device
+  that never ends, such as `/dev/zero`, it writes without end. Inside a copied directory `shutil.copytree`
+  gathers the errors into one `shutil.Error`.
 
 ### passes-at-base
 

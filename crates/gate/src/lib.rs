@@ -5,6 +5,7 @@
 
 pub mod clippy;
 pub mod config_edits;
+pub mod copies;
 pub mod coverage;
 pub mod diff;
 pub mod git;

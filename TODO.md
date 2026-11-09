@@ -451,3 +451,33 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   5.9 GB tmpfs, 13 000 were left by 2026-11-09, and a full /tmp then failed cargo-mutants' own writes in a
   `cargo xtask compare` run (gate-standalone/14). Closes with a guard that removes the path when dropped, used by
   every such test, in one commit.
+- **A removal just below a Rust test counts as touching it, so a neighbour of a deleted test is run at the base.**
+  A removal point is the line after which lines were removed, and passes-at-base counts one up to the test's last
+  line (`touches` in `crates/gate/src/passes_at_base.rs`, `_touched_rust_tests` in gate.py, both `<= last`).
+  Deleting test B right after test A gives the -U0 hunk the removal point A's last line, so A is run at the base,
+  passes, and fails the gate with "passes without the change" although the change never touched it (review 12,
+  F1, 2026-11-10). gate.py has the same rule, so both sides change together, or `cargo xtask compare`
+  (gate-standalone/17) disagrees. Closes with `< last` on both sides and a test deleting the test after another.
+- **The workspace prefix is stripped anywhere in a diff header, so a nested path names a file that does not
+  exist.** surviving-mutants' `diff_under` (`crates/gate/src/mutants.rs`) replaces every `a/<root>/` and
+  `b/<root>/` in a section's header, not only at a path's start, as gate.py's `_diff_under` does with
+  `str.replace`. With workspace root `core` and file `core/lib/core/src/x.rs`, `b/core/lib/core/src/x.rs` becomes
+  `b/lib/src/x.rs`, so `--in-diff` names a missing file and it is not mutation-tested (review 12, F2, 2026-11-10).
+  Closes, on both sides together for `cargo xtask compare`, with the prefix replaced only at a path's start.
+- **passes-at-base runs cargo nextest with `--locked` even where git tracks no Cargo.lock.** In a workspace that does
+  not commit its lock file the base copy has none, cargo refuses to build, and every changed test gets a not-run
+  finding instead of a verdict (`crates/gate/src/passes_at_base.rs`'s argv, gate.py's `_rust_target_findings`).
+  clippy adds `--locked` only when git tracks the lock file (`crates/gate/src/clippy.rs`, gate.py's clippy argv)
+  (review 12, F3, 2026-11-10). Closes, on both sides together for `cargo xtask compare`, with nextest taking
+  clippy's rule.
+- **A submodule beside the tests stops passes-at-base's base copy.** `copy_base_with_tests`
+  (`crates/gate/src/copies.rs`) removes each base path that belongs with the tests with `remove_file`, and gate.py's
+  `_copy_base_with_tests` with `os.remove`; a submodule there, such as a fixture repository under `tests/` that
+  `test-support` covers, is a directory, so the removal fails and the whole check is "could not copy the base"
+  (review 12, F4, 2026-11-10; the submodule tests cover only `vendor/`). Closes, on both sides together for
+  `cargo xtask compare`, with a directory removed as a whole, and a test with a submodule under `tests/`.
+- **The Rust gate repeats per-path work.** `RustChange::is_code` (`crates/gate/src/parser_checks.rs`) stats the
+  file and scans the change's files on every call, and its callers ask again for the same paths, so the work grows
+  with the square of the files; `cargo_root` (`crates/gate/src/mutants.rs`) starts one `cargo locate-project` per
+  changed .rs path, even for paths of one manifest (review 12, F8, 2026-11-10). Neither changes a finding. Closes
+  with `is_code` answered once per path when the `RustChange` is built, and one `locate-project` per directory.

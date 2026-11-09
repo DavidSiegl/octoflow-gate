@@ -1,10 +1,10 @@
-//! The parser checks run on a real git repository's change (gate::parser_checks::run_checks): what the gate decides
+//! The parser checks run on a real git repository's change (gate::parser_checks): what the gate decides
 //! over the whole change before a check judges it, which crates/lang-rust's tests of the checks take as given:
 //! whether the change edits Rust code under test, by the Cargo packages and settings of the tree, and which golden
 //! files go with it. TestRustWeakenedTests in tests/test_gate.py, for those cases.
 
 use gate::judge::{judge_change, Change, Given};
-use gate::parser_checks::run_checks;
+use gate::parser_checks::{too_complex, vague_names, weakened_tests, RustChange};
 use gate::settings::Settings;
 
 use common::Repo;
@@ -65,15 +65,21 @@ fn edit(repo: &Repo, path: &str, old: &str, new: &str) {
     repo.put(path, text.replacen(old, new, 1).as_bytes());
 }
 
+/// The findings of test-integrity, cognitive-complexity and vague-names on `change`, in that order.
+fn run_checks(change: &Change) -> Vec<Vec<gate::report::Finding>> {
+    let rust = RustChange::read(change).unwrap();
+    vec![weakened_tests(&rust), too_complex(&rust), vague_names(&rust)]
+}
+
 /// A finding as these tests compare it: its path, line, rule and severity.
 type Found = (Option<String>, Option<u32>, String, String);
 
 /// Each finding of the parser checks on the change from HEAD to the working tree, every file in it tracked, by the
-/// default settings, in the order run_checks gives them.
+/// default settings, in the order the gate runs the checks.
 fn found(repo: &Repo) -> Vec<Found> {
     repo.git(&["add", "-A"]);
     let change = Change::from_tree(&repo.repo, "HEAD", Settings::default()).unwrap();
-    let by_check = run_checks(&change).unwrap();
+    let by_check = run_checks(&change);
     let mut out = vec![];
     for f in by_check.into_iter().flatten() {
         let path = f.path.as_ref().map(|p| p.to_string_lossy().into_owned());
@@ -255,7 +261,7 @@ fn a_check_s_errors_fail_the_gate_and_its_warnings_are_to_weigh() {
 fn the_checks_run_in_the_gate_s_order_one_list_each() {
     let repo = package(&[]);
     let change = Change::from_tree(&repo.repo, "HEAD", Settings::default()).unwrap();
-    assert_eq!(run_checks(&change).unwrap(), vec![vec![], vec![], vec![]]);
+    assert_eq!(run_checks(&change), vec![vec![], vec![], vec![]]);
     // A new fn over the limit, and a vague name, beside a skip.
     let ifs: String = (0..16).map(|k| format!("    if x == {k} {{\n        x += {k};\n    }}\n")).collect();
     repo.put("crate/src/big.rs", format!("pub fn big(mut x: u32) -> u32 {{\n{ifs}    let info = x;\n    info\n}}\n").as_bytes());

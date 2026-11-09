@@ -57,3 +57,18 @@ runs the checks of `crates/checks` over it.
 
 - **Two vague names first bound on one line** are listed by column; gate.py lists them in the helper's order.
 - **Case** is folded in ASCII; gate.py folds Unicode. The vague words are ASCII, so no name differs.
+
+## The checks that run Rust's tools (gate-standalone/14)
+
+### Copies of the tree
+
+- **The base is unpacked by the system's `tar`**, where gate.py uses Python's tarfile with its "tar" filter. Both
+  refuse a member whose path leads out of the copy, through a link or otherwise, and write a tracked link as it is;
+  the Rust gate takes no archive crate (spec decision 7).
+- **A copy that cannot be made is worded by the Rust gate**: its findings say "cannot make PATH: ..." or "tar could
+  not unpack the base: ...", where gate.py quotes Python's `OSError` or `TarError`.
+
+### passes-at-base
+
+- **Only Rust's half runs**, with the whole `--base-run-budget`. gate.py runs Python's changed tests first and gives
+  Rust's what is left of the budget; the Rust gate reads no Python yet (gate-standalone/16).

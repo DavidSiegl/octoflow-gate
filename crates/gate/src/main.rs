@@ -7,8 +7,8 @@
 //!      [--test-contexts COVERAGE] [--rust-syntax PATH]
 //! ```
 //!
-//! Its flags are gate.py's. `--mutation-budget`, `--base-run-budget` and `--test-contexts` are read and checked, but
-//! nothing uses them until the checks they budget are ported (gate-standalone/16); `--rust-syntax` names gate.py's
+//! Its flags are gate.py's. `--mutation-budget` and `--test-contexts` are read and checked, but nothing uses them
+//! until the checks they budget are ported (gate-standalone/14, 16); `--rust-syntax` names gate.py's
 //! helper, which this binary does not need. Exit status 0 for GATE: OK, 1 for GATE: ERROR, 2 when it could not judge
 //! the change or the arguments are bad, and 130 for Ctrl-C; with 2 or 130 it writes no report.
 
@@ -34,11 +34,11 @@ const USAGE: &str = "usage: gate --base REV [--config FILE] [--coverage XML] [--
 
 const HELP: &str = "
 The Rust port of gate.py, which judges only what has been ported so far: pymarkdown, shellcheck, actionlint and
-clippy over the files the repository tracks, the parser checks over Rust, gate.toml's [[test]] commands, the tests
-and coverage they report, files committed under mutmut's mutants/, stray line ends, suppressions added and edited
-build configuration. It writes the quality file: GATE: OK or GATE: ERROR on its first line, then the failed
-conditions, the findings on lines added since --base, failing tests, coverage of new code, suppressions added and
-edited build configuration. Exit status 0 for OK, 1 for ERROR, 2 when it could not judge, writing nothing. --out FILE
+clippy over the files the repository tracks, the parser checks and passes-at-base over Rust, gate.toml's [[test]]
+commands, the tests and coverage they report, files committed under mutmut's mutants/, stray line ends, suppressions
+added and edited build configuration. It writes the quality file: GATE: OK or GATE: ERROR on its first line, then the
+failed conditions, the findings on lines added since --base, failing tests, coverage of new code, suppressions added
+and edited build configuration. Exit status 0 for OK, 1 for ERROR, 2 when it could not judge, writing nothing. --out FILE
 also writes quality.json, the same report as data.
 
 options:
@@ -58,7 +58,8 @@ options:
   --mutation-budget SECONDS
                           accepted for gate.py's sake; no check uses it yet
   --base-run-budget SECONDS
-                          accepted for gate.py's sake; no check uses it yet
+                          the seconds the passes-at-base check may run the changed tests at the base for, in place
+                          of gate.toml's budgets.base-run
   --test-contexts COVERAGE
                           accepted for gate.py's sake; no check uses it yet
   --rust-syntax PATH      accepted for gate.py's sake, and ignored";
@@ -178,7 +179,10 @@ fn parse_args(argv: impl IntoIterator<Item = OsString>) -> Result<Asked, String>
             "--tests" => given.tests.push(value()?.into()),
             "--out" => out = Some(PathBuf::from(value()?)),
             "--json" => json = Some(PathBuf::from(value()?)),
-            "--mutation-budget" | "--base-run-budget" => {
+            "--base-run-budget" => {
+                given.base_run_budget = Some(seconds(&value()?).map_err(|e| format!("argument {name}: {e}"))?);
+            }
+            "--mutation-budget" => {
                 seconds(&value()?).map_err(|e| format!("argument {name}: {e}"))?;
             }
             "--test-contexts" | "--rust-syntax" => {
@@ -336,6 +340,7 @@ mod tests {
                    "argument --mutation-budget: must be at least 1, not 0");
         assert_eq!(parse(&["--base", "m", "--base-run-budget", "1.5"]).unwrap_err(),
                    "argument --base-run-budget: expected a whole number of seconds, not '1.5'");
+        assert_eq!(run(&["--base", "m", "--base-run-budget", "7"]).given.base_run_budget, Some(7));
         let ignored = ["--mutation-budget", "5", "--rust-syntax", "x", "--test-contexts", "y"];
         assert!(parse(&[&["--base", "m"][..], &ignored].concat()).is_ok());
         assert_eq!(parse(&["--base", "m", "-x", "y"]).unwrap_err(), "unrecognized arguments: -x y");

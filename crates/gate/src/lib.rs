@@ -14,6 +14,7 @@ pub mod judge;
 pub mod junit;
 pub mod linters;
 pub mod parser_checks;
+pub mod passes_at_base;
 pub mod paths;
 pub mod process;
 pub mod report;

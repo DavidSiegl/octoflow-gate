@@ -16,6 +16,8 @@ const BASE: &[(&str, &str)] = &[
     ("README.md", "# Fixture\n\nThe change `cargo xtask compare` judges.\n"),
     (".github/workflows/ci.yml", WORKFLOW),
     ("tiny/Cargo.toml", "[package]\nname = \"tiny\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"),
+    // passes-at-base runs the tests with `--locked`.
+    ("tiny/Cargo.lock", "version = 4\n\n[[package]]\nname = \"tiny\"\nversion = \"0.1.0\"\n"),
     ("tiny/src/lib.rs", TINY_LIB),
     ("tiny/tests/it.rs", TINY_IT),
     ("tiny/tests/golden/sum.txt", "3\n"),
@@ -58,6 +60,8 @@ fn change() -> Vec<(&'static str, String)> {
             "-2);\n}\n\n#[test]\nfn zero() {\n    assert!(add(0, 0) == 0);\n}\n", "-3);\n}\n",
         )),
         ("tiny/tests/golden/sum.txt", "4\n".into()),
+        // A test that passes without the change, at line 4: passes-at-base runs it at the base.
+        ("tiny/tests/sums.rs", "use tiny::add;\n\n#[test]\nfn sums() {\n    assert_eq!(add(1, 2), 3);\n}\n".into()),
         // A file under mutmut's state.
         ("mutants/notes.txt", "left by a mutation run\n".into()),
     ]

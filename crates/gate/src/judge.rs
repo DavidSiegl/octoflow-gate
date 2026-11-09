@@ -1,6 +1,7 @@
 //! The gate's judgement of one change: what it reads of the change, and the report it gives on it, as gate.py's
 //! judge_change does for the parts ported so far. Of the checks beside the linters, the parser checks run
-//! (parser_checks), over the languages ported so far; the others come with gate-standalone/14-16.
+//! (parser_checks) over the languages ported so far, and passes-at-base over Rust (passes_at_base); the others come
+//! with gate-standalone/14-16.
 
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
@@ -10,7 +11,8 @@ use crate::config_edits::{cargo_home_in, clippy_config_files, edited_config};
 use crate::coverage::new_coverage;
 use crate::diff::{change_diff, changed_files, changed_lines, ChangedFile, ChangedLines};
 use crate::linters::{tracked_from, Linter, LINTERS};
-use crate::parser_checks::run_checks;
+use crate::parser_checks::{too_complex, vague_names, weakened_tests, RustChange};
+use crate::passes_at_base::passes_at_base;
 use crate::process::tool_env;
 use crate::report::{Finding, QualityReport};
 use crate::settings::{tree_s_own, Settings};
@@ -38,6 +40,8 @@ pub struct Given {
     /// given (test_commands::test_results).
     pub tests: Vec<PathBuf>,
     pub coverage: Vec<PathBuf>,
+    /// Seconds the passes-at-base check's runs may take, in place of gate.toml's `budgets.base-run`.
+    pub base_run_budget: Option<u64>,
 }
 
 /// The change the gate judges, as [`Change::from_tree`] reads it, and as each check is given it.
@@ -100,7 +104,7 @@ pub fn under_mutmut_state(path: &OsStr) -> bool {
 /// The gate is ERROR when the change adds or edits files under [`MUTMUT_STATE`], which is always mutmut's scratch
 /// state committed by accident; when there is such a linter finding; when a linter is missing, fails or prints
 /// nothing readable; when a file a linter reads and the change adds lines to holds a line end git does not count
-/// (suppressions::stray_line_ends); when a parser check (parser_checks::run_checks) has a finding of severity
+/// (suppressions::stray_line_ends); when a check beside the linters ([`judge_checks`]) has a finding of severity
 /// "error", each of which is listed beside the linters' while the others are listed to weigh; when a test fails, or a
 /// test command's tests could not be judged; or when the coverage reports put new code below the minimum
 /// (coverage::NewCoverage::condition). The tests are those test_commands::test_results gives, run before the
@@ -156,7 +160,8 @@ pub fn judge_change(cwd: &Path, base: &str, given: &Given) -> Result<QualityRepo
     for (path, n, end) in stray_line_ends(&root, changed, &reads)? {
         conditions.push(stray_line_end_condition(&path, n, end));
     }
-    let to_weigh = judge_checks(&change, &mut conditions, &mut issues)?;
+    let base_run_budget = given.base_run_budget.unwrap_or(change.settings.base_run_budget);
+    let to_weigh = judge_checks(&change, base_run_budget, &mut conditions, &mut issues)?;
 
     conditions.extend(tests.problems);
     if let Some(failing) = tests.failing.as_ref().filter(|failing| !failing.is_empty()) {
@@ -188,16 +193,25 @@ pub fn judge_change(cwd: &Path, base: &str, given: &Given) -> Result<QualityRepo
     })
 }
 
-/// Judges the parser checks' findings on `change` (parser_checks::run_checks): appends to `conditions` a failed
-/// condition for each check with findings of severity "error", in the order the checks run, and to `issues` those
-/// findings; returns the others, to weigh. Errs as run_checks does, having appended nothing.
+/// Runs the checks beside the linters on `change`, in the order gate.py's `gate_checks` runs them: test-integrity,
+/// cognitive-complexity, passes-at-base, letting its runs take `base_run_budget` seconds, and vague-names. Appends to
+/// `conditions` a failed condition for each check with findings of severity "error", in that order, and to `issues`
+/// those findings; returns the others, to weigh. Errs as [`RustChange::read`] does, having appended nothing.
 fn judge_checks(
     change: &Change,
+    base_run_budget: u64,
     conditions: &mut Vec<String>,
     issues: &mut Vec<Finding>,
 ) -> Result<Vec<Finding>, Unjudged> {
+    let rust = RustChange::read(change)?;
+    let found = [
+        weakened_tests(&rust),
+        too_complex(&rust),
+        named("passes-at-base", passes_at_base(&rust, base_run_budget)),
+        vague_names(&rust),
+    ];
     let mut to_weigh = vec![];
-    for found in run_checks(change)? {
+    for found in found {
         let (errors, weighed): (Vec<Finding>, Vec<Finding>) = found.into_iter().partition(|f| f.severity == "error");
         if let Some(first) = errors.first() {
             conditions.push(format!("{} findings of the `{}` check; each is listed below.", errors.len(), first.check()));
@@ -206,6 +220,13 @@ fn judge_checks(
         to_weigh.extend(weighed);
     }
     Ok(to_weigh)
+}
+
+/// `findings` of the check named `check`, as its find gives them (copies::finding), with the check's name before
+/// each rule: gate.py's `GateCheck.judged`, for a check whose findings never fail the gate.
+fn named(check: &str, findings: Vec<Finding>) -> Vec<Finding> {
+    let rule = |own: String| if own.is_empty() { check.to_string() } else { format!("{check} {own}") };
+    findings.into_iter().map(|f| Finding { rule: rule(f.rule), ..f }).collect()
 }
 
 /// What git printed, up to the newline that ends its one line.

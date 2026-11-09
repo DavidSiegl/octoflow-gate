@@ -108,6 +108,7 @@ fn model(items: &Items, text: &str, among_tests: bool, n: u32) -> SourceFile {
             .map(|t| Test {
                 name: qualified_name(t),
                 line: t.line,
+                lines: Lines { first: t.attrs_line, last: t.end },
                 body: t.body.clone().unwrap_or_default(),
                 assertions: t.asserts.clone(),
             })

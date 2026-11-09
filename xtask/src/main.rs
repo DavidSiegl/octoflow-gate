@@ -12,13 +12,12 @@
 //! either gate could not judge the change or the arguments are bad. Both run in this workspace's Python environment,
 //! with its dev tools on PATH: gate.py as `uv run --project <workspace> python <workspace>/gate.py`, reading Rust with
 //! the gate-rust helper built from the workspace's gate-rust/, and `gate` as `uv run --project <workspace> cargo run`.
-//! Each gate runs the tree's `[[test]]` commands unless GATE_ARGS gives `--tests` or `--coverage`;
-//! `-- --mutation-budget 1 --base-run-budget 1` keeps gate.py's mutation and base runs, which the Rust gate does not
-//! port yet, short. A change between two commits is compared with the later one checked out.
+//! Each gate runs the tree's `[[test]]` commands unless GATE_ARGS gives `--tests` or `--coverage`. A change between
+//! two commits is compared with the later one checked out.
 //!
 //! `fixture` makes DIR, which must not exist, a git repository whose working tree holds a change since its branch
-//! `main` that gives every part ported so far something to report ([`fixture`]), for `cargo xtask compare --repo DIR
-//! -- --mutation-budget 1 --base-run-budget 1`. It exits 0 once DIR is made, and 2 when it cannot make it.
+//! `main` that gives every part ported so far something to report ([`fixture`]), for `cargo xtask compare --repo
+//! DIR`. It exits 0 once DIR is made, and 2 when it cannot make it.
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -172,7 +171,7 @@ fn gate_rust(workspace: &Path, cargo: &OsStr) -> Result<PathBuf, String> {
 }
 
 /// The linters the Rust gate runs; gate.py's findings of any other are not compared.
-const PORTED_LINTERS: [&str; 3] = ["pymarkdown", "shellcheck", "actionlint"];
+const PORTED_LINTERS: [&str; 4] = ["pymarkdown", "shellcheck", "actionlint", "clippy"];
 
 /// The parts of `report`, a quality.json, that the Rust gate has ported, as an object of the parts by name; those of
 /// gate.py's when `from_python`, which leaves out what comes of the parts not ported. The verdict and the count of
@@ -273,29 +272,55 @@ fn ported_condition_of_python(c: &str) -> bool {
         || c.contains(", which a linter that reads the file ends a line at and git does not.")
 }
 
-/// The checks the Rust gate runs over Rust (gate::parser_checks); gate.py's findings of any other are not compared.
-const PORTED_CHECKS: [&str; 3] = ["test-integrity", "cognitive-complexity", "vague-names"];
+/// The checks the Rust gate runs over Rust (gate::parser_checks, gate::passes_at_base); gate.py's findings of any
+/// other are not compared.
+const PORTED_CHECKS: [&str; 5] =
+    ["test-integrity", "cognitive-complexity", "surviving-mutants", "passes-at-base", "vague-names"];
 
 /// Whether quality.json's finding `f` is compared, given whether it is gate.py's: of gate.py's, only a ported
-/// linter's, and a ported check's on a .rs file or a golden file. gate.py lists a changed golden file when the change
-/// edits the code under test in any language, the Rust gate only when it edits Rust's, so the two agree on golden
-/// files only where the change edits Rust code, or no code at all.
+/// linter's, a ported check's on a .rs file or a golden file, and one on no file of the Rust half of passes-at-base
+/// ([`rust_s_base_run`]) or of surviving-mutants ([`rust_s_mutation_run`]). gate.py lists a changed golden file
+/// when the change edits the code under test in any language, the Rust gate only when it edits Rust's, so the two
+/// agree on golden files only where the change edits Rust code, or no code at all.
 fn ported_finding(f: &Value, from_python: bool) -> bool {
     let check = f["check"].as_str().unwrap_or_default();
     let path = f["path"].as_str().unwrap_or_default();
     let golden = f["rule"] == "test-integrity expected-value-changed" && f["line"].is_null();
+    let message = f["message"].as_str().unwrap_or_default();
+    let rust_s_run = f["path"].is_null()
+        && match check {
+            "passes-at-base" => rust_s_base_run(message),
+            "surviving-mutants" => rust_s_mutation_run(message),
+            _ => false,
+        };
     !from_python
         || PORTED_LINTERS.contains(&check)
         || (PORTED_CHECKS.contains(&check) && (path.ends_with(".rs") || golden))
+        || rust_s_run
+}
+
+/// Whether `message`, of a passes-at-base finding on no file, is the Rust half's, by gate.py's words in
+/// `_rust_passes_at_base` and what it calls; the Python half's speak of pytest and "the changed tests".
+fn rust_s_base_run(message: &str) -> bool {
+    message.contains("Rust test")
+        || message.contains("cargo nextest")
+        || message.ends_with(", so its changed tests were not run there.")
+}
+
+/// Whether `message`, of a surviving-mutants finding on no file, is the Rust half's, by gate.py's words in
+/// `_cargo_mutants_on_copy` and what it calls; the Python half's speak of mutmut and "the change's functions".
+fn rust_s_mutation_run(message: &str) -> bool {
+    message.contains("cargo-mutants") || message.ends_with("the change's Rust was not mutation-tested.")
 }
 
 /// Whether quality.json's suppression `s` is compared, given whether it is gate.py's: of gate.py's, only one in a
-/// file the Rust gate reads the suppressions of, a shell script, a workflow or Markdown. A shell script that is
+/// file the Rust gate reads the suppressions of, a shell script, a workflow, Markdown or Rust. A shell script that is
 /// Python by its `#!` is gate.py's alone until Python is ported (gate-standalone/15).
 fn ported_suppression(s: &Value, from_python: bool) -> bool {
     let path = s["path"].as_str().unwrap_or_default();
     !from_python
         || path.ends_with(".sh")
         || path.ends_with(".md")
+        || path.ends_with(".rs")
         || (path.starts_with(".github/workflows/") && (path.ends_with(".yml") || path.ends_with(".yaml")))
 }

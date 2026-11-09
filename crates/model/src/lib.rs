@@ -112,6 +112,8 @@ pub struct Test {
     pub name: String,
     /// The line of its `def` or `fn`.
     pub line: u32,
+    /// Its lines, from its first decorator or attribute to its end.
+    pub lines: Lines,
     /// What its body does, as [`Function::body`] says: a test renamed or moved matches its old self by it.
     pub body: String,
     /// Its assertions, in the order they are written.

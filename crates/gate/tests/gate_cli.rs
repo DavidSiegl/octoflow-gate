@@ -71,19 +71,14 @@ fn a_finding_on_an_added_line_fails_the_gate_and_the_report_goes_to_standard_out
     let repo = test_gate_repo();
     // A shell script shellcheck reads, run as a stub that finds something on the line the change adds and the one
     // before it, which only the first counts against.
-    let bin = repo.outside.join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    let stub = bin.join("shellcheck");
-    std::fs::write(&stub, "#!/bin/sh\necho 'run.sh:1:1: warning: Old. [SC1000]'\n\
-                           echo 'run.sh:2:1: warning: New. [SC2000]'\nexit 1\n").unwrap();
-    std::fs::set_permissions(&stub, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let bin = repo.stub("shellcheck", "echo 'run.sh:1:1: warning: Old. [SC1000]'\n\
+                                       echo 'run.sh:2:1: warning: New. [SC2000]'\nexit 1");
     repo.put("run.sh", b"#!/bin/sh\n");
     repo.git(&["add", "run.sh"]);
     repo.git(&["commit", "--quiet", "-m", "script"]);
     repo.put("run.sh", b"#!/bin/sh\necho new\n");
     let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
-    let done = Command::new(env!("CARGO_BIN_EXE_gate")).current_dir(&repo.repo).env("PATH", path)
-        .args(["--base", "HEAD"]).output().unwrap();
+    let done = repo.gate_command("HEAD").env("PATH", path).output().unwrap();
     assert_eq!(done.status.code(), Some(1), "{}", String::from_utf8_lossy(&done.stderr));
     let out = String::from_utf8(done.stdout).unwrap();
     assert!(out.starts_with("GATE: ERROR\n"), "{out}");

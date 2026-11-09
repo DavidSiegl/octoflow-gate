@@ -57,3 +57,41 @@ runs the checks of `crates/checks` over it.
 
 - **Two vague names first bound on one line** are listed by column; gate.py lists them in the helper's order.
 - **Case** is folded in ASCII; gate.py folds Unicode. The vague words are ASCII, so no name differs.
+
+## The checks that run Rust's tools (gate-standalone/14)
+
+### Copies of the tree
+
+- **The base is unpacked by the system's `tar`**, where gate.py uses Python's tarfile with its "tar" filter. Both
+  refuse a member whose path leads out of the copy, through a link or otherwise, and write a tracked link as it is;
+  the Rust gate takes no archive crate (spec decision 7).
+- **A copy that cannot be made is worded by the Rust gate**: its findings say "cannot make PATH: ..." or "tar could
+  not unpack the base: ...", where gate.py quotes Python's `OSError` or `TarError`.
+- **A copied file keeps its permissions but not its times**: the Rust gate copies with `std::fs::copy`, gate.py with
+  `shutil.copy2`, which keeps both.
+- **A special file in the tree is refused**, "cannot copy PATH: it is no regular file, link or directory", whatever
+  its kind. gate.py's `shutil.copy2` differs by kind: it raises `SpecialFileError` on a named pipe and `OSError`
+  (ENXIO) on a Unix socket, both ending as the same not-run finding in other words, but it copies a device as a
+  regular file holding what reading it gives, so the check runs where the Rust gate's is not run, and on a device
+  that never ends, such as `/dev/zero`, it writes without end. Inside a copied directory `shutil.copytree`
+  gathers the errors into one `shutil.Error`.
+
+### passes-at-base
+
+- **Only Rust's half runs**, with the whole `--base-run-budget`. gate.py runs Python's changed tests first and gives
+  Rust's what is left of the budget; the Rust gate reads no Python yet (gate-standalone/16).
+- **A scratch directory whose path is not UTF-8** gives "could not copy the base to run the changed Rust tests in:
+  PATH is not UTF-8", since nextest's configuration cannot name it. gate.py writes the path with its bytes escaped,
+  naming a store nextest then makes elsewhere.
+- **An earlier run's junit.xml that cannot be removed** is a not-run finding, "could not remove the report of an
+  earlier run", where gate.py lets the `OSError` end the gate.
+
+### surviving-mutants
+
+- **Only Rust's half runs**, with the whole `--mutation-budget`. gate.py gives mutmut half the budget when the change
+  edits Python too, and cargo-mutants what is left; the Rust gate runs no mutmut yet (gate-standalone/16).
+- **A mutant's outcome the gate cannot read is worded by the Rust gate**: the finding names what the mutant lacks, as
+  "no `span` with a start line", where gate.py quotes Python's exception, as `KeyError('file')`. The Rust gate also
+  needs every tried mutant's name, where gate.py reads only those of the first few survivors of a function.
+- **outcomes.json that is not a list of outcomes** is "PATH holds no list of outcomes", where gate.py quotes the
+  `KeyError` or `TypeError`.

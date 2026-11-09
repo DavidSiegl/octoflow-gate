@@ -34,6 +34,34 @@ pub struct Finished {
     pub stopped: bool,
 }
 
+impl Finished {
+    /// What a tool that went wrong, such as cargo, said about it, in a line of at most 160 characters, the last "…"
+    /// when cut: the exception of a pytest internal error, else the exception that ended it when it printed a
+    /// traceback, else the first line of its standard error, else the last line of its output; "nothing" when it
+    /// printed nothing. Only `\n` ends a line, so a path in it stays whole. gate.py's `_said`.
+    pub fn said(&self) -> String {
+        let lines = |printed: &[u8]| -> Vec<String> {
+            let printed = crate::text::lossless(printed);
+            printed.split('\n').map(crate::text::py_strip).filter(|l| !l.is_empty()).map(String::from).collect()
+        };
+        let (err, out) = (lines(&self.stderr), lines(&self.stdout));
+        let internal = out.iter().filter_map(|l| l.strip_prefix("INTERNALERROR>")).next_back();
+        let internal = internal.map(crate::text::py_strip);
+        let traceback = self.stderr.windows(9).any(|w| w == b"Traceback");
+        let said = match (internal, err.first(), err.last(), out.last()) {
+            (Some(internal), ..) => internal,
+            (None, Some(_), Some(last), _) if traceback => last,
+            (None, Some(first), ..) => first,
+            (None, None, _, Some(last)) => last,
+            _ => "nothing",
+        };
+        if said.chars().count() <= 160 {
+            return said.to_string();
+        }
+        said.chars().take(159).chain(['…']).collect()
+    }
+}
+
 /// The environment for every process the gate starts, git, a linter or a test command: the gate's own, without the
 /// variables whose names end in `_TOKEN`, `_PASSWORD`, `_SECRET` or `_API_KEY`, without UPDATE_GOLDEN, and without
 /// git's switches for how it reads every pathspec.
@@ -55,24 +83,51 @@ pub fn tool_env() -> Vec<(OsString, OsString)> {
 }
 
 /// `argv` run in `cwd` with [`tool_env`] as its whole environment and no input, in a process group of its own,
-/// killed after `timeout`; everything it printed, and how it ended.
+/// killed after `timeout`; everything it printed, and how it ended. [`run_with`] with [`Extras::default`].
+pub fn run(argv: &[&OsStr], cwd: &Path, timeout: Duration) -> std::io::Result<Finished> {
+    run_with(argv, cwd, timeout, &Extras::default())
+}
+
+/// What a process [`run_with`] runs takes beside what [`run`] gives every process.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Extras<'a> {
+    /// Variables set on top of [`tool_env`], replacing any of the same name.
+    pub env: &'a [(&'a str, &'a str)],
+    /// When given, a process that overruns its timeout is first sent SIGINT, as Ctrl-C would, and given this long to
+    /// exit before it is killed; it starts with SIGINT's default disposition even where the gate ignores SIGINT, as a
+    /// command a Jenkins `sh` step runs does, so that the signal reaches it. For a tool that writes what it has done
+    /// so far when interrupted, as cargo-mutants does.
+    pub soft_stop: Option<Duration>,
+}
+
+/// `argv` run in `cwd` with [`tool_env`] and `extras.env` as its whole environment and no input, in a process group
+/// of its own, stopped after `timeout`, as `extras.soft_stop` says; everything it printed, and how it ended.
 ///
 /// Once it has exited, or been killed, every process left in its group, such as a server it started, is killed too,
 /// and what was printed is read until no process holds the output open, for at most [`KILL_WAIT`] more: only one
-/// that left the group can still hold it, and what that prints later is lost. So the call returns within `timeout`
-/// and [`KILL_WAIT`]. When Ctrl-C reaches the gate meanwhile, the group is killed and the gate exits through
-/// [`exit_interrupted`]. Errs when `argv` cannot be started.
+/// that left the group can still hold it, and what that prints later is lost. So the call returns within `timeout`,
+/// the soft stop's grace and [`KILL_WAIT`]. When Ctrl-C reaches the gate meanwhile, the group is killed and the gate
+/// exits through [`exit_interrupted`]. Errs when `argv` cannot be started.
 ///
 /// The process starts a session of its own, as under gate.py, so it has no controlling terminal: the terminal's
 /// Ctrl-C is the gate's to pass on, and a tool that would read the terminal, or write to it under `stty tostop`,
 /// fails rather than stopping the gate with it.
-pub fn run(argv: &[&OsStr], cwd: &Path, timeout: Duration) -> std::io::Result<Finished> {
-    let (mut child, group) = start(argv, cwd, Stdio::piped(), Stdio::piped())?;
+pub fn run_with(argv: &[&OsStr], cwd: &Path, timeout: Duration, extras: &Extras) -> std::io::Result<Finished> {
+    let (mut child, group) = start(argv, cwd, Stdio::piped(), Stdio::piped(), extras)?;
     let stdout = Printed::read(child.stdout.take());
     let stderr = Printed::read(child.stderr.take());
     // Read on their threads while the process runs, so that a full pipe never blocks it.
     let mut status = wait(&mut child, &group, Some(Instant::now() + timeout))?;
     let stopped = status.is_none();
+    if let (true, Some(grace), Ok(pid)) = (stopped, extras.soft_stop, libc::pid_t::try_from(child.id())) {
+        // SAFETY: kill(2) on the process the gate started, not yet reaped, so its pid is still its own.
+        #[allow(unsafe_code, reason = "kill(2) has no safe wrapper in std; it reads no memory")]
+        // A failed kill means the process already exited; the wait below finds that out, so its result is ignored.
+        unsafe {
+            libc::kill(pid, libc::SIGINT);
+        }
+        status = wait(&mut child, &group, Some(Instant::now() + grace))?;
+    }
     group.kill();
     let end = Instant::now() + KILL_WAIT;
     while !(stdout.ended() && stderr.ended()) && Instant::now() < end {
@@ -93,15 +148,16 @@ pub fn run(argv: &[&OsStr], cwd: &Path, timeout: Duration) -> std::io::Result<Fi
 pub fn run_to_stderr(argv: &[&OsStr], cwd: &Path) -> std::io::Result<i32> {
     use std::os::fd::AsFd;
     let stdout = Stdio::from(std::io::stderr().as_fd().try_clone_to_owned()?);
-    let (mut child, group) = start(argv, cwd, stdout, Stdio::inherit())?;
+    let (mut child, group) = start(argv, cwd, stdout, Stdio::inherit(), &Extras::default())?;
     let status = wait(&mut child, &group, None)?;
     group.kill();
     Ok(status_code(status))
 }
 
-/// `argv` started in `cwd` with [`tool_env`] as its whole environment, no input and the given output, in a session,
-/// and so a process group, of its own, which the second value kills when dropped.
-fn start(argv: &[&OsStr], cwd: &Path, stdout: Stdio, stderr: Stdio) -> std::io::Result<(Child, Group)> {
+/// `argv` started in `cwd` with [`tool_env`] and `extras.env` as its whole environment, no input and the given output,
+/// in a session, and so a process group, of its own, which the second value kills when dropped; with SIGINT's default
+/// disposition when `extras` has a soft stop.
+fn start(argv: &[&OsStr], cwd: &Path, stdout: Stdio, stderr: Stdio, extras: &Extras) -> std::io::Result<(Child, Group)> {
     use std::os::unix::process::CommandExt;
     let (program, args) = argv.split_first().ok_or_else(|| std::io::Error::other("no program to run"))?;
     let mut command = Command::new(program);
@@ -110,13 +166,23 @@ fn start(argv: &[&OsStr], cwd: &Path, stdout: Stdio, stderr: Stdio) -> std::io::
         .current_dir(cwd)
         .env_clear()
         .envs(tool_env())
+        .envs(extras.env.iter().copied())
         .stdin(Stdio::null())
         .stdout(stdout)
         .stderr(stderr);
-    // SAFETY: setsid(2) is async-signal-safe, so it may run between fork and exec; it touches no memory.
-    #[allow(unsafe_code, reason = "setsid(2) between fork and exec has no safe wrapper in std")]
+    let default_sigint = extras.soft_stop.is_some();
+    // SAFETY: setsid(2) and signal(2) are async-signal-safe, so they may run between fork and exec; they touch no
+    // memory. An ignored signal stays ignored across exec, a handled one is reset to the default.
+    #[allow(unsafe_code, reason = "setsid(2) and signal(2) between fork and exec have no safe wrapper in std")]
     unsafe {
-        command.pre_exec(|| if libc::setsid() == -1 { Err(std::io::Error::last_os_error()) } else { Ok(()) });
+        command.pre_exec(move || {
+            if libc::setsid() == -1
+                || (default_sigint && libc::signal(libc::SIGINT, libc::SIG_DFL) == libc::SIG_ERR)
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
     }
     let child = command.spawn()?;
     let group = Group(child.id());
@@ -278,6 +344,39 @@ mod tests {
         let done = sh("sleep 30 & echo started", Duration::from_secs(10));
         assert_eq!((done.status, done.stopped), (0, false));
         assert!(start.elapsed() < Duration::from_secs(3), "{:?}", start.elapsed());
+    }
+
+    #[test]
+    fn a_soft_stop_interrupts_first_and_kills_after_the_grace() {
+        let argv: Vec<&OsStr> = ["sh", "-c", "trap 'echo interrupted; exit 7' INT; echo $GATE_TEST_EXTRA; \
+                                  while :; do sleep 0.05; done"]
+            .into_iter()
+            .map(OsStr::new)
+            .collect();
+        let extras = Extras { env: &[("GATE_TEST_EXTRA", "set")], soft_stop: Some(Duration::from_secs(5)) };
+        let done = run_with(&argv, Path::new("."), Duration::from_millis(300), &extras).unwrap();
+        assert_eq!((done.status, done.stopped), (7, true));
+        assert_eq!(done.stdout, b"set\ninterrupted\n");
+        let deaf: Vec<&OsStr> = ["sh", "-c", "trap '' INT; sleep 30"].into_iter().map(OsStr::new).collect();
+        let start = Instant::now();
+        let extras = Extras { soft_stop: Some(Duration::from_millis(200)), ..Extras::default() };
+        let done = run_with(&deaf, Path::new("."), Duration::from_millis(200), &extras).unwrap();
+        assert_eq!((done.status, done.stopped), (-libc::SIGKILL, true));
+        assert!(start.elapsed() < Duration::from_secs(3), "{:?}", start.elapsed());
+    }
+
+    #[test]
+    fn what_a_tool_said_is_its_error_s_first_line_or_its_exception() {
+        let said = |stdout: &str, stderr: &str| {
+            Finished { status: 1, stdout: stdout.into(), stderr: stderr.into(), stopped: false }.said()
+        };
+        assert_eq!(said("", ""), "nothing");
+        assert_eq!(said("a\n b \n\n", ""), "b");
+        assert_eq!(said("out", "\n first\nsecond\n"), "first");
+        assert_eq!(said("", "Traceback (most recent call last):\n  x\nValueError: no\n"), "ValueError: no");
+        assert_eq!(said("INTERNALERROR> a\nINTERNALERROR>  KeyError: k\n", "err"), "KeyError: k");
+        let long = said("", &"é".repeat(200));
+        assert_eq!((long.chars().count(), long.ends_with("é…")), (160, true));
     }
 
     #[test]

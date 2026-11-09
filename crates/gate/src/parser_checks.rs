@@ -1,6 +1,7 @@
 //! The parser checks (crates/checks) on a change: its source files read by their languages' front ends, each side of
 //! each file, and the checks run over them. Rust is the one language read so far (crates/lang-rust); Python comes
-//! with gate-standalone/15-16.
+//! with gate-standalone/15-16. What is read ([`RustChange`]) serves the checks that run a change's Rust too, as
+//! passes_at_base.
 
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
@@ -13,35 +14,76 @@ use crate::diff::removed_lines;
 use crate::judge::Change;
 use crate::{git, text, Unjudged};
 
-/// The findings of each parser check on `change`, one list per check, in the order the gate runs them: test-integrity,
-/// cognitive-complexity, vague-names. Each finding's severity says whether it fails the gate ([`Finding::severity`]).
-///
-/// test-integrity also lists the golden files the change edits ([`changed_golden_files`]) when the change edits the
-/// code under test: a .rs file of a Cargo package that gate.toml's `test-files.rust` does not place among the tests,
-/// which the change adds, deletes, renames or edits outside its test code ([`integrity::edits_code`]). They come
-/// first, by path, and then the findings on Rust, by path and line, as gate.py's `weakened_tests` lists golden files
-/// before each language's findings.
-///
-/// Errs when git cannot list the base's tree or show a file of it, or a file of the working tree cannot be read.
-pub fn run_checks(change: &Change) -> Result<Vec<Vec<Finding>>, Unjudged> {
-    let rust = rust_files(change)?;
-    let gone: Vec<&OsString> =
-        change.files.iter().filter(|f| f.before != f.after).filter_map(|f| f.before.as_ref()).collect();
-    let is_code = |side: &Option<Side>| {
-        side.as_ref().is_some_and(|s| !change.settings.rust_tests.matches(&s.path) && in_cargo_package(change, &gone, &s.path))
-    };
-    let code_changed = rust.iter().any(|f| (is_code(&f.before) || is_code(&f.after)) && integrity::edits_code(f));
-    let mut weakened = if code_changed { changed_golden_files(change) } else { vec![] };
-    weakened.extend(integrity::weakened_tests(&rust, code_changed));
-    let exempt = |path: &OsStr| change.settings.complexity_exempt.matches(path);
-    Ok(vec![weakened, complexity::too_complex(&rust, &exempt), names::vague_names(&rust, true)])
+/// A change's Rust, read once for each check that judges it: the files, and which of the change's paths are the code
+/// under test rather than its tests.
+pub struct RustChange<'a> {
+    pub change: &'a Change,
+    /// Each file of the change with a .rs path on a side, read with crates/lang-rust, as [`RustChange::read`] says.
+    pub files: Vec<ChangedFile>,
+    /// The base paths the change deletes or renames, where a Cargo.toml may have stood.
+    gone: Vec<OsString>,
 }
 
-/// Each file of `change` with a .rs path on a side, in the change's order, read with crates/lang-rust: at the base as
-/// git stores it, in the working tree, each where it is a regular file. A side that is not .rs, or is a symlink, a
-/// submodule, a directory or a special file, is None: a symlink's change is the name it points to, a submodule's
-/// object is a commit, and reading a FIFO or a device could block or never end. A file gate.toml's `test-files.rust`
-/// matches is read as test code whole.
+impl<'a> RustChange<'a> {
+    /// The Rust of `change`: each file with a .rs path on a side, in the change's order, read with crates/lang-rust
+    /// at the base as git stores it and in the working tree, each where it is a regular file. A side that is not .rs,
+    /// or is a symlink, a submodule, a directory or a special file, is None: a symlink's change is the name it points
+    /// to, a submodule's object is a commit, and reading a FIFO or a device could block or never end. A file
+    /// gate.toml's `test-files.rust` matches is read as test code whole.
+    ///
+    /// Errs when git cannot list the base's tree or show a file of it, or a file of the working tree cannot be read.
+    pub fn read(change: &'a Change) -> Result<RustChange<'a>, Unjudged> {
+        let gone = change.files.iter().filter(|f| f.before != f.after).filter_map(|f| f.before.clone()).collect();
+        Ok(RustChange { change, files: rust_files(change)?, gone })
+    }
+
+    /// Whether `path`, on either side of the change, is Rust code under test: a .rs file of a Cargo package
+    /// ([`in_cargo_package`]) that gate.toml's `test-files.rust` does not place among the tests, which the change
+    /// adds, deletes, renames or edits outside its test code ([`integrity::edits_code`]). A path no file was read at,
+    /// as a symlink's, counts as edited. gate.py's `_rust_code`.
+    pub fn is_code(&self, path: &OsStr) -> bool {
+        let change = self.change;
+        if !path.as_bytes().ends_with(b".rs")
+            || change.settings.rust_tests.matches(path)
+            || !in_cargo_package(change, &self.gone, path)
+        {
+            return false;
+        }
+        let at = |side: &Option<Side>| side.as_ref().is_some_and(|s| s.path == path);
+        let mut read = self.files.iter().filter(|f| at(&f.before) || at(&f.after)).peekable();
+        read.peek().is_none() || read.any(integrity::edits_code)
+    }
+
+    /// Whether the change edits Rust code under test: whether a path on a side of one of its files [`is_code`].
+    ///
+    /// [`is_code`]: RustChange::is_code
+    pub fn edits_code(&self) -> bool {
+        self.change.files.iter().flat_map(|f| [&f.before, &f.after]).flatten().any(|p| self.is_code(p))
+    }
+}
+
+/// The test-integrity check's findings on `rust`: the golden files the change edits ([`changed_golden_files`]),
+/// when it edits the code under test ([`RustChange::edits_code`]), by path, then the findings on Rust, by path and
+/// line, as gate.py's `weakened_tests` lists golden files before each language's findings. Each finding's severity
+/// says whether it fails the gate ([`Finding::severity`]).
+pub fn weakened_tests(rust: &RustChange) -> Vec<Finding> {
+    let code_changed = rust.edits_code();
+    let mut out = if code_changed { changed_golden_files(rust.change) } else { vec![] };
+    out.extend(integrity::weakened_tests(&rust.files, code_changed));
+    out
+}
+
+/// The cognitive-complexity check's findings on `rust`, but on the files gate.toml's `complexity-exempt` names.
+pub fn too_complex(rust: &RustChange) -> Vec<Finding> {
+    complexity::too_complex(&rust.files, &|path: &OsStr| rust.change.settings.complexity_exempt.matches(path))
+}
+
+/// The vague-names check's findings on `rust`.
+pub fn vague_names(rust: &RustChange) -> Vec<Finding> {
+    names::vague_names(&rust.files, true)
+}
+
+/// [`RustChange::read`]'s files.
 fn rust_files(change: &Change) -> Result<Vec<ChangedFile>, Unjudged> {
     let rs = |path: &Option<OsString>| path.clone().filter(|p| p.as_bytes().ends_with(b".rs"));
     let removed = removed_lines(&change.diff);
@@ -113,7 +155,7 @@ fn regular_file(path: &Path) -> bool {
 /// Whether a Cargo.toml lies in the directory of `path`, from the tree's top, or one above it up to the top: in the
 /// working tree, or at the base where the change deletes or renames it, as `gone`, the base paths the change deletes
 /// or renames, says.
-fn in_cargo_package(change: &Change, gone: &[&OsString], path: &OsStr) -> bool {
+fn in_cargo_package(change: &Change, gone: &[OsString], path: &OsStr) -> bool {
     let mut dir = Path::new(path).parent();
     while let Some(d) = dir {
         let manifest = d.join("Cargo.toml");
@@ -128,9 +170,9 @@ fn in_cargo_package(change: &Change, gone: &[&OsString], path: &OsStr) -> bool {
 /// A test-integrity expected-value-changed finding, on the whole file, for each golden file (Settings::golden) that
 /// `change` edits or deletes, by path, which the gate weighs as it does a changed literal in an assertion.
 ///
-/// [`run_checks`] lists them only when the change also edits code outside its tests, which only a language can tell:
-/// a golden file is then an expected value outside any assertion, which `UPDATE_GOLDEN=1` rewrites to whatever the
-/// code now writes. A golden file the change adds, or renames without editing, has no old value to lose. gate.py's
+/// [`weakened_tests`] lists them only when the change also edits code outside its tests, which only a language can
+/// tell: a golden file is then an expected value outside any assertion, which `UPDATE_GOLDEN=1` rewrites to whatever
+/// the code now writes. A golden file the change adds, or renames without editing, has no old value to lose. gate.py's
 /// `_changed_golden_files`.
 fn changed_golden_files(change: &Change) -> Vec<Finding> {
     let removals = crate::diff::removal_points(&change.diff);

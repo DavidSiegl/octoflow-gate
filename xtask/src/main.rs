@@ -279,9 +279,9 @@ const PORTED_CHECKS: [&str; 5] =
 
 /// Whether quality.json's finding `f` is compared, given whether it is gate.py's: of gate.py's, only a ported
 /// linter's, a ported check's on a .rs file or a golden file, and one on no file of the Rust half of passes-at-base
-/// ([`rust_s_base_run`]) or of surviving-mutants ([`rust_s_mutation_run`]). gate.py lists a changed golden file when the change edits the code under test in any
-/// language, the Rust gate only when it edits Rust's, so the two agree on golden files only where the change edits
-/// Rust code, or no code at all.
+/// ([`rust_s_base_run`]) or of surviving-mutants ([`rust_s_mutation_run`]). gate.py lists a changed golden file
+/// when the change edits the code under test in any language, the Rust gate only when it edits Rust's, so the two
+/// agree on golden files only where the change edits Rust code, or no code at all.
 fn ported_finding(f: &Value, from_python: bool) -> bool {
     let check = f["check"].as_str().unwrap_or_default();
     let path = f["path"].as_str().unwrap_or_default();

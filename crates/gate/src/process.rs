@@ -122,6 +122,7 @@ pub fn run_with(argv: &[&OsStr], cwd: &Path, timeout: Duration, extras: &Extras)
     if let (true, Some(grace), Ok(pid)) = (stopped, extras.soft_stop, libc::pid_t::try_from(child.id())) {
         // SAFETY: kill(2) on the process the gate started, not yet reaped, so its pid is still its own.
         #[allow(unsafe_code, reason = "kill(2) has no safe wrapper in std; it reads no memory")]
+        // A failed kill means the process already exited; the wait below finds that out, so its result is ignored.
         unsafe {
             libc::kill(pid, libc::SIGINT);
         }

@@ -2,13 +2,14 @@
 //! change started from. A test that passes there does not test the change. gate.py's `_rust_passes_at_base`; its
 //! Python half comes with gate-standalone/16.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use checks::Finding;
+use checks::{ChangedFile, Finding, Side};
+use model::{Lines, Unreadable};
 
 use crate::copies::{copy_base_with_tests, finding, in_scratch_directory};
 use crate::diff::removal_points;
@@ -112,25 +113,32 @@ fn changed_tests(rust: &RustChange) -> (Vec<ChangedTest>, Vec<Finding>) {
         let source = match &after.source {
             Ok(source) => source,
             Err(unreadable) => {
-                let base_source = file.before.as_ref().and_then(|b| b.source.as_ref().ok());
-                if after.among_tests || base_source.is_some_and(|s| !s.test_lines.is_empty()) {
-                    let message = format!("{}, so its tests were not run at the base.", unreadable.why);
-                    out.push(finding(Some(after.path.as_os_str()), unreadable.line, "not-run", message));
-                }
+                out.extend(unreadable_tests(file, after, unreadable));
                 continue;
             }
         };
-        for test in &source.tests {
-            let lines = test.lines;
-            // A removal point first - 1 is an attribute removed from its top, as an #[ignore] taken off it.
-            let touched = file.added.iter().any(|&n| lines.holds(n))
-                || removed.iter().any(|&n| lines.first.saturating_sub(1) <= n && n <= lines.last);
-            if touched {
-                tests.push(ChangedTest { path: after.path.clone(), name: test.name.clone(), line: test.line });
-            }
-        }
+        let touched = source.tests.iter().filter(|t| touches(t.lines, &file.added, &removed));
+        tests.extend(touched.map(|t| ChangedTest { path: after.path.clone(), name: t.name.clone(), line: t.line }));
     }
     (tests, out)
+}
+
+/// Whether the change touches a test that spans `lines` in the working tree, by adding one of them (`added`) or
+/// removing lines at one of the `removal_points` within them or just above them, as an `#[ignore]` taken off its top.
+fn touches(lines: Lines, added: &BTreeSet<u32>, removal_points: &BTreeSet<u32>) -> bool {
+    added.iter().any(|&n| lines.holds(n))
+        || removal_points.iter().any(|&n| lines.first.saturating_sub(1) <= n && n <= lines.last)
+}
+
+/// The `not-run` finding on `file`, which the change edits and leaves as `after`, unreadable for `unreadable`'s
+/// reason; None when it neither holds tests by its place nor held test code at the base, so no test was lost.
+fn unreadable_tests(file: &ChangedFile, after: &Side, unreadable: &Unreadable) -> Option<Finding> {
+    let base_source = file.before.as_ref().and_then(|b| b.source.as_ref().ok());
+    if !after.among_tests && !base_source.is_some_and(|s| !s.test_lines.is_empty()) {
+        return None;
+    }
+    let message = format!("{}, so its tests were not run at the base.", unreadable.why);
+    Some(finding(Some(after.path.as_os_str()), unreadable.line, "not-run", message))
 }
 
 /// Whether a repository path belongs with Rust's tests rather than with the code they test, as the copy the tests run

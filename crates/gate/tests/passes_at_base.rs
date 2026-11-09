@@ -339,9 +339,9 @@ fn a_base_that_cannot_be_copied_is_a_finding() {
     )]);
 }
 
-#[test]
-fn empty_submodules_are_one_finding() {
-    let repo = calc(&[]);
+/// Adds a submodule at each of `names` to `repo`, all of one repository outside it whose one file is notes.txt, and
+/// commits them with `more`, (path, contents), as the new base.
+fn add_submodules(repo: &Repo, names: &[&str], more: &[(&str, &str)]) {
     let lib = repo.outside.join("lib");
     std::fs::create_dir_all(&lib).unwrap();
     let git = |args: &[&str]| {
@@ -353,11 +353,17 @@ fn empty_submodules_are_one_finding() {
     git(&["add", "notes.txt"]);
     git(&["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "--quiet",
           "-m", "lib"]);
-    for name in ["vendor/a", "vendor/b"] {
+    for name in names {
         let lib = lib.to_str().unwrap();
         repo.git(&["-c", "protocol.file.allow=always", "submodule", "--quiet", "add", lib, name]);
     }
-    rebase(&repo, &[], "submodules");
+    rebase(repo, more, "submodules");
+}
+
+#[test]
+fn empty_submodules_are_one_finding() {
+    let repo = calc(&[]);
+    add_submodules(&repo, &["vendor/a", "vendor/b"], &[]);
     repo.git(&["submodule", "--quiet", "deinit", "--force", "--all"]);
     repo.put("tests/calc.rs", ADDS.as_bytes());
     assert_eq!(findings(&repo, Gate::default())[0], (
@@ -369,6 +375,52 @@ fn empty_submodules_are_one_finding() {
          the working tree."
             .into(),
     ));
+}
+
+#[test]
+fn a_test_reading_from_a_submodule_is_judged_at_the_base() {
+    let repo = calc(&[]);
+    add_submodules(&repo, &["vendor/lib"], &[]);
+    let reads = "#[test]\nfn reads() {\n    assert_eq!(include_str!(\"../vendor/lib/notes.txt\"), \"notes\\n\");\n}\n";
+    repo.put("tests/calc.rs", reads.as_bytes());
+    assert_eq!(found(&repo), vec![at("tests/calc.rs", 2, "passes-at-base")]);
+}
+
+#[test]
+fn a_submodule_without_the_base_s_commit_is_one_finding() {
+    let repo = calc(&[]);
+    add_submodules(&repo, &["vendor/lib"], &[]);
+    // The base records a commit that the submodule's repository in the working tree never had.
+    repo.git(&["update-index", "--cacheinfo", &format!("160000,{},vendor/lib", "1".repeat(40))]);
+    repo.git(&["commit", "--quiet", "-m", "unknown submodule commit"]);
+    repo.put("tests/calc.rs", ADDS.as_bytes());
+    assert_eq!(findings(&repo, Gate::default())[0], (
+        None,
+        None,
+        "not-run".into(),
+        "the copy of the base leaves submodules empty, so a changed Rust test that needs one, if any does, was not \
+         judged: `vendor/lib`, whose repository in the working tree does not have the base's commit 111111111111."
+            .into(),
+    ));
+}
+
+#[test]
+fn a_submodule_marked_export_ignore_stays_out_of_the_copy() {
+    let repo = calc(&[]);
+    add_submodules(&repo, &["vendor/lib"], &[(".gitattributes", "vendor/lib export-ignore\n")]);
+    repo.git(&["submodule", "--quiet", "deinit", "--force", "--all"]);
+    repo.put("tests/calc.rs", ADDS.as_bytes());
+    assert_eq!(found(&repo), vec![at("tests/calc.rs", 2, "passes-at-base")]);
+}
+
+#[test]
+fn a_directory_of_the_tests_the_change_makes_a_file_is_replaced_in_the_copy() {
+    let repo = calc(&[]);
+    rebase(&repo, &[("tests/data/one.txt", "one\n")], "the tests' data");
+    std::fs::remove_dir_all(repo.repo.join("tests/data")).unwrap();
+    repo.put("tests/data", b"two\n");
+    repo.put("tests/calc.rs", b"#[test]\nfn reads() {\n    assert_eq!(include_str!(\"data\"), \"two\\n\");\n}\n");
+    assert_eq!(found(&repo), vec![at("tests/calc.rs", 2, "passes-at-base")]);
 }
 
 #[test]

@@ -420,7 +420,11 @@ mod tests {
 
     /// A directory under the system's temporary one, empty, named for `name` and the process.
     fn empty_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("gate-mutants-{name}-{}", std::process::id()));
+        // cargo test runs a binary's tests on threads of one process, so the process id alone would not tell apart
+        // two tests' directories.
+        static MADE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = MADE.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("gate-mutants-{name}-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -579,9 +583,9 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
-    /// A run that exited with `status`, stopped by the deadline or not, having said "it said so".
-    fn done(status: i32, stopped: bool) -> Finished {
-        Finished { status, stdout: vec![], stderr: b"it said so\n".to_vec(), stopped }
+    /// A run that exited with `exit_code`, stopped by the deadline or not, having said "it said so".
+    fn done(exit_code: i32, stopped: bool) -> Finished {
+        Finished { status: exit_code, stdout: vec![], stderr: b"it said so\n".to_vec(), stopped }
     }
 
     /// [`run_findings`] of `done` in the workspace at engine, under a budget of 30 seconds, having written

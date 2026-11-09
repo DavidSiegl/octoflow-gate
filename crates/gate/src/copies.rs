@@ -16,7 +16,7 @@ use crate::{git, text, Unjudged};
 /// is, saying so; when it cannot be removed, a `not-removed` finding naming it follows `run`'s. The findings' rules
 /// are the check's own, without its name. gate.py's `_in_scratch_directory`.
 pub fn in_scratch_directory(rule: &str, purpose: &str, run: impl FnOnce(&Path) -> Vec<Finding>) -> Vec<Finding> {
-    let dir = match scratch_directory() {
+    let dir = match scratch_directory(&std::env::temp_dir()) {
         Ok(dir) => dir,
         Err(e) => {
             let why = format!("could not make a directory {purpose}: {e}");
@@ -37,14 +37,14 @@ pub fn finding(path: Option<&OsStr>, line: Option<u32>, rule: &str, message: Str
     Finding { path: path.map(OsStr::to_os_string), line, severity: "warning".into(), rule: rule.into(), message }
 }
 
-/// A new directory, mode 0700, under the system's temporary directory, named for the gate's process.
-fn scratch_directory() -> std::io::Result<PathBuf> {
+/// A new directory, mode 0700, in `parent`, named for the gate's process.
+fn scratch_directory(parent: &Path) -> std::io::Result<PathBuf> {
     use std::os::unix::fs::DirBuilderExt;
     use std::sync::atomic::{AtomicU32, Ordering};
     static MADE: AtomicU32 = AtomicU32::new(0);
     loop {
         let name = format!("gate-{}-{}", std::process::id(), MADE.fetch_add(1, Ordering::SeqCst));
-        let dir = std::env::temp_dir().join(name);
+        let dir = parent.join(name);
         match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
             // Left by an earlier gate of the same process id.
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -246,6 +246,34 @@ mod tests {
         });
         assert_eq!(found.iter().map(|f| f.rule.as_str()).collect::<Vec<_>>(), ["r"]);
         assert!(!seen.unwrap().exists());
+    }
+
+    #[test]
+    fn a_scratch_directory_passes_over_those_an_earlier_gate_of_the_process_id_left() {
+        // nextest runs each test in a process of its own, so this one's scratch directories are numbered from 0.
+        let parent = std::env::temp_dir().join(format!("gate-left-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&parent);
+        let left: Vec<PathBuf> = (0..8).map(|n| parent.join(format!("gate-{}-{n}", std::process::id()))).collect();
+        for dir in &left {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let made = scratch_directory(&parent);
+        std::fs::remove_dir_all(&parent).unwrap();
+        let made = made.unwrap();
+        assert!(made.starts_with(&parent) && !left.contains(&made), "{}", made.display());
+    }
+
+    #[test]
+    fn a_copy_that_cannot_make_its_directory_says_which_and_why() {
+        let dir = std::env::temp_dir().join(format!("gate-copy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::create_dir_all(dir.join("dst")).unwrap();
+        let copied = copy(&dir.join("src"), &dir.join("dst"));
+        std::fs::remove_dir_all(&dir).unwrap();
+        let why = copied.unwrap_err();
+        let expected = format!("cannot make {}: ", text::path(dir.join("dst").as_os_str()));
+        assert!(why.starts_with(&expected) && why.contains("exists"), "{why}");
     }
 
     #[test]

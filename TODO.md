@@ -298,7 +298,8 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   time, which needs a Jenkins build of a Rust change on the branch. Decided against for now: the working tree's own
   `target/`, where the base's build would overwrite the binaries Cargo copies up to `target/debug`. Closes, if the
   budget runs out on real changes, with a target directory that lasts between gate runs outside every workspace, as
-  `ci/cargo-lock.sh`'s lock file does. Moved from octoflow-ai on 2026-11-05.
+  `ci/cargo-lock.sh`'s lock file does. Moved from octoflow-ai on 2026-11-05. The Rust gate's port does the same
+  (`base_run_findings` in `crates/gate/src/passes_at_base.rs`).
 - **`surviving-mutants` splits its budget by language, not by work, and builds Rust anew.** `surviving_mutants` gives
   mutmut half the `--mutation-budget` when the change has Rust to mutate too, and cargo-mutants
   (`_cargo_mutants_on_copy`) what is left by the check's deadline, however many functions each language has; and
@@ -307,7 +308,8 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   Rust change, which needs a Jenkins build on the branch. Found by ticket 06 (2026-10-30). Closes, if the run metrics
   show either language starved, with the budget split by each language's changed functions, one copy for both tools,
   and a target directory that lasts between gate runs (the same as passes-at-base's above).
-  Moved from octoflow-ai on 2026-11-05.
+  Moved from octoflow-ai on 2026-11-05. The Rust gate's port (`crates/gate/src/mutants.rs`) builds anew the same way;
+  it runs no mutmut yet, so it gives cargo-mutants the whole budget until gate-standalone/16.
 - **cargo-mutants is pinned by the sha256 of its archive as downloaded, not as published.** Its releases publish no
   checksums file (`ci/install-tools.sh`), so the pin of v27.1.0 holds the archive the gate's author downloaded on
   2026-10-30, trusted on first use. Closes with a release that publishes checksums, or the asset digest GitHub shows on
@@ -319,7 +321,8 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   the check gives nothing; a file under `benches/` or `examples/`, or under a `tests/x/` with no `main.rs`, as a
   shared `tests/common/mod.rs`, is a `not-run` finding. Found by gate-rust-checks
   ticket 05 (2026-10-30). Closes with the targets read from `cargo metadata` and the module tree from the helper's
-  `mod name;` items. Moved from octoflow-ai on 2026-11-05.
+  `mod name;` items. Moved from octoflow-ai on 2026-11-05. The Rust gate's `target`
+  (`crates/gate/src/passes_at_base.rs`) reads the same layout.
 - **`passes-at-base` cannot tell a Rust test that needs the change from a base that does not build.** A target whose
   tests do not compile at the base counts as failing there, whatever rustc's error is (`_NEXTEST_BUILD_FAILED` and
   `error: could not compile` in `_rust_target_findings`): the test reaching for what the change adds, as the ticket
@@ -413,7 +416,8 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   what the diff's added lines hold, so a Rust function whose edit only removes lines, such as a guard clause, is not
   mutation-tested; Python's functions count removals (`_edits_function`, gate-open-decisions ticket 03). Closes with the
   Rust half choosing whole functions, as `_edits_function` does, and passing them to cargo-mutants with `--re` or
-  `--file` instead of the diff. Moved from octoflow-ai on 2026-11-05.
+  `--file` instead of the diff. Moved from octoflow-ai on 2026-11-05. The Rust gate's port (`run_workspace` in
+  `crates/gate/src/mutants.rs`) does the same.
 - **mutmut reads a symlinked `.py` file in the surviving-mutants copy.** `_copy_tracked` copies a tracked symlink
   as a link (`gate.py`), `_mark_for_mutmut` leaves links unmarked, and mutmut 3.8.0's `walk_all_files` lists
   a symlink to a file and `create_mutants_for_file` opens it. So once any changed function starts mutmut, a change

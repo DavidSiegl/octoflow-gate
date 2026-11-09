@@ -67,11 +67,20 @@ runs the checks of `crates/checks` over it.
   the Rust gate takes no archive crate (spec decision 7).
 - **A copy that cannot be made is worded by the Rust gate**: its findings say "cannot make PATH: ..." or "tar could
   not unpack the base: ...", where gate.py quotes Python's `OSError` or `TarError`.
+- **A copied file keeps its permissions but not its times**: the Rust gate copies with `std::fs::copy`, gate.py with
+  `shutil.copy2`, which keeps both.
+- **A special file in the tree, such as a named pipe, is refused**, "cannot copy PATH: it is no regular file, link or
+  directory", where gate.py's `shutil` raises `SpecialFileError`, or `shutil.Error` inside a copied directory.
 
 ### passes-at-base
 
 - **Only Rust's half runs**, with the whole `--base-run-budget`. gate.py runs Python's changed tests first and gives
   Rust's what is left of the budget; the Rust gate reads no Python yet (gate-standalone/16).
+- **A scratch directory whose path is not UTF-8** gives "could not copy the base to run the changed Rust tests in:
+  PATH is not UTF-8", since nextest's configuration cannot name it. gate.py writes the path with its bytes escaped,
+  naming a store nextest then makes elsewhere.
+- **An earlier run's junit.xml that cannot be removed** is a not-run finding, "could not remove the report of an
+  earlier run", where gate.py lets the `OSError` end the gate.
 
 ### surviving-mutants
 

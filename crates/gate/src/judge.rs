@@ -1,7 +1,7 @@
 //! The gate's judgement of one change: what it reads of the change, and the report it gives on it, as gate.py's
 //! judge_change does for the parts ported so far. Of the checks beside the linters, the parser checks run
-//! (parser_checks) over the languages ported so far, and passes-at-base over Rust (passes_at_base); the others come
-//! with gate-standalone/14-16.
+//! (parser_checks) over the languages ported so far, and surviving-mutants (mutants) and passes-at-base
+//! (passes_at_base) over Rust; the others come with gate-standalone/15-16.
 
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
@@ -11,6 +11,7 @@ use crate::config_edits::{cargo_home_in, clippy_config_files, edited_config};
 use crate::coverage::new_coverage;
 use crate::diff::{change_diff, changed_files, changed_lines, ChangedFile, ChangedLines};
 use crate::linters::{tracked_from, Linter, LINTERS};
+use crate::mutants::surviving_mutants;
 use crate::parser_checks::{too_complex, vague_names, weakened_tests, RustChange};
 use crate::passes_at_base::passes_at_base;
 use crate::process::tool_env;
@@ -40,6 +41,8 @@ pub struct Given {
     /// given (test_commands::test_results).
     pub tests: Vec<PathBuf>,
     pub coverage: Vec<PathBuf>,
+    /// Seconds the surviving-mutants check's runs may take, in place of gate.toml's `budgets.mutation`.
+    pub mutation_budget: Option<u64>,
     /// Seconds the passes-at-base check's runs may take, in place of gate.toml's `budgets.base-run`.
     pub base_run_budget: Option<u64>,
 }
@@ -160,8 +163,11 @@ pub fn judge_change(cwd: &Path, base: &str, given: &Given) -> Result<QualityRepo
     for (path, n, end) in stray_line_ends(&root, changed, &reads)? {
         conditions.push(stray_line_end_condition(&path, n, end));
     }
-    let base_run_budget = given.base_run_budget.unwrap_or(change.settings.base_run_budget);
-    let to_weigh = judge_checks(&change, base_run_budget, &mut conditions, &mut issues)?;
+    let budgets = (
+        given.mutation_budget.unwrap_or(change.settings.mutation_budget),
+        given.base_run_budget.unwrap_or(change.settings.base_run_budget),
+    );
+    let to_weigh = judge_checks(&change, budgets, &mut conditions, &mut issues)?;
 
     conditions.extend(tests.problems);
     if let Some(failing) = tests.failing.as_ref().filter(|failing| !failing.is_empty()) {
@@ -194,12 +200,13 @@ pub fn judge_change(cwd: &Path, base: &str, given: &Given) -> Result<QualityRepo
 }
 
 /// Runs the checks beside the linters on `change`, in the order gate.py's `gate_checks` runs them: test-integrity,
-/// cognitive-complexity, passes-at-base, letting its runs take `base_run_budget` seconds, and vague-names. Appends to
-/// `conditions` a failed condition for each check with findings of severity "error", in that order, and to `issues`
-/// those findings; returns the others, to weigh. Errs as [`RustChange::read`] does, having appended nothing.
+/// cognitive-complexity, surviving-mutants and passes-at-base, whose runs may take the seconds `budgets` gives,
+/// (mutation, base run), and vague-names. Appends to `conditions` a failed condition for each check with findings of
+/// severity "error", in that order, and to `issues` those findings; returns the others, to weigh. Errs as
+/// [`RustChange::read`] does, having appended nothing.
 fn judge_checks(
     change: &Change,
-    base_run_budget: u64,
+    (mutation_budget, base_run_budget): (u64, u64),
     conditions: &mut Vec<String>,
     issues: &mut Vec<Finding>,
 ) -> Result<Vec<Finding>, Unjudged> {
@@ -207,6 +214,7 @@ fn judge_checks(
     let found = [
         weakened_tests(&rust),
         too_complex(&rust),
+        named("surviving-mutants", surviving_mutants(&rust, mutation_budget)),
         named("passes-at-base", passes_at_base(&rust, base_run_budget)),
         vague_names(&rust),
     ];

@@ -3,7 +3,8 @@
 //! (tests/test_gate.py). Where gate.py's tests patch what runs cargo-nextest or copies the base, these put a stub
 //! `cargo` or `tar` ahead of PATH. TestRustPassesAtBase's budget of a thousandth of a second, which the `gate` binary's
 //! whole seconds cannot give, is passes_at_base.rs's own test of a spent budget. cargo runs offline, so it never
-//! reaches for the registry.
+//! reaches for the registry, and the surviving-mutants check, which the gate runs too, has a budget too short to
+//! start cargo-mutants.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -74,6 +75,7 @@ fn findings(repo: &Repo, how: Gate) -> Vec<Found> {
     let json = repo.outside.join("quality.json");
     let mut command = repo.gate_command("HEAD");
     command.arg("--json").arg(&json).arg("--base-run-budget").arg(how.budget.to_string());
+    command.args(["--mutation-budget", "1"]);
     command.env("CARGO_NET_OFFLINE", "true").envs(how.env);
     let done = command.output().unwrap();
     assert!(matches!(done.status.code(), Some(0 | 1)), "{}", String::from_utf8_lossy(&done.stderr));
@@ -109,6 +111,14 @@ fn fn_line(repo: &Repo, path: &str, name: &str) -> u32 {
 fn two_targets(repo: &Repo) {
     repo.put("tests/calc.rs", ADDS.as_bytes());
     repo.put("tests/more.rs", b"#[test]\nfn adds_more() {\n    assert_eq!(calc::add(2, 2), 4);\n}\n");
+}
+
+/// Puts a `cargo` in `repo`'s stub directory that runs the sh `script` for `cargo nextest` and the real cargo for
+/// anything else, as the cargo locate-project that surviving-mutants runs, and gives back that directory.
+fn nextest_stub(repo: &Repo, script: &str) -> PathBuf {
+    let found = Command::new("sh").args(["-c", "command -v cargo"]).output().unwrap();
+    let cargo = String::from_utf8(found.stdout).unwrap();
+    repo.stub("cargo", &format!("[ \"$1\" = nextest ] || exec '{}' \"$@\"\n{script}", cargo.trim()))
 }
 
 /// PATH with `bin` ahead of it.
@@ -222,7 +232,7 @@ fn a_cargo_error_other_than_a_compile_error_is_not_run() {
 fn a_run_stopped_by_the_budget_is_a_finding() {
     let repo = calc(&[]);
     two_targets(&repo);
-    let bin = repo.stub("cargo", "exec sleep 30");
+    let bin = nextest_stub(&repo, "exec sleep 30");
     let how = Gate { budget: 1, env: vec![("PATH", path_after(&bin))] };
     assert_eq!(findings(&repo, how), vec![
         (
@@ -267,7 +277,7 @@ fn a_cargo_nextest_that_cannot_start_is_a_finding_for_each_target() {
 fn a_cargo_error_writing_no_report_is_a_finding_for_each_target() {
     let repo = calc(&[]);
     two_targets(&repo);
-    let bin = repo.stub("cargo", "echo 'error: failed to run custom build command' >&2; exit 101");
+    let bin = nextest_stub(&repo, "echo 'error: failed to run custom build command' >&2; exit 101");
     let found = findings(&repo, Gate { env: vec![("PATH", path_after(&bin))], ..Gate::default() });
     assert_eq!(found.len(), 2, "{found:?}");
     for ((path, line, rule, message), name) in found.iter().zip(["calc", "more"]) {

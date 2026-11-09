@@ -72,3 +72,13 @@ runs the checks of `crates/checks` over it.
 
 - **Only Rust's half runs**, with the whole `--base-run-budget`. gate.py runs Python's changed tests first and gives
   Rust's what is left of the budget; the Rust gate reads no Python yet (gate-standalone/16).
+
+### surviving-mutants
+
+- **Only Rust's half runs**, with the whole `--mutation-budget`. gate.py gives mutmut half the budget when the change
+  edits Python too, and cargo-mutants what is left; the Rust gate runs no mutmut yet (gate-standalone/16).
+- **A mutant's outcome the gate cannot read is worded by the Rust gate**: the finding names what the mutant lacks, as
+  "no `span` with a start line", where gate.py quotes Python's exception, as `KeyError('file')`. The Rust gate also
+  needs every tried mutant's name, where gate.py reads only those of the first few survivors of a function.
+- **outcomes.json that is not a list of outcomes** is "PATH holds no list of outcomes", where gate.py quotes the
+  `KeyError` or `TypeError`.

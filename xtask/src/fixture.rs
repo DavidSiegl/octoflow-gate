@@ -54,7 +54,8 @@ fn change() -> Vec<(&'static str, String)> {
         ("a.py", "import os\n".into()),
         // What the parser checks report of Rust, in a change to its code: a function over the cognitive-complexity
         // limit, with a vague name in it, on lines 5-56 of lib.rs; and in its tests, a test removed, an `#[ignore]`
-        // added on line 4 of it.rs, an expected value changed on line 6, and a golden file changed.
+        // added on line 4 of it.rs, an expected value changed on line 6, and a golden file changed. No test calls
+        // the function, so cargo-mutants finds its mutants surviving.
         ("tiny/src/lib.rs", tiny_lib_changed()),
         ("tiny/tests/it.rs", TINY_IT.replace("#[test]\nfn negative", "#[test]\n#[ignore]\nfn negative").replace(
             "-2);\n}\n\n#[test]\nfn zero() {\n    assert!(add(0, 0) == 0);\n}\n", "-3);\n}\n",

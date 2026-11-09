@@ -13,6 +13,7 @@ pub mod glob;
 pub mod judge;
 pub mod junit;
 pub mod linters;
+pub mod mutants;
 pub mod parser_checks;
 pub mod passes_at_base;
 pub mod paths;

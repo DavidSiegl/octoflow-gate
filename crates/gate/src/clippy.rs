@@ -61,7 +61,7 @@ pub fn run(name: &str, root: &Path, files: &[OsString], tracked: &Tracked) -> (V
 /// The root manifest of each Cargo workspace that a Cargo.toml among `files`, paths relative to `root`, the tree's
 /// top level, belongs to, relative to `root`, in path order; and a failed condition, naming the linter `name`, for
 /// each manifest whose workspace cargo cannot tell.
-fn workspaces(name: &str, root: &Path, files: &[OsString]) -> (Vec<PathBuf>, Vec<String>) {
+pub(crate) fn workspaces(name: &str, root: &Path, files: &[OsString]) -> (Vec<PathBuf>, Vec<String>) {
     let mut manifests: Vec<&OsString> =
         files.iter().filter(|f| Path::new(f).file_name() == Some(OsStr::new("Cargo.toml"))).collect();
     manifests.sort();

@@ -444,3 +444,10 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   a new function under its old name (review round 6, R6-F1). Decided by the user in review round 4 of ticket 06.
   Closes with a way to tell a copy from a rename, such as git's copy detection (`git diff -C`) on the change's
   files. Moved from octoflow-ai on 2026-11-05.
+- **The Rust gate's tests leave their temporary files behind when they fail, and cargo-mutants makes them fail by
+  the thousand.** Each test under `crates/gate/src` (coverage.rs's most, mutants.rs's too) makes a directory or file
+  under the system's temporary directory and removes it on its last line, after the assertions, so a failing test
+  keeps it; a cargo-mutants run over this repo fails such tests once per caught mutant. On agentbox, where /tmp is a
+  5.9 GB tmpfs, 13 000 were left by 2026-11-09, and a full /tmp then failed cargo-mutants' own writes in a
+  `cargo xtask compare` run (gate-standalone/14). Closes with a guard that removes the path when dropped, used by
+  every such test, in one commit.

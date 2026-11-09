@@ -172,7 +172,7 @@ fn gate_rust(workspace: &Path, cargo: &OsStr) -> Result<PathBuf, String> {
 }
 
 /// The linters the Rust gate runs; gate.py's findings of any other are not compared.
-const PORTED_LINTERS: [&str; 3] = ["pymarkdown", "shellcheck", "actionlint"];
+const PORTED_LINTERS: [&str; 4] = ["pymarkdown", "shellcheck", "actionlint", "clippy"];
 
 /// The parts of `report`, a quality.json, that the Rust gate has ported, as an object of the parts by name; those of
 /// gate.py's when `from_python`, which leaves out what comes of the parts not ported. The verdict and the count of
@@ -290,12 +290,13 @@ fn ported_finding(f: &Value, from_python: bool) -> bool {
 }
 
 /// Whether quality.json's suppression `s` is compared, given whether it is gate.py's: of gate.py's, only one in a
-/// file the Rust gate reads the suppressions of, a shell script, a workflow or Markdown. A shell script that is
+/// file the Rust gate reads the suppressions of, a shell script, a workflow, Markdown or Rust. A shell script that is
 /// Python by its `#!` is gate.py's alone until Python is ported (gate-standalone/15).
 fn ported_suppression(s: &Value, from_python: bool) -> bool {
     let path = s["path"].as_str().unwrap_or_default();
     !from_python
         || path.ends_with(".sh")
         || path.ends_with(".md")
+        || path.ends_with(".rs")
         || (path.starts_with(".github/workflows/") && (path.ends_with(".yml") || path.ends_with(".yaml")))
 }

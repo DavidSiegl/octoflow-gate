@@ -34,6 +34,34 @@ pub struct Finished {
     pub stopped: bool,
 }
 
+impl Finished {
+    /// What a tool that went wrong, such as cargo, said about it, in a line of at most 160 characters, the last "…"
+    /// when cut: the exception of a pytest internal error, else the exception that ended it when it printed a
+    /// traceback, else the first line of its standard error, else the last line of its output; "nothing" when it
+    /// printed nothing. Only `\n` ends a line, so a path in it stays whole. gate.py's `_said`.
+    pub fn said(&self) -> String {
+        let lines = |printed: &[u8]| -> Vec<String> {
+            let printed = crate::text::lossless(printed);
+            printed.split('\n').map(crate::text::py_strip).filter(|l| !l.is_empty()).map(String::from).collect()
+        };
+        let (err, out) = (lines(&self.stderr), lines(&self.stdout));
+        let internal = out.iter().filter_map(|l| l.strip_prefix("INTERNALERROR>")).next_back();
+        let internal = internal.map(crate::text::py_strip);
+        let traceback = self.stderr.windows(9).any(|w| w == b"Traceback");
+        let said = match (internal, err.first(), err.last(), out.last()) {
+            (Some(internal), ..) => internal,
+            (None, Some(_), Some(last), _) if traceback => last,
+            (None, Some(first), ..) => first,
+            (None, None, _, Some(last)) => last,
+            _ => "nothing",
+        };
+        if said.chars().count() <= 160 {
+            return said.to_string();
+        }
+        said.chars().take(159).chain(['…']).collect()
+    }
+}
+
 /// The environment for every process the gate starts, git, a linter or a test command: the gate's own, without the
 /// variables whose names end in `_TOKEN`, `_PASSWORD`, `_SECRET` or `_API_KEY`, without UPDATE_GOLDEN, and without
 /// git's switches for how it reads every pathspec.
@@ -334,6 +362,20 @@ mod tests {
         let done = run_with(&deaf, Path::new("."), Duration::from_millis(200), &extras).unwrap();
         assert_eq!((done.status, done.stopped), (-libc::SIGKILL, true));
         assert!(start.elapsed() < Duration::from_secs(3), "{:?}", start.elapsed());
+    }
+
+    #[test]
+    fn what_a_tool_said_is_its_error_s_first_line_or_its_exception() {
+        let said = |stdout: &str, stderr: &str| {
+            Finished { status: 1, stdout: stdout.into(), stderr: stderr.into(), stopped: false }.said()
+        };
+        assert_eq!(said("", ""), "nothing");
+        assert_eq!(said("a\n b \n\n", ""), "b");
+        assert_eq!(said("out", "\n first\nsecond\n"), "first");
+        assert_eq!(said("", "Traceback (most recent call last):\n  x\nValueError: no\n"), "ValueError: no");
+        assert_eq!(said("INTERNALERROR> a\nINTERNALERROR>  KeyError: k\n", "err"), "KeyError: k");
+        let long = said("", &"é".repeat(200));
+        assert_eq!((long.chars().count(), long.ends_with("é…")), (160, true));
     }
 
     #[test]

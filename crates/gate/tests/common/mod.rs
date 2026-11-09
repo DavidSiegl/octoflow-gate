@@ -54,8 +54,34 @@ impl Repo {
 
     /// `gate --base base args`, run in the repository.
     pub fn gate(&self, base: &str, args: &[&OsStr]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_gate")).current_dir(&self.repo).arg("--base").arg(base).args(args).output()
-            .unwrap()
+        self.gate_command(base).args(args).output().unwrap()
+    }
+
+    /// `gate --base base`, to run in the repository, for a caller to add to.
+    pub fn gate_command(&self, base: &str) -> Command {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_gate"));
+        command.current_dir(&self.repo).arg("--base").arg(base);
+        command
+    }
+
+    /// Commits `files`, (path, contents), and whatever else the work tree changes, as `message`.
+    pub fn commit(&self, files: &[(&str, &[u8])], message: &str) {
+        for (path, contents) in files {
+            self.put(path, contents);
+        }
+        self.git(&["add", "-A"]);
+        self.git(&["commit", "--quiet", "-m", message]);
+    }
+
+    /// Puts an executable `name` that runs the sh `script` in a directory outside the repository, and gives back
+    /// that directory, to put ahead of PATH.
+    pub fn stub(&self, name: &str, script: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = self.outside.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join(name), format!("#!/bin/sh\n{script}\n")).unwrap();
+        std::fs::set_permissions(bin.join(name), std::fs::Permissions::from_mode(0o755)).unwrap();
+        bin
     }
 }
 

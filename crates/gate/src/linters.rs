@@ -1,6 +1,6 @@
 //! The linters the gate runs over the files a tree tracks, and how it reads what they print. Ported so far:
-//! pymarkdown, shellcheck and actionlint, which print a finding a line; ruff and mypy come with Python
-//! (gate-standalone/16), clippy with Rust (14).
+//! pymarkdown, shellcheck and actionlint, which print a finding a line, and clippy (clippy.rs); ruff and mypy come
+//! with Python (gate-standalone/16).
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
@@ -19,7 +19,7 @@ use crate::report::Finding;
 use crate::settings::Settings;
 use crate::text;
 
-/// A linter that prints a finding a line as `path:line[:col]: detail`.
+/// A linter the gate runs: which tracked files it reads, and how it runs over them and reads its findings.
 pub struct Linter {
     pub name: &'static str,
     /// Globs of the tracked files it reads unless gate.toml gives others ([`Settings::linter_globs`]); the gate does
@@ -29,21 +29,34 @@ pub struct Linter {
     /// counts only where no `\n` follows it. Below one, its line numbers are not git's, or it stops reading, so the
     /// gate refuses a change below one (suppressions::stray_line_ends).
     pub line_ends: &'static [char],
-    /// The command line, given the pyproject.toml whose rules decide and the tracked files it reads.
-    command: fn(rules: &Path, files: &[OsString]) -> Vec<OsString>,
-    /// What follows the location of a finding, fully matched: groups `rule` and `message`, and `severity` where the
-    /// linter grades its findings, else the finding is an error.
-    detail: &'static str,
+    kind: Kind,
+}
+
+/// How a linter runs and what it prints.
+#[derive(Clone, Copy)]
+enum Kind {
+    /// One run over the files, printing a finding a line as `path:line[:col]: detail`.
+    Lines {
+        /// The command line, given the pyproject.toml whose rules decide and the tracked files it reads.
+        command: fn(rules: &Path, files: &[OsString]) -> Vec<OsString>,
+        /// What follows the location of a finding, fully matched: groups `rule` and `message`, and `severity` where
+        /// the linter grades its findings, else the finding is an error.
+        detail: &'static str,
+    },
+    /// cargo clippy over the workspaces of the manifests among the files, as [`clippy::run`] runs it.
+    Clippy,
 }
 
 /// The linters, in the order the gate runs them.
-pub static LINTERS: [Linter; 3] = [
+pub static LINTERS: [Linter; 4] = [
     Linter {
         name: "pymarkdown",
         globs: &["**/*.md"],
         line_ends: &['\r'],
-        command: |rules, files| argv(&["pymarkdown", "--config"], Some(rules), &["--strict-config", "scan"], files),
-        detail: r"(?P<rule>MD\d+): (?P<message>.+)",
+        kind: Kind::Lines {
+            command: |rules, files| argv(&["pymarkdown", "--config"], Some(rules), &["--strict-config", "scan"], files),
+            detail: r"(?P<rule>MD\d+): (?P<message>.+)",
+        },
     },
     // shellcheck and actionlint have no table in pyproject.toml, so they run on their defaults: --norc and an empty
     // config file keep a .shellcheckrc or .github/actionlint.yaml, which a change could add, from loosening them.
@@ -51,8 +64,10 @@ pub static LINTERS: [Linter; 3] = [
         name: "shellcheck",
         globs: &["**/*.sh"],
         line_ends: &['\r'],
-        command: |_, files| argv(&["shellcheck", "--norc", "-f", "gcc"], None, &[], files),
-        detail: r"(?P<severity>error|warning|note): (?P<message>.+) \[(?P<rule>SC\d+)\]",
+        kind: Kind::Lines {
+            command: |_, files| argv(&["shellcheck", "--norc", "-f", "gcc"], None, &[], files),
+            detail: r"(?P<severity>error|warning|note): (?P<message>.+) \[(?P<rule>SC\d+)\]",
+        },
     },
     // Its YAML parser, ported from libyaml, also ends a line at NEL, U+2028 and U+2029, although YAML 1.2 does not
     // (https://yaml.org/spec/1.2.2/#54-line-break-characters). Observed with actionlint 1.7.12.
@@ -60,9 +75,15 @@ pub static LINTERS: [Linter; 3] = [
         name: "actionlint",
         globs: &[".github/workflows/*.yml", ".github/workflows/*.yaml"],
         line_ends: &['\r', '\u{85}', '\u{2028}', '\u{2029}'],
-        command: |_, files| argv(&["actionlint", "-config-file", "/dev/null"], None, &[], files),
-        detail: r"(?P<message>.+) \[(?P<rule>[\w-]+)\]",
+        kind: Kind::Lines {
+            command: |_, files| argv(&["actionlint", "-config-file", "/dev/null"], None, &[], files),
+            detail: r"(?P<message>.+) \[(?P<rule>[\w-]+)\]",
+        },
     },
+    // rustc numbers lines at "\n" alone, though Rust counts a lone "\r", NEL, U+2028 and U+2029 as whitespace:
+    // observed with clippy 0.1.99 (rustc 1.99.1), whose finding below a line holding all four was on git's line.
+    // Its manifests are among its files only to say which workspaces it lints.
+    Linter { name: "clippy", globs: &["**/*.rs", "**/Cargo.toml"], line_ends: &[], kind: Kind::Clippy },
 ];
 
 /// `words`, then `path` when given, then `more`, then `files`, as an argv.
@@ -97,7 +118,7 @@ impl Tracked {
 
     /// The tracked file that `shown`, a path a linter printed, absolute or relative to `root`, names; None when it
     /// names none.
-    fn name_of(&self, shown: &[u8], root: &Path) -> Option<OsString> {
+    pub(crate) fn name_of(&self, shown: &[u8], root: &Path) -> Option<OsString> {
         let relative = rel_path(&normpath(&root.join(OsStr::from_bytes(shown))), &normpath(root)).into_os_string();
         if self.names.contains(&relative) {
             return Some(relative);
@@ -106,7 +127,6 @@ impl Tracked {
         self.lossy.get(relative).cloned().flatten()
     }
 }
-
 
 impl Linter {
     /// Whether the linter reads the file at `path`, by the globs gate.toml gives it, else its own.
@@ -130,23 +150,21 @@ impl Linter {
 
     /// The linter's findings over `files`, the tracked files it reads ([`Linter::files`]), in the tree whose top
     /// level is `root`, wherever they are, and the failed conditions it caused, each a sentence; none when it ran as
-    /// it should. `rules` is the pyproject.toml whose rules decide. A linter that is missing, fails or does not
-    /// finish within [`process::TOOL_TIMEOUT`] seconds is a condition.
+    /// it should. `rules` is the pyproject.toml whose rules decide, for a linter that takes them. A linter that is
+    /// missing, fails or does not finish within [`process::TOOL_TIMEOUT`] seconds is a condition.
     pub fn run(&self, root: &Path, rules: &Path, files: &[OsString], tracked: &Tracked) -> (Vec<Finding>, Vec<String>) {
-        let argv = (self.command)(rules, files);
+        let (command, detail) = match self.kind {
+            Kind::Lines { command, detail } => (command, detail),
+            Kind::Clippy => return crate::clippy::run(self.name, root, files, tracked),
+        };
+        let argv = command(rules, files);
         let argv: Vec<&OsStr> = argv.iter().map(OsString::as_os_str).collect();
         let name = self.name;
-        let done = match process::run(&argv, root, Duration::from_secs(process::TOOL_TIMEOUT)) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return (vec![], vec![format!("`{name}` is not installed: it is not on PATH.")])
-            }
-            Err(e) => return (vec![], vec![format!("`{name}` could not be started: {e}.")]),
-            Ok(done) if done.stopped => {
-                return (vec![], vec![format!("`{name}` did not finish within {} seconds.", process::TOOL_TIMEOUT)])
-            }
+        let done = match tool_process(name, &argv, root) {
+            Err(problem) => return (vec![], vec![problem]),
             Ok(done) => done,
         };
-        let found = self.findings(&done.stdout, root, tracked);
+        let found = findings(name, detail, &done.stdout, root, tracked);
         // Exit status 1 means it found something, any other but 0 that it failed.
         if done.status == 0 || (done.status == 1 && !found.is_empty()) {
             return (found, vec![]);
@@ -160,38 +178,55 @@ impl Linter {
         }
         (vec![], vec![format!("`{name}` failed with exit status {}: {said}", done.status)])
     }
+}
 
-    /// The findings in what the linter printed, `output`, its paths made relative to `root`, the tree's top level,
-    /// and its rules prefixed with its name. A line that is not a finding on a tracked file, such as a summary, is
-    /// skipped. Only `\n` ends a line, so a name holding a carriage return or U+2028 stays whole; a name that is not
-    /// UTF-8 may be printed as it is, or with U+FFFD for what is not, as [`Tracked`] reads it.
-    pub fn findings(&self, output: &[u8], root: &Path, tracked: &Tracked) -> Vec<Finding> {
-        static AT: LazyLock<Regex> = LazyLock::new(|| {
-            Regex::new(r"(?s-u)^(?P<path>[^:]+):(?:(?P<line>[0-9]+):(?:[0-9]+:)?)? (?P<detail>.+)$").expect("valid")
-        });
-        let detail = Regex::new(&format!("(?s)^(?:{})$", self.detail.replace(".+", "(?-u:.)+")))
-            .expect("a linter's detail is a valid regex");
-        let mut out = vec![];
-        for line in output.split(|&b| b == b'\n') {
-            // Spaces, tabs and the \r of a \r\n only: other whitespace, such as U+2028, can be part of a name.
-            let line = trim_bytes(line, b" \t\r");
-            let Some(at) = AT.captures(line) else { continue };
-            let Some(path) = tracked.name_of(&at["path"], root) else { continue };
-            let Some(found) = detail.captures(&at["detail"]) else { continue };
-            let group = |name: &str| found.name(name).map(|m| text::lossless(m.as_bytes()));
-            out.push(Finding {
-                path: Some(path),
-                line: at.name("line").and_then(|n| std::str::from_utf8(n.as_bytes()).ok()?.parse().ok()),
-                severity: group("severity").filter(|s| !s.is_empty()).unwrap_or_else(|| "error".into()),
-                rule: match group("rule") {
-                    Some(rule) if !rule.is_empty() => format!("{} {rule}", self.name),
-                    _ => self.name.to_string(),
-                },
-                message: text::py_strip(&group("message").unwrap_or_default()).to_string(),
-            });
+/// `argv` run in `cwd` for the linter `name`, as [`process::run`] runs it, within [`process::TOOL_TIMEOUT`] seconds:
+/// the finished process, whatever its exit status; or, when it could not be started or did not finish, the failed
+/// condition, a sentence naming the linter.
+pub(crate) fn tool_process(name: &str, argv: &[&OsStr], cwd: &Path) -> Result<process::Finished, String> {
+    match process::run(argv, cwd, Duration::from_secs(process::TOOL_TIMEOUT)) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let program = argv.first().map(|p| p.to_string_lossy()).unwrap_or_default();
+            let program = if program == name { "it".to_string() } else { format!("`{program}`") };
+            Err(format!("`{name}` is not installed: {program} is not on PATH."))
         }
-        out
+        Err(e) => Err(format!("`{name}` could not be started: {e}.")),
+        Ok(done) if done.stopped => Err(format!("`{name}` did not finish within {} seconds.", process::TOOL_TIMEOUT)),
+        Ok(done) => Ok(done),
     }
+}
+
+/// The findings in what the linter `name` printed, `output`, a finding a line whose `detail` is as [`Kind::Lines`]
+/// says, its paths made relative to `root`, the tree's top level, and its rules prefixed with its name. A line that is
+/// not a finding on a tracked file, such as a summary, is skipped. Only `\n` ends a line, so a name holding a carriage
+/// return or U+2028 stays whole; a name that is not UTF-8 may be printed as it is, or with U+FFFD for what is not, as
+/// [`Tracked`] reads it.
+fn findings(name: &str, detail: &str, output: &[u8], root: &Path, tracked: &Tracked) -> Vec<Finding> {
+    static AT: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?s-u)^(?P<path>[^:]+):(?:(?P<line>[0-9]+):(?:[0-9]+:)?)? (?P<detail>.+)$").expect("valid")
+    });
+    let detail = Regex::new(&format!("(?s)^(?:{})$", detail.replace(".+", "(?-u:.)+")))
+        .expect("a linter's detail is a valid regex");
+    let mut out = vec![];
+    for line in output.split(|&b| b == b'\n') {
+        // Spaces, tabs and the \r of a \r\n only: other whitespace, such as U+2028, can be part of a name.
+        let line = trim_bytes(line, b" \t\r");
+        let Some(at) = AT.captures(line) else { continue };
+        let Some(path) = tracked.name_of(&at["path"], root) else { continue };
+        let Some(found) = detail.captures(&at["detail"]) else { continue };
+        let group = |name: &str| found.name(name).map(|m| text::lossless(m.as_bytes()));
+        out.push(Finding {
+            path: Some(path),
+            line: at.name("line").and_then(|n| std::str::from_utf8(n.as_bytes()).ok()?.parse().ok()),
+            severity: group("severity").filter(|s| !s.is_empty()).unwrap_or_else(|| "error".into()),
+            rule: match group("rule") {
+                Some(rule) if !rule.is_empty() => format!("{name} {rule}"),
+                _ => name.to_string(),
+            },
+            message: text::py_strip(&group("message").unwrap_or_default()).to_string(),
+        });
+    }
+    out
 }
 
 /// `bytes` without any of `strip` at either end.
@@ -214,6 +249,12 @@ mod tests {
         LINTERS.iter().find(|l| l.name == name).unwrap()
     }
 
+    /// The findings in `output`, as the line-reading linter `name` prints them.
+    fn read(name: &str, output: &[u8], root: &Path, tracked: &Tracked) -> Vec<Finding> {
+        let Kind::Lines { detail, .. } = linter(name).kind else { panic!("{name} prints no finding a line") };
+        findings(name, detail, output, root, tracked)
+    }
+
     #[test]
     fn findings_are_read_by_their_location_and_detail() {
         let tracked = Tracked::new(vec!["a.sh".into(), "d i r/b.sh".into(), OsString::from_vec(b"c\xff.sh".to_vec())]);
@@ -222,7 +263,7 @@ mod tests {
                        c\u{fffd}.sh:1: note: Lossy. [SC2001]\n\
                        untracked.sh:1:1: error: X [SC1]\n\
                        In total 3 findings\n";
-        let found = linter("shellcheck").findings(printed.as_bytes(), Path::new("/top"), &tracked);
+        let found = read("shellcheck", printed.as_bytes(), Path::new("/top"), &tracked);
         let got: Vec<_> =
             found.iter().map(|f| (f.path.clone().unwrap(), f.line, f.severity.as_str(), f.rule.as_str())).collect();
         assert_eq!(
@@ -239,7 +280,7 @@ mod tests {
     #[test]
     fn a_finding_without_a_severity_is_an_error() {
         let tracked = Tracked::new(vec!["README.md".into()]);
-        let found = linter("pymarkdown").findings(b"README.md:2:1: MD013: Line length", Path::new("/t"), &tracked);
+        let found = read("pymarkdown", b"README.md:2:1: MD013: Line length", Path::new("/t"), &tracked);
         assert_eq!((found[0].severity.as_str(), found[0].rule.as_str()), ("error", "pymarkdown MD013"));
     }
 
@@ -253,9 +294,14 @@ mod tests {
 
     #[test]
     fn a_missing_linter_is_a_condition() {
-        let missing = Linter { command: |_, _| vec!["gate-no-such-program".into()], ..*linter("shellcheck") };
+        let Kind::Lines { detail, .. } = linter("shellcheck").kind else { unreachable!() };
+        let kind = Kind::Lines { command: |_, _| vec!["gate-no-such-program".into()], detail };
+        let missing = Linter { kind, ..*linter("shellcheck") };
         let (found, conditions) = missing.run(Path::new("."), Path::new("p"), &[], &Tracked::new(vec![]));
         assert!(found.is_empty());
-        assert_eq!(conditions, ["`shellcheck` is not installed: it is not on PATH."]);
+        assert_eq!(conditions, ["`shellcheck` is not installed: `gate-no-such-program` is not on PATH."]);
+        let argv = [OsStr::new("gate-no-such-program")];
+        let problem = tool_process("gate-no-such-program", &argv, Path::new(".")).unwrap_err();
+        assert_eq!(problem, "`gate-no-such-program` is not installed: it is not on PATH.");
     }
 }

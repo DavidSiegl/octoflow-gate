@@ -15,8 +15,8 @@ use crate::Unjudged;
 
 /// How one kind of file silences something the gate runs, a linter or a coverage or mutation tool, which the quality
 /// file lists for the reviewer. Ported so far: shell scripts and workflows, whose run scripts actionlint has
-/// shellcheck read, and Markdown; Rust's (gate-standalone/13) and Python's (15) follow, Python's ahead of the rest,
-/// since a script whose `#!` names python is Python whatever its name.
+/// shellcheck read, Markdown and Rust; Python's (gate-standalone/15) follows, ahead of the rest, since a script whose
+/// `#!` names python is Python whatever its name.
 struct Syntax {
     /// Whether the file at `path`, from the tree's top level, is of this kind.
     holds: fn(path: &[u8]) -> bool,
@@ -25,7 +25,7 @@ struct Syntax {
 }
 
 /// The kinds of file, the first that holds a file deciding; a file of none holds no suppression the gate knows.
-static SYNTAXES: [Syntax; 2] = [
+static SYNTAXES: [Syntax; 3] = [
     // A comment for shellcheck.
     Syntax {
         holds: |path| {
@@ -37,6 +37,17 @@ static SYNTAXES: [Syntax; 2] = [
     // pymarkdown's pragma, an HTML comment from the line's first column to its end (pymarkdownlnt 0.9.41's
     // PragmaToken.look_for_pragmas).
     Syntax { holds: |path| path.ends_with(b".md"), pattern: r"(?i)^<!---?\s*pyml\s+disable.*-->\s*$" },
+    // An attribute for clippy and rustc: an allow or expect inside one attribute's brackets, also inside a cfg_attr,
+    // as in `#![cfg_attr(test, allow(...))]`, or alone on a line, as rustfmt wraps a long cfg_attr's; and
+    // cargo-mutants' own `#[mutants::skip]`, also inside a cfg_attr, wrapped or not, which keeps a function from
+    // being mutated.
+    Syntax {
+        holds: |path| path.ends_with(b".rs"),
+        pattern: concat!(
+            r"#!?\[[^\]]*\b(?:allow|expect)\s*\(|^\s*(?:allow|expect)\s*\(",
+            r"|#!?\[[^\]]*\bmutants::skip\b|^\s*mutants::skip\b"
+        ),
+    },
 ];
 
 /// The (path, line, text) of each added line, in the working tree at `root`, that silences something the gate runs,
@@ -181,6 +192,26 @@ mod tests {
             ]
         );
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rust_s_allow_expect_and_mutants_skip_are_suppressions() {
+        let rust = Regex::new(SYNTAXES.iter().find(|s| (s.holds)(b"a.rs")).unwrap().pattern).unwrap();
+        for line in [
+            "#![cfg_attr(not(test), allow(clippy::all))]",
+            "#[expect(dead_code)]",
+            "    allow(clippy::needless_return)",
+            "#[mutants::skip]",
+            "#[cfg_attr(test, mutants::skip)]",
+            "    #[mutants::skip] fn f() {}",
+            "    mutants::skip",
+            "    mutants::skip,",
+        ] {
+            assert!(rust.is_match(line), "{line}");
+        }
+        for line in ["let mutants = skip(1);", "Write `#[deny(lint)]`.", "fn allow_all() {}"] {
+            assert!(!rust.is_match(line), "{line}");
+        }
     }
 
     #[test]

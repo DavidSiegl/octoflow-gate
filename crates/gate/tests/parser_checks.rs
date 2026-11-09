@@ -238,7 +238,8 @@ fn each_check_says_which_of_its_findings_fail_the_gate() {
 
 #[test]
 fn a_check_s_errors_fail_the_gate_and_its_warnings_are_to_weigh() {
-    let repo = package(&[("pyproject.toml", "[tool.ruff]\n")]);
+    // clippy off: the package's tests use crates it does not depend on, which it would not compile.
+    let repo = package(&[("pyproject.toml", "[tool.ruff]\n"), ("gate.toml", "[linters]\nclippy = []\n")]);
     edit(&repo, "crate/tests/it.rs", "#[test]\nfn negative", "#[test]\n#[ignore]\nfn negative");
     let adds_large = "    #[test]\n    fn adds_large() {\n        assert_eq!(add(10, 20), 30);\n    }\n";
     edit(&repo, "crate/src/lib.rs", adds_large, "");

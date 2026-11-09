@@ -239,6 +239,52 @@ fn a_workspace_cargo_cannot_tell_is_not_mutated() {
 }
 
 #[test]
+fn a_workspace_cargo_is_missing_to_tell_names_cargo_mutants() {
+    let repo = repo(&[]);
+    repo.put("src/lib.rs", format!("{LIB}{ADDED}").as_bytes());
+    // PATH holds git and nothing else.
+    let found = Command::new("sh").args(["-c", "command -v git"]).output().unwrap();
+    let git = String::from_utf8(found.stdout).unwrap();
+    let bin = repo.outside.join("git-only");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::os::unix::fs::symlink(git.trim(), bin.join("git")).unwrap();
+    assert_eq!(findings(&repo, None, &[("PATH", bin.into_os_string())]), vec![(
+        Some("src/lib.rs".into()),
+        None,
+        "not-mutated".into(),
+        "was not mutation-tested: `cargo-mutants` is not installed: `cargo` is not on PATH.".into(),
+    )]);
+}
+
+#[test]
+fn a_tree_that_cannot_be_copied_is_not_run() {
+    let repo = repo(&[]);
+    // A submodule's directory is copied whole, so a named pipe in its working tree, which git does not track, is
+    // copied too, and refused.
+    let lib = repo.outside.join("lib");
+    std::fs::create_dir_all(&lib).unwrap();
+    let git = |args: &[&str]| {
+        let done = Command::new("git").current_dir(&lib).args(args).output().unwrap();
+        assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+    };
+    git(&["init", "--quiet", "-b", "main"]);
+    std::fs::write(lib.join("notes.txt"), "notes\n").unwrap();
+    git(&["add", "notes.txt"]);
+    git(&["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "--quiet",
+          "-m", "lib"]);
+    repo.git(&["-c", "protocol.file.allow=always", "submodule", "--quiet", "add", lib.to_str().unwrap(), "vendor/lib"]);
+    repo.commit(&[], "a submodule");
+    assert!(Command::new("mkfifo").arg(repo.repo.join("vendor/lib/pipe")).status().unwrap().success());
+    repo.put("src/lib.rs", format!("{LIB}{ADDED}").as_bytes());
+    let found = findings(&repo, None, &[]);
+    assert_eq!(found.len(), 1, "{found:?}");
+    let (path, line, rule, message) = &found[0];
+    assert_eq!((path.as_deref(), *line, rule.as_str()), (None, None, "not-run"), "{message}");
+    assert!(message.starts_with("could not copy the tree for cargo-mutants: cannot copy /"), "{message}");
+    assert!(message.contains("/vendor/lib/pipe: it is no regular file, link or directory; "), "{message}");
+}
+
+#[test]
 fn a_cargo_mutants_that_fails_writing_no_outcomes_is_not_run() {
     let repo = repo(&[]);
     repo.put("src/lib.rs", format!("{LIB}{ADDED}").as_bytes());

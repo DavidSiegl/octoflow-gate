@@ -78,7 +78,8 @@ pub fn copy_tracked(root: &Path, dest: &Path) -> Result<(), String> {
 }
 
 /// Copies `src` to `dst`, which must not exist: a symbolic link as a link, a directory with all it holds, a file with
-/// its permissions.
+/// its permissions. Errs on anything else, as a named pipe, whose reading could block the gate for good, as gate.py's
+/// `shutil.copy2` refuses one.
 fn copy(src: &Path, dst: &Path) -> Result<(), String> {
     let meta = src.symlink_metadata().map_err(|e| failed("read", src, &e))?;
     if meta.file_type().is_symlink() {
@@ -91,8 +92,10 @@ fn copy(src: &Path, dst: &Path) -> Result<(), String> {
             copy(&entry.path(), &dst.join(entry.file_name()))?;
         }
         Ok(())
-    } else {
+    } else if meta.is_file() {
         std::fs::copy(src, dst).map(|_| ()).map_err(|e| failed("copy", src, &e))
+    } else {
+        Err(format!("cannot copy {}: it is no regular file, link or directory", text::path(src.as_os_str())))
     }
 }
 
@@ -261,6 +264,21 @@ mod tests {
         std::fs::remove_dir_all(&parent).unwrap();
         let made = made.unwrap();
         assert!(made.starts_with(&parent) && !left.contains(&made), "{}", made.display());
+    }
+
+    #[test]
+    fn a_named_pipe_is_not_copied_but_refused() {
+        let dir = std::env::temp_dir().join(format!("gate-copy-pipe-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let made = std::process::Command::new("mkfifo").arg(dir.join("pipe")).status().unwrap();
+        assert!(made.success());
+        let copied = copy(&dir.join("pipe"), &dir.join("copy"));
+        std::fs::remove_dir_all(&dir).unwrap();
+        let expected = format!("cannot copy {}: it is no regular file, link or directory", text::path(
+            dir.join("pipe").as_os_str()
+        ));
+        assert_eq!(copied, Err(expected));
     }
 
     #[test]

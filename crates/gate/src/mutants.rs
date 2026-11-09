@@ -12,7 +12,7 @@ use checks::Finding;
 use serde_json::Value;
 
 use crate::clippy::workspaces;
-use crate::copies::{copy_tracked, finding, in_scratch_directory};
+use crate::copies::{copy_tracked, finding, in_scratch_directory, sort_by_place, Budget};
 use crate::parser_checks::RustChange;
 use crate::process::{run_with, Extras, Finished};
 use crate::text;
@@ -48,7 +48,7 @@ const SURVIVOR_EXAMPLES: usize = 3;
 /// cargo can tell is a `not-mutated` one on it; a run that cannot be made or read is a `not-run` finding saying why,
 /// and a copy that cannot be removed afterwards a `not-removed` one.
 pub fn surviving_mutants(rust: &RustChange, budget: u64) -> Vec<Finding> {
-    let budget = Budget { seconds: budget, deadline: Instant::now() + Duration::from_secs(budget) };
+    let budget = Budget::starting_now(budget);
     let paths = changed_code(rust);
     if paths.is_empty() {
         return vec![];
@@ -56,19 +56,8 @@ pub fn surviving_mutants(rust: &RustChange, budget: u64) -> Vec<Finding> {
     let mut out = in_scratch_directory("not-run", "to run cargo-mutants on a copy of the tree in", |dir| {
         on_copy(rust, dir, &paths, &budget)
     });
-    out.sort_by(|a, b| {
-        let key = |f: &Finding| (f.path.clone().unwrap_or_default(), f.line.unwrap_or(0));
-        key(a).cmp(&key(b))
-    });
+    sort_by_place(&mut out);
     out
-}
-
-/// The time the runs may take.
-struct Budget {
-    /// The check's budget, as findings name it.
-    seconds: u64,
-    /// When it runs out.
-    deadline: Instant,
 }
 
 /// The Rust files, in path order, that the change adds lines to and that are Rust code under test

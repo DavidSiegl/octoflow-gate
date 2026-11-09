@@ -1,10 +1,12 @@
-//! The copies of a tree the gate runs a project's tools in, so that nothing they build or write lands in the tree it
-//! judges: a scratch directory of the gate's own, a copy of the working tree's tracked files, and a copy of the base
-//! with the change's tests in it.
+//! What the checks that run a project's tools share: the copies of a tree they run them in, so that nothing they
+//! build or write lands in the tree the gate judges (a scratch directory of the gate's own, a copy of the working
+//! tree's tracked files, and a copy of the base with the change's tests in it); the budget they run within; and the
+//! shape and order of their findings.
 
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use crate::judge::Change;
 use crate::report::Finding;
@@ -29,6 +31,29 @@ pub fn in_scratch_directory(rule: &str, purpose: &str, run: impl FnOnce(&Path) -
         out.push(finding(None, None, "not-removed", message));
     }
     out
+}
+
+/// The time a check's tool runs may take.
+pub struct Budget {
+    /// The check's budget, in seconds, as its findings name it.
+    pub seconds: u64,
+    /// When it runs out.
+    pub deadline: Instant,
+}
+
+impl Budget {
+    /// A budget of `seconds` that starts now.
+    pub fn starting_now(seconds: u64) -> Budget {
+        Budget { seconds, deadline: Instant::now() + Duration::from_secs(seconds) }
+    }
+}
+
+/// Puts `findings` in the order a check gives them: by path and line, a finding on no path or line first.
+pub fn sort_by_place(findings: &mut [Finding]) {
+    findings.sort_by(|a, b| {
+        let key = |f: &Finding| (f.path.clone().unwrap_or_default(), f.line.unwrap_or(0));
+        key(a).cmp(&key(b))
+    });
 }
 
 /// A finding of a check beside the linters, as its find gives it: `rule` its own, without the check's name, which

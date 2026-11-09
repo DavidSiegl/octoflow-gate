@@ -6,12 +6,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use checks::{ChangedFile, Finding, Side};
 use model::{Lines, Unreadable};
 
-use crate::copies::{copy_base_with_tests, finding, in_scratch_directory};
+use crate::copies::{copy_base_with_tests, finding, in_scratch_directory, sort_by_place, Budget};
 use crate::diff::removal_points;
 use crate::junit::{junit_outcomes, Outcome};
 use crate::parser_checks::RustChange;
@@ -49,7 +49,7 @@ const NEXTEST_BUILD_FAILED: i32 = 101;
 /// leaves empty, and a cargo-nextest that cannot start or fails otherwise are `not-run` findings saying so; a copy
 /// that cannot be removed afterwards is a `not-removed` one.
 pub fn passes_at_base(rust: &RustChange, budget: u64) -> Vec<Finding> {
-    let deadline = Instant::now() + Duration::from_secs(budget);
+    let budget = Budget::starting_now(budget);
     if !rust.edits_code() {
         return vec![];
     }
@@ -68,15 +68,11 @@ pub fn passes_at_base(rust: &RustChange, budget: u64) -> Vec<Finding> {
         }
     }
     if !separable.is_empty() {
-        let budget = Budget { seconds: budget, deadline };
         out.extend(in_scratch_directory("not-run", "to run the changed Rust tests at the base in", |dir| {
             base_run_findings(rust, dir, &separable, &budget)
         }));
     }
-    out.sort_by(|a, b| {
-        let key = |f: &Finding| (f.path.clone().unwrap_or_default(), f.line.unwrap_or(0));
-        key(a).cmp(&key(b))
-    });
+    sort_by_place(&mut out);
     out
 }
 
@@ -88,14 +84,6 @@ struct ChangedTest {
     name: String,
     /// Its fn's line, where a finding on it goes.
     line: u32,
-}
-
-/// The time the runs at the base may take.
-struct Budget {
-    /// The check's budget, as findings name it.
-    seconds: u64,
-    /// When it runs out.
-    deadline: Instant,
 }
 
 /// The Rust tests that the change adds lines to or removes lines from, their outer attributes included, in the files
@@ -407,7 +395,11 @@ mod tests {
 
     /// A directory under the system's temporary one, empty, named for `name` and the process.
     fn empty_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("gate-{name}-{}", std::process::id()));
+        // cargo test runs a binary's tests on threads of one process, so the process id alone would not tell apart
+        // two tests' directories.
+        static MADE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = MADE.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("gate-{name}-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir

@@ -105,7 +105,7 @@ fn a_function_whose_mutants_survive_is_found_and_one_whose_mutants_are_caught_is
     let found = findings(&repo, None, &[]);
     assert_eq!(found.len(), 1, "{found:?}");
     let (path, line, rule, message) = &found[0];
-    assert_eq!((path.as_deref(), *line, rule.as_str()), (Some("src/lib.rs"), Some(9), "survived"));
+    assert_eq!((path.as_deref(), *line, rule.as_str()), (Some("src/lib.rs"), Some(9), "survived"), "{message}");
     assert!(message.starts_with("5 of 5 mutants of `unchecked` survived its tests: line 10: replace "), "{message}");
 }
 

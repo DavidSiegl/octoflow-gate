@@ -57,10 +57,15 @@ impl Repo {
         self.gate_command(base).args(args).output().unwrap()
     }
 
-    /// `gate --base base`, to run in the repository, for a caller to add to.
+    /// `gate --base base`, to run in the repository, for a caller to add to, without the profile of the nextest run
+    /// that runs this test.
     pub fn gate_command(&self, base: &str) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_gate"));
         command.current_dir(&self.repo).arg("--base").arg(base);
+        // nextest tells each test its profile in NEXTEST_PROFILE, and a cargo-nextest the gate starts, as
+        // cargo-mutants' test tool, would read it: under CI's `--profile ci` it then asks the test repository for a
+        // profile it lacks.
+        command.env_remove("NEXTEST_PROFILE");
         command
     }
 

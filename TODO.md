@@ -502,11 +502,33 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   compare`, with a `#!` that `[` follows read as no interpreter line.
 - **A Python file is parsed once more for each format spec in it that starts with `=`.** `parse`
   (`crates/lang-python/src/lib.rs`) takes one such `=` out a round, since after the first the tree may not be the
-  file's (review 13, F20 and F22), and `first_misread_spec_start` (`crates/lang-python/src/syntax.rs`) asks
-  `node.parent()`, which walks down from the root, of every `{` before it. Review 13 measured 10.8 s for a file of
-  800 lines `print(f"{title:=^60}")` against 12 ms with `>` for the `=` (round 4, 2026-11-10). Nothing is read
-  wrong, and a file holds a handful of such specs. Closes with tree-sitter's incremental reparse from the edit and
-  a scan that resumes at it, or with tree-sitter-python reading the spec as Python does.
+  file's (review 13, F20 and F22). Review 13 measured `read` alone, in a release build (rounds 4 and 5, 2026-11-10):
+  800 lines `print(f"{title:=^60}")`, each an error to tree-sitter, 10.1 s against 12 ms with `>` for the `=`; 800
+  lines `print(f"{title:=60}")`, which make no error, 5.9 s, 200 lines 0.40 s and 3000 lines 86 s, where one round
+  for all of them took 19 ms, 5.5 ms and 73 ms. The gate parses a changed Python file twice (`read` and
+  `comments`). Nothing is read wrong, and a file holds a handful of such specs. The round's own measurements rule
+  out two remedies: without `node.parent()` in the scan the times are the same, and tree-sitter's incremental
+  reparse (`Tree::edit`) saves a fifth at most. Closes with the entry below, whose scanner needs no second parse.
+- **A set inside a replacement field, with a nested f-string's `=` spec after its assignment expression, is read as
+  a dict or the file as unreadable.** As review 13 put it (F24, should-fix, 2026-11-10):
+  "`crates/lang-python/src/syntax.rs:114` (the doc of `first_misread_spec_start`, "Only the first is given, because
+  only it is sure") with `:131` (`parent == "ERROR" && open_strings > 0`). The tree that says where the first
+  misread `:=` is has every later one still in it. When a later spec's `#` runs on as a comment, the brackets around
+  it are under an ERROR, and a set's `{` inside a replacement field is then a `{` under an ERROR with a string open,
+  which the scan counts as a field's. The set's own assignment expression comes first in the file, so its `=` is the
+  one taken out. [...] Run, `read` on `def show(title):\n    return f"{ {info := f'{title:=#x}'} }"\n`: bindings
+  `show`, `title`, and no finding says the file was not read; `ast.parse` has one assignment expression, to `info`
+  at line 2 [...]. Run, the same with `{info := title, f'{title:=#x}'}` for the set (`ast.parse`: `info` at line
+  2): "does not parse as Python", line 2, which through the gate is `cognitive-complexity not-scored` and
+  `vague-names not-read` [...]. The review pass reports 126 of 30,000 generated files that CPython accepts read
+  differently from `ast`, [...] every one it reduced of this kind, with `=.`, `=]`, `=)` and `=lambda` in place of
+  `=#` as well [...]. It also reports that keeping one stack of open strings and brackets, a `{` a field's only when
+  a string is innermost, reads these and breaks `{b:=^{b:=#}}`". The sentence is corrected; the reading stands, and
+  gate.py reads these files as Python does (docs/port-differences.md, "What does not parse"). The cause is that
+  where a spec starts is taken from a tree that misreads it, which is a guess wherever that tree holds an error.
+  Closes with the spec starts found in the source itself, before any parse, by a scanner that follows Python's
+  strings, their prefixes, brackets and replacement fields, a `:` in a field and in no bracket inside it starting
+  the spec; or with tree-sitter-python reading the spec as Python does.
 - **`the_budget_running_out_is_a_finding` fails on a loaded machine.** `crates/gate/tests/surviving_mutants.rs`: the
   test gives cargo-mutants 20 seconds, of which the stop may take 15, so the unmutated baseline, a build and a test
   run of 2 seconds, has 5. With two other runs of the gate's tests on the machine (load average 16 to 18) the

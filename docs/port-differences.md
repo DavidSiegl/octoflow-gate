@@ -69,6 +69,10 @@ runs the checks of `crates/checks` over it.
 - **What does not parse.** A file tree-sitter cannot parse "does not parse as Python", at the line of the first token
   it could not place; gate.py quotes `ast`'s `SyntaxError`, on the whole file. tree-sitter-python also reads Python 2,
   so `print x` parses, and it does not yet read a type parameter's default (PEP 696), which Python 3.13 does.
+  A format spec that starts with `=`, as in `f"{x:=^9}"`, it reads as an assignment expression; the gate finds such
+  specs and reads them as Python does, but for one inside an f-string nested in a set that is itself in a
+  replacement field, where the set is read as a dict or the file as one that does not parse (`TODO.md`, "A set
+  inside a replacement field...").
 - **A test file is decoded as any other Python**, by its mark or cookie; gate.py's test-integrity reads both sides of
   a test file as UTF-8 alone and calls any other `unreadable`.
 - **A base file is read only where git holds a regular file.** gate.py reads a base symlink's target, the text git

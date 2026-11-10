@@ -125,6 +125,23 @@ pub fn python() -> PathBuf {
     PathBuf::from(String::from_utf8(named.stdout).unwrap().trim_end())
 }
 
+/// A program outside `repo` that runs the sh `script`, whatever it is asked, to be the gate's `--python`.
+pub fn fake_python(repo: &Repo, script: &str) -> PathBuf {
+    repo.stub("python", script).join("python")
+}
+
+/// A `--python` that is the workspace's Python, but first runs the sh `script`, which has the arguments in `"$@"`.
+pub fn python_after(repo: &Repo, script: &str) -> PathBuf {
+    fake_python(repo, &format!("{script}\nexec '{}' \"$@\"", python().display()))
+}
+
+/// A `--python` that is the workspace's Python, and the file it writes its arguments to, a line for each time the
+/// gate runs it; the file is missing until then.
+pub fn logging_python(repo: &Repo) -> (PathBuf, PathBuf) {
+    let log = repo.outside.join("python-runs");
+    (python_after(repo, &format!("printf '%s\\n' \"$*\" >> '{}'", log.display())), log)
+}
+
 impl Drop for Repo {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.dir);

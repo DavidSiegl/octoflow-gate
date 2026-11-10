@@ -221,7 +221,7 @@ fn run_workspace(run: &Run, root: &OsStr, paths: &[OsString], budget: &Budget) -
     argv.extend([dir.as_os_str(), OsStr::new("--in-diff"), diff_file.as_os_str()]);
     argv.extend(["--test-tool", "nextest", "--timeout", &timeout, "--output"].map(OsStr::new));
     argv.extend([run.scratch.as_os_str(), OsStr::new("--colors"), OsStr::new("never")]);
-    let extras = Extras { env: &[("CARGO_TERM_COLOR", "never")], soft_stop: Some(STOP_GRACE) };
+    let extras = Extras { env: &[("CARGO_TERM_COLOR", OsStr::new("never"))], soft_stop: Some(STOP_GRACE) };
     match run_with(&argv, run.tree, left, &extras) {
         Ok(done) => (run_findings(&done, &run.scratch.join("mutants.out"), root, budget.seconds), done.stopped),
         Err(e) => (vec![not_run(&format!("could not start cargo-mutants: {e}"))], false),

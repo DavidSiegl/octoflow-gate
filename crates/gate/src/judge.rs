@@ -239,7 +239,7 @@ fn judge_checks(
         too_complex(&sources),
         named("flaky-tests", flaky_tests(&sources.python)),
         named("surviving-mutants", surviving_mutants(&sources.rust, mutation_budget)),
-        named("passes-at-base", passes_at_base(&sources.rust, base_run_budget)),
+        named("passes-at-base", passes_at_base(&sources, base_run_budget)),
         vague_names(&sources),
     ];
     let mut to_weigh = vec![];

@@ -102,7 +102,7 @@ impl Group {
 
     /// The group's tests, as a finding about all of them names them when the change's tests fall in more than one
     /// group: by their configuration file's path in the copy.
-    fn label(&self) -> String {
+    pub fn label(&self) -> String {
         // The empty configuration is the one file given with -c that lies outside the copy ([`config`]).
         if !self.setup.inifile.starts_with(&self.setup.top) {
             return "the changed tests with no pytest configuration".into();
@@ -244,7 +244,7 @@ pub fn run(
     args: &[OsString],
     timeout: Duration,
     ok: &[i32],
-    env: &[(&str, &str)],
+    env: &[(&str, &OsStr)],
 ) -> Result<Finished, Problem> {
     // --verbosity sets the level outright, and pytest reads the project's addopts and PYTEST_ADDOPTS before the
     // command line, so a -v or -q of theirs cannot change what the collection prints. The list of collected tests
@@ -260,7 +260,8 @@ pub fn run(
     argv.extend(["--verbosity=-1", "-o", "verbosity_test_cases=-1"].map(OsStr::new));
     argv.extend(args.iter().map(OsString::as_os_str));
     let mut all_env = env.to_vec();
-    all_env.extend([("PYTHONUNBUFFERED", "1"), ("PYTHONIOENCODING", "utf-8:surrogateescape")]);
+    let unbuffered = [("PYTHONUNBUFFERED", "1"), ("PYTHONIOENCODING", "utf-8:surrogateescape")];
+    all_env.extend(unbuffered.map(|(name, set_to)| (name, OsStr::new(set_to))));
     let extras = Extras { env: &all_env, soft_stop: None };
     let finished = match run_with(&argv, &setup.top, timeout, &extras) {
         Ok(finished) => finished,

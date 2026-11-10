@@ -125,7 +125,7 @@ fn copy(src: &Path, dst: &Path) -> Result<(), String> {
 }
 
 /// Why a file operation failed, as a clause: "cannot `what` `path`: the system's words".
-fn failed(what: &str, path: &Path, e: &std::io::Error) -> String {
+pub fn failed(what: &str, path: &Path, e: &std::io::Error) -> String {
     format!("cannot {what} {}: {e}", text::path(path.as_os_str()))
 }
 

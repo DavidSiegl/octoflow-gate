@@ -6,11 +6,11 @@
 //! exits with a status the check does not expect.
 
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use common::Repo;
+use common::{fake_python, logging_python, python_after, Repo};
 
 mod common;
 
@@ -130,23 +130,6 @@ fn found(repo: &Repo) -> Vec<(Option<String>, Option<u32>, String)> {
 /// A finding's path, line and rule, as [`found`] gives them.
 fn at(path: &str, line: u32, rule: &str) -> (Option<String>, Option<u32>, String) {
     (Some(path.into()), Some(line), rule.into())
-}
-
-/// A program outside `repo` that runs the sh `script`, whatever it is asked, to be the gate's `--python`.
-fn fake_python(repo: &Repo, script: &str) -> PathBuf {
-    repo.stub("python", script).join("python")
-}
-
-/// A `--python` that is the workspace's Python, but first runs the sh `script`, which has the arguments in `"$@"`.
-fn python_after(repo: &Repo, script: &str) -> PathBuf {
-    fake_python(repo, &format!("{script}\nexec '{}' \"$@\"", common::python().display()))
-}
-
-/// A `--python` that is the workspace's Python, and the file it writes its arguments to, a line for each time the
-/// gate runs it; the file is missing until then.
-fn logging_python(repo: &Repo) -> (PathBuf, PathBuf) {
-    let log = repo.outside.join("python-runs");
-    (python_after(repo, &format!("printf '%s\\n' \"$*\" >> '{}'", log.display())), log)
 }
 
 /// The message on TestRuns.test_alternates, or on the test `name` that alternates as it does: it fails on the second
@@ -494,7 +477,7 @@ fn tests_under_two_configurations_are_rerun_once_by_each() {
     assert_eq!(findings_with(&repo, &python, &[]), vec![]);
     // Each run's rootdir and configuration file, from the copy's top, and whether it was a collection.
     let mut runs = vec![];
-    for line in std::fs::read_to_string(&log).unwrap().lines().filter(|line| line.contains("randomly")) {
+    for line in std::fs::read_to_string(&log).unwrap().lines().filter(|line| reruns_or_collects(line)) {
         let words: Vec<&str> = line.split(' ').collect();
         let after = |flag: &str| words[words.iter().position(|word| *word == flag).unwrap() + 1];
         let top = format!("{}/", after("--confcutdir"));
@@ -595,11 +578,19 @@ fn a_test_the_runs_before_a_stop_skipped_is_judged_by_too_few() {
     );
 }
 
+/// Whether `line`, the arguments of a pytest run as [`logging_python`] logs them, is one of this check's: a rerun
+/// under a seed, or its collection, which the passes-at-base check's, the gate's other one, tells from its own by
+/// `--continue-on-collection-errors`.
+fn reruns_or_collects(line: &str) -> bool {
+    let collects = line.contains("--collect-only") && !line.contains("--continue-on-collection-errors");
+    line.contains("randomly-seed") || collects
+}
+
 /// Whether the gate, judging `repo`'s change, ran pytest for the check, having found nothing.
 fn reran(repo: &Repo) -> bool {
     let (python, log) = logging_python(repo);
     assert_eq!(findings_with(repo, &python, &[]), vec![]);
-    std::fs::read_to_string(log).is_ok_and(|runs| runs.contains("randomly"))
+    std::fs::read_to_string(log).is_ok_and(|runs| runs.lines().any(reruns_or_collects))
 }
 
 #[test]

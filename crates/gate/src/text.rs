@@ -61,6 +61,14 @@ pub fn py_strip(text: &str) -> &str {
     text.trim_matches(|c: char| c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c))
 }
 
+/// `text` in at most 160 characters, the last of them "…" when it was longer. gate.py's `_clip`.
+pub fn clip(text: &str) -> String {
+    if text.chars().count() <= 160 {
+        return text.to_string();
+    }
+    text.chars().take(159).chain(['…']).collect()
+}
+
 /// `items` as a list in prose: "a", "a and b" or "a, b and c"; "" for none. With `limit`, at most that many are
 /// named, then how many are not, as "a, b and 3 more".
 pub fn series(items: &[String], limit: Option<usize>) -> String {
@@ -110,6 +118,14 @@ mod tests {
     #[test]
     fn one_line_escapes_line_breaks_alone() {
         assert_eq!(one_line("a\nb\rc\u{85}d\u{2028}e\tf"), "a\\x0ab\\x0dc\\x85d\\u2028e\tf");
+    }
+
+    #[test]
+    fn clip_cuts_past_160_characters() {
+        let whole = "é".repeat(160);
+        assert_eq!(clip(&whole), whole);
+        let cut = clip(&"é".repeat(161));
+        assert_eq!((cut.chars().count(), cut.ends_with("é…")), (160, true));
     }
 
     #[test]

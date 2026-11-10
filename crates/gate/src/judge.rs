@@ -1,7 +1,7 @@
 //! The gate's judgement of one change: what it reads of the change, and the report it gives on it, as gate.py's
 //! judge_change does for the parts ported so far. Of the checks beside the linters, the parser checks run
-//! (parser_checks) over the languages ported so far, and surviving-mutants (mutants) and passes-at-base
-//! (passes_at_base) over Rust; the others come with gate-standalone/15-16.
+//! (parser_checks) over Python and Rust, and surviving-mutants (mutants) and passes-at-base (passes_at_base) over
+//! Rust; those two over Python, and flaky-tests, come with gate-standalone/16.
 
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
@@ -12,7 +12,7 @@ use crate::coverage::new_coverage;
 use crate::diff::{change_diff, changed_files, changed_lines, ChangedFile, ChangedLines};
 use crate::linters::{tracked_from, Linter, LINTERS};
 use crate::mutants::surviving_mutants;
-use crate::parser_checks::{too_complex, vague_names, weakened_tests, RustChange};
+use crate::parser_checks::{too_complex, vague_names, weakened_tests, Sources};
 use crate::passes_at_base::passes_at_base;
 use crate::process::tool_env;
 use crate::report::{Finding, QualityReport};
@@ -203,20 +203,20 @@ pub fn judge_change(cwd: &Path, base: &str, given: &Given) -> Result<QualityRepo
 /// cognitive-complexity, surviving-mutants and passes-at-base, whose runs may take the seconds `budgets` gives,
 /// (mutation, base run), and vague-names. Appends to `conditions` a failed condition for each check with findings of
 /// severity "error", in that order, and to `issues` those findings; returns the others, to weigh. Errs as
-/// [`RustChange::read`] does, having appended nothing.
+/// [`Sources::read`] does, having appended nothing.
 fn judge_checks(
     change: &Change,
     (mutation_budget, base_run_budget): (u64, u64),
     conditions: &mut Vec<String>,
     issues: &mut Vec<Finding>,
 ) -> Result<Vec<Finding>, Unjudged> {
-    let rust = RustChange::read(change)?;
+    let sources = Sources::read(change)?;
     let found = [
-        weakened_tests(&rust),
-        too_complex(&rust),
-        named("surviving-mutants", surviving_mutants(&rust, mutation_budget)),
-        named("passes-at-base", passes_at_base(&rust, base_run_budget)),
-        vague_names(&rust),
+        weakened_tests(&sources),
+        too_complex(&sources),
+        named("surviving-mutants", surviving_mutants(&sources.rust, mutation_budget)),
+        named("passes-at-base", passes_at_base(&sources.rust, base_run_budget)),
+        vague_names(&sources),
     ];
     let mut to_weigh = vec![];
     for found in found {

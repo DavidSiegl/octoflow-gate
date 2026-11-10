@@ -1,10 +1,11 @@
 //! The parser checks run on a real git repository's change (gate::parser_checks): what the gate decides
-//! over the whole change before a check judges it, which crates/lang-rust's tests of the checks take as given:
-//! whether the change edits Rust code under test, by the Cargo packages and settings of the tree, and which golden
-//! files go with it. TestRustWeakenedTests in tests/test_gate.py, for those cases.
+//! over the whole change before a check judges it, which the front ends' tests of the checks (crates/lang-python,
+//! crates/lang-rust) take as given: which files are a language's source, whether the change edits its code under
+//! test, by the settings and, for Rust, the Cargo packages of the tree, and which golden files go with it.
+//! TestRustWeakenedTests in tests/test_gate.py, for Rust's cases, and its Python classes' cases of the same kind.
 
 use gate::judge::{judge_change, Change, Given};
-use gate::parser_checks::{too_complex, vague_names, weakened_tests, RustChange};
+use gate::parser_checks::{too_complex, vague_names, weakened_tests, Sources};
 use gate::settings::Settings;
 
 use common::Repo;
@@ -67,8 +68,8 @@ fn edit(repo: &Repo, path: &str, old: &str, new: &str) {
 
 /// The findings of test-integrity, cognitive-complexity and vague-names on `change`, in that order.
 fn run_checks(change: &Change) -> Vec<Vec<gate::report::Finding>> {
-    let rust = RustChange::read(change).unwrap();
-    vec![weakened_tests(&rust), too_complex(&rust), vague_names(&rust)]
+    let sources = Sources::read(change).unwrap();
+    vec![weakened_tests(&sources), too_complex(&sources), vague_names(&sources)]
 }
 
 /// A finding as these tests compare it: its path, line, rule and severity.
@@ -329,4 +330,134 @@ fn a_base_file_is_read_as_git_stores_its_bytes() {
     // Nor in the working tree, where the checks that read a file the change adds lines to say they could not.
     let rules: Vec<String> = found(&repo).into_iter().map(|(_, _, rule, _)| rule).collect();
     assert_eq!(rules, ["cognitive-complexity not-scored", "vague-names not-read"]);
+}
+
+/// A Python function named `name` that scores `score`: as many ifs, one after the other.
+fn flat(name: &str, score: u32) -> String {
+    let ifs: String = (0..score).map(|k| format!("    if x == {k}:\n        x += {k}\n")).collect();
+    format!("def {name}(x):\n{ifs}    return x\n")
+}
+
+/// A Python module calc.py and its test tests/test_calc.py, and `more`, (path, contents), committed as the base.
+fn python_project(more: &[(&str, &str)]) -> Repo {
+    let mut files = vec![
+        ("calc.py", "def add(a, b):\n    return a + b\n"),
+        ("tests/test_calc.py", "from calc import add\n\n\ndef test_add():\n    assert add(1, 2) == 3\n"),
+    ];
+    files.extend(more);
+    let files: Vec<(&str, &[u8])> = files.iter().map(|(p, t)| (*p, t.as_bytes())).collect();
+    Repo::with(&files)
+}
+
+/// The path, line and rule of each of [`found`]'s findings.
+fn found_at(repo: &Repo) -> Vec<(String, Option<u32>, String)> {
+    found(repo).into_iter().map(|(path, line, rule, _)| (path.unwrap_or_default(), line, rule)).collect()
+}
+
+#[test]
+fn a_script_whose_first_line_names_python_is_judged_and_one_that_names_a_shell_is_not() {
+    let repo = python_project(&[]);
+    repo.put("bin/tool", format!("#!/usr/bin/env python3\n{}", flat("fresh", 16)).as_bytes());
+    repo.put("bin/run", format!("#!/bin/sh\n{}", flat("shell", 16)).as_bytes());
+    assert_eq!(found_at(&repo), [("bin/tool".into(), Some(2), "cognitive-complexity over-limit".into())]);
+}
+
+#[test]
+fn a_vague_name_in_a_python_script_with_no_py_is_found() {
+    let repo = python_project(&[]);
+    repo.put("bin/tool", b"#!/usr/bin/env python3\ndef load(path):\n    data = path\n    return data\n");
+    assert_eq!(found_at(&repo), [("bin/tool".into(), Some(3), "vague-names vague-name".into())]);
+}
+
+#[test]
+fn a_python_script_the_change_deletes_lends_its_functions_bases_and_a_shell_script_does_not() {
+    for (first, new) in [("#!/usr/bin/env python3\n", false), ("#!/bin/sh\n", true)] {
+        let repo = python_project(&[("bin/tool", &format!("{first}{}", flat("helper", 20)))]);
+        repo.git(&["rm", "--quiet", "bin/tool"]);
+        // An edit of calc.py, so that git sees no rename.
+        repo.put("calc.py", format!("def add(a, b):\n    return a + b\n\n\n{}", flat("helper", 20)).as_bytes());
+        let rules: Vec<String> = found_at(&repo).into_iter().map(|(_, _, rule)| rule).collect();
+        assert_eq!(rules, if new { vec!["cognitive-complexity over-limit"] } else { vec![] }, "{first}");
+    }
+}
+
+#[test]
+fn a_symlinked_python_file_is_not_read_on_either_side() {
+    let repo = python_project(&[]);
+    // Read in the working tree, it would bind a vague name on its line 1, the line the change adds to the symlink.
+    repo.put("vague.txt", b"data = 1\n");
+    std::os::unix::fs::symlink("vague.txt", repo.repo.join("link.py")).unwrap();
+    // A symlink whose target, as git stores it, reads as a test; read at the base, the change would remove it.
+    std::os::unix::fs::symlink("def test_t(): pass", repo.repo.join("tests/test_link.py")).unwrap();
+    repo.git(&["add", "tests/test_link.py"]);
+    repo.git(&["commit", "--quiet", "-m", "link"]);
+    std::fs::remove_file(repo.repo.join("tests/test_link.py")).unwrap();
+    assert_eq!(found(&repo), vec![]);
+}
+
+#[test]
+fn a_python_file_with_a_byte_order_mark_or_a_coding_cookie_is_judged_as_python_reads_it() {
+    let repo = python_project(&[]);
+    repo.put("bom.py", &[b"\xef\xbb\xbf", flat("marked", 16).as_bytes()].concat());
+    let latin = [b"# -*- coding: latin-1 -*-\nCAFE = 'caf\xe9'\n", flat("declared", 16).as_bytes()].concat();
+    repo.put("latin.py", &latin);
+    let over = |path: &str, line| (path.to_string(), Some(line), "cognitive-complexity over-limit".to_string());
+    assert_eq!(found_at(&repo), [over("bom.py", 1), over("latin.py", 3)]);
+}
+
+#[test]
+fn a_python_expected_value_changed_with_the_code_is_found_and_without_it_is_not() {
+    let repo = python_project(&[("conftest.py", "import sys\n"), ("tests/data/make.py", "ROWS = 1\n")]);
+    edit(&repo, "tests/test_calc.py", "== 3", "== 4");
+    // What goes with the tests is not the code under test.
+    edit(&repo, "conftest.py", "import sys\n", "import os\n");
+    edit(&repo, "tests/data/make.py", "ROWS = 1\n", "ROWS = 2\n");
+    assert_eq!(found(&repo), vec![]);
+    edit(&repo, "calc.py", "return a + b", "return b + a");
+    let changed = "test-integrity expected-value-changed";
+    assert_eq!(found_at(&repo), [("tests/test_calc.py".into(), Some(5), changed.into())]);
+}
+
+#[test]
+fn a_golden_file_changed_with_a_python_script_is_an_expected_value_changed_unless_the_script_is_beside_the_tests() {
+    let script = "#!/usr/bin/env python3\nprint(3)\n";
+    let golden = ("tests/golden/tool.txt".to_string(), None, "test-integrity expected-value-changed".to_string());
+    for (how, expected) in [("edited", vec![golden.clone()]), ("deleted", vec![golden]), ("beside the tests", vec![])] {
+        let repo = python_project(&[
+            ("tests/golden/tool.txt", "3\n"),
+            ("bin/tool", script),
+            ("bin/old", script),
+            ("tests/bin/fake", script),
+        ]);
+        match how {
+            "edited" => edit(&repo, "bin/tool", "print(3)", "print(4)"),
+            "deleted" => drop(repo.git(&["rm", "--quiet", "bin/old"])),
+            _ => edit(&repo, "tests/bin/fake", "print(3)", "print(4)"),
+        }
+        repo.put("tests/golden/tool.txt", b"4\n");
+        assert_eq!(found_at(&repo), expected, "{how}");
+    }
+}
+
+#[test]
+fn golden_files_then_python_s_findings_then_rust_s_are_listed_and_the_other_checks_by_path() {
+    let repo = package(&[
+        ("crate/tests/golden/sum.txt", "3\n"),
+        ("zed/calc.py", "def add(a, b):\n    return a + b\n"),
+        ("zed/test_calc.py", "from calc import add\n\n\ndef test_add():\n    assert add(1, 2) == 3\n"),
+    ]);
+    repo.put("crate/tests/golden/sum.txt", b"4\n");
+    edit(&repo, "crate/src/lib.rs", "    a + b\n", "    let info = a + b + 1;\n    info\n");
+    change_negative(&repo);
+    edit(&repo, "zed/calc.py", "return a + b", "data = a + b\n    return data");
+    edit(&repo, "zed/test_calc.py", "== 3", "== 4");
+    let found: Vec<(String, String)> = found_at(&repo).into_iter().map(|(path, _, rule)| (path, rule)).collect();
+    let changed = "test-integrity expected-value-changed";
+    assert_eq!(found, [
+        ("crate/tests/golden/sum.txt".into(), changed.into()),
+        ("zed/test_calc.py".into(), changed.into()),
+        ("crate/tests/it.rs".into(), changed.into()),
+        ("crate/src/lib.rs".into(), "vague-names vague-name".into()),
+        ("zed/calc.py".into(), "vague-names vague-name".into()),
+    ]);
 }

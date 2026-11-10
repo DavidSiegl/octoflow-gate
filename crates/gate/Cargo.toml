@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 checks = { path = "../checks" }
+lang-python = { path = "../lang-python" }
 lang-rust = { path = "../lang-rust" }
 model = { path = "../model" }
 libc = "0.2.191"

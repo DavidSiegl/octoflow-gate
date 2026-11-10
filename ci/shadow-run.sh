@@ -23,18 +23,19 @@
 #                                        stopped, a line saying so and what it printed on standard error
 #
 # The Rust gate has GATE_MINUTES to judge and is then stopped, and this script ends within a minute of that, so that
-# it cannot hold up a build whose verdict gate.py has given. A gate that is stopped stops nothing it had started: a
-# tool or a test command of its own may run on after this script. The limit is fixed, so a project whose budgets
-# (--mutation-budget, --base-run-budget, gate.toml's [budgets]) or whose own test commands take the gate past it
-# gets no comparison. The gate's standard error comes through as it is printed. SIGINT is, for the gate, what it
-# was for this script: ignored when a Jenkins step runs it, and the gate then judges on through one; else Ctrl-C, on
-# which the gate stops what it started and this script exits 130.
+# it cannot hold up a build whose verdict gate.py has given. What a stopped gate had started in a session of its
+# own, as it starts its tools and test commands, is not stopped with it and may run on after this script. The limit
+# is fixed, so a project whose budgets (--mutation-budget, --base-run-budget, gate.toml's [budgets]) or whose own
+# test commands take the gate past it gets no comparison. The gate's standard error comes through as it is printed.
+#
+# SIGHUP and SIGTERM stop the gate with the script, which exits 143. SIGINT is, for the gate, what it was for this
+# script: ignored when a Jenkins step runs it, and the gate then judges on through one sent to the script or its
+# process group; else Ctrl-C, on which the gate stops what it started and the script exits 130.
 #
 # The differences that are meant are listed in docs/port-differences.md of the gate's repository,
 # https://github.com/DavidSiegl/octoflow-gate/blob/main/docs/port-differences.md. Exits 0 once quality-diff.txt is
-# written, whatever it holds; 2, saying why on standard error, when the arguments are wrong, <dir> lacks gate.py's
-# reports or a file cannot be written; and 130 or 143 when SIGINT, or SIGHUP or SIGTERM, stopped it. Needs /proc,
-# awk, diff, mkfifo, tee and GNU coreutils' timeout.
+# written, whatever it holds, and 2, saying why on standard error, when the arguments are wrong, <dir> lacks gate.py's
+# reports or a file cannot be written. Needs Linux's /proc, GNU coreutils' timeout, and awk, diff and sh on PATH.
 set -u
 
 # How long the Rust gate may take, in minutes: a fixed bound below a build's own limit, which the gate's budgets are
@@ -58,27 +59,32 @@ rm -f "$dir/quality-rust.md" "$dir/quality-rust.json" "$dir/quality-diff.txt" ||
     { echo "shadow-run.sh: cannot remove an earlier run's files from $dir" >&2; exit 2; }
 # Holds `said`, what the Rust gate printed on standard error, and `err`, the pipe it prints that into.
 work=$(mktemp -d) || { echo "shadow-run.sh: cannot make a temporary directory" >&2; exit 2; }
-trap 'rm -rf "$work"' EXIT
-# A shell that is told to stop runs no EXIT trap unless it exits by its own hand.
-trap 'exit 143' HUP TERM
-trap 'exit 130' INT
+# The process ids of timeout, which runs the gate, and of the tee that keeps what the gate prints; empty while
+# there is none to stop.
+gate_pid=
+said_pid=
+trap '[ -z "$said_pid" ] || kill "$said_pid" 2>/dev/null; rm -rf "$work"' EXIT
 
-# --out and --json come last, so that they win over any among GATE_ARGS.
-set -- "$gate" "$@" --out "$dir/quality-rust.md" --json "$dir/quality-rust.json"
-# The last hexadecimal digit of SigIgn in proc(5)'s status holds signals 1 to 4, SIGINT being 2.
+# Pass the signal named $1 on to timeout, which passes it on to the gate, and exit with $2. A shell that is told to
+# stop runs no EXIT trap unless it exits by its own hand. The gate runs in the background and the script waits for
+# it, as a shell holds a trap back until a command in the foreground has ended.
+stopped() {
+    [ -z "$gate_pid" ] || kill -s "$1" "$gate_pid" 2>/dev/null
+    exit "$2"
+}
+trap 'stopped HUP 143' HUP
+trap 'stopped TERM 143' TERM
+# On Ctrl-C the gate stops what it started, and the terminal is given back when it has.
+trap '[ -z "$gate_pid" ] || { kill -s INT "$gate_pid"; wait "$gate_pid"; } 2>/dev/null; exit 130' INT
+
+# What timeout runs: the gate as this script was started, for SIGINT. timeout starts its command with SIGINT at its
+# default, also when it was itself started with SIGINT ignored. The last hexadecimal digit of SigIgn in proc(5)'s
+# status holds signals 1 to 4, SIGINT being 2.
 ignored=$(awk '/^SigIgn:/ { print substr($2, length($2)) }' "/proc/$$/status") ||
     { echo "shadow-run.sh: cannot read /proc/$$/status for the signals this script ignores" >&2; exit 2; }
 case $ignored in
-[2367abef])
-    # timeout starts its command with SIGINT at its default, and itself passes one on and then kills a command that
-    # has not ended, though it was started with SIGINT ignored. So the gate is made to ignore it again, and timeout
-    # is left the process group it makes for itself, where a SIGINT to this script's group does not reach it.
-    set -- timeout --kill-after="$KILL_AFTER" "${GATE_MINUTES}m" sh -c 'trap "" INT; exec "$@"' sh "$@"
-    ;;
-*)
-    # --foreground leaves the gate in this script's process group, so that Ctrl-C reaches it.
-    set -- timeout --foreground --kill-after="$KILL_AFTER" "${GATE_MINUTES}m" "$@"
-    ;;
+[2367abef]) start='trap "" INT; exec "$@"' ;;
+*) start='exec "$@"' ;;
 esac
 
 # The gate's standard error goes to this script's as it comes, and into `said`. tee is not the gate's pipeline, as
@@ -87,13 +93,20 @@ esac
 mkfifo "$work/err" || { echo "shadow-run.sh: cannot make a pipe for what the Rust gate prints" >&2; exit 2; }
 tee "$work/said" <"$work/err" >&2 &
 said_pid=$!
-"$@" 2>"$work/err"
+# --out and --json come last, so that they win over any among GATE_ARGS. timeout makes a process group of its own
+# for itself and the gate, so a signal to this script's group reaches them through the traps alone.
+timeout --kill-after="$KILL_AFTER" "${GATE_MINUTES}m" sh -c "$start" sh "$gate" "$@" \
+    --out "$dir/quality-rust.md" --json "$dir/quality-rust.json" 2>"$work/err" &
+gate_pid=$!
+wait "$gate_pid"
 status=$?
+gate_pid=
 (sleep "$SAID_WAIT" && kill "$said_pid") >/dev/null 2>&1 &
 cutter=$!
 # The shell would else report a tee that was cut off as "Terminated".
 wait "$said_pid" 2>/dev/null
 said_status=$?
+said_pid=
 kill "$cutter" 2>/dev/null
 # 143 is tee cut off after SAID_WAIT, having kept what the gate itself printed.
 [ "$said_status" -eq 0 ] || [ "$said_status" -eq 143 ] ||

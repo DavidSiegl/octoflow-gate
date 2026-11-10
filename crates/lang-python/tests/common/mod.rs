@@ -38,6 +38,13 @@ pub fn deleted(path: &str, text: &str) -> ChangedFile {
     changed(Some((path, text)), None)
 }
 
+/// `text` with its one `old` replaced by `new`; panics unless `text` holds `old` exactly once, so that no test goes on
+/// without the edit it means to make.
+pub fn replaced(text: &str, old: &str, new: &str) -> String {
+    assert_eq!(text.matches(old).count(), 1, "{old:?}");
+    text.replacen(old, new, 1)
+}
+
 /// The lines of a side's text, none for no side.
 fn lines<'a>(side: Option<(&str, &'a str)>) -> Vec<&'a str> {
     side.map(|(_, text)| text.lines().collect()).unwrap_or_default()

@@ -4,6 +4,11 @@
 //! test, by the settings and, for Rust, the Cargo packages of the tree, and which golden files go with it.
 //! TestRustWeakenedTests in tests/test_gate.py, for Rust's cases, and its Python classes' cases of the same kind.
 
+use std::fs::OpenOptions;
+use std::os::unix::fs::OpenOptionsExt;
+use std::process::Command;
+use std::time::Duration;
+
 use gate::judge::{judge_change, Change, Given};
 use gate::parser_checks::{too_complex, vague_names, weakened_tests, Sources};
 use gate::settings::Settings;
@@ -77,16 +82,18 @@ type Found = (Option<String>, Option<u32>, String, String);
 
 /// Each finding of the parser checks on the change from HEAD to the working tree, every file in it tracked, by the
 /// default settings, in the order the gate runs the checks.
-fn found(repo: &Repo) -> Vec<Found> {
+fn findings(repo: &Repo) -> Vec<gate::report::Finding> {
     repo.git(&["add", "-A"]);
     let change = Change::from_tree(&repo.repo, "HEAD", Settings::default()).unwrap();
-    let by_check = run_checks(&change);
-    let mut out = vec![];
-    for f in by_check.into_iter().flatten() {
-        let path = f.path.as_ref().map(|p| p.to_string_lossy().into_owned());
-        out.push((path, f.line, f.rule.clone(), f.severity.clone()));
-    }
-    out
+    run_checks(&change).into_iter().flatten().collect()
+}
+
+/// The path, line, rule and severity of each of [`findings`].
+fn found(repo: &Repo) -> Vec<Found> {
+    let place = |f: gate::report::Finding| {
+        (f.path.as_ref().map(|p| p.to_string_lossy().into_owned()), f.line, f.rule, f.severity)
+    };
+    findings(repo).into_iter().map(place).collect()
 }
 
 /// The changed expected value of tests/it.rs's `negative`, at its line 5, as the check finds it beside a change to
@@ -338,12 +345,12 @@ fn flat(name: &str, score: u32) -> String {
     format!("def {name}(x):\n{ifs}    return x\n")
 }
 
+const CALC_PY: &str = "def add(a, b):\n    return a + b\n";
+const TEST_CALC_PY: &str = "from calc import add\n\n\ndef test_add():\n    assert add(1, 2) == 3\n";
+
 /// A Python module calc.py and its test tests/test_calc.py, and `more`, (path, contents), committed as the base.
 fn python_project(more: &[(&str, &str)]) -> Repo {
-    let mut files = vec![
-        ("calc.py", "def add(a, b):\n    return a + b\n"),
-        ("tests/test_calc.py", "from calc import add\n\n\ndef test_add():\n    assert add(1, 2) == 3\n"),
-    ];
+    let mut files = vec![("calc.py", CALC_PY), ("tests/test_calc.py", TEST_CALC_PY)];
     files.extend(more);
     let files: Vec<(&str, &[u8])> = files.iter().map(|(p, t)| (*p, t.as_bytes())).collect();
     Repo::with(&files)
@@ -354,12 +361,32 @@ fn found_at(repo: &Repo) -> Vec<(String, Option<u32>, String)> {
     found(repo).into_iter().map(|(path, line, rule, _)| (path.unwrap_or_default(), line, rule)).collect()
 }
 
+/// What [`found_at`] gives for a function over the limit at `line` of the file at `path`.
+fn over_limit(path: &str, line: u32) -> (String, Option<u32>, String) {
+    (path.into(), Some(line), "cognitive-complexity over-limit".into())
+}
+
+/// [`found_at`] once fresh.py, a new Python function over the limit, is added to `repo`'s working tree, but the
+/// finding on fresh.py: so a test that expects no finding fails when the checks find nothing at all.
+fn found_beside_fresh(repo: &Repo) -> Vec<(String, Option<u32>, String)> {
+    repo.put("fresh.py", flat("fresh", 16).as_bytes());
+    let mut beside = found_at(repo);
+    let fresh = beside.iter().position(|at| *at == over_limit("fresh.py", 1)).expect("fresh.py's function is found");
+    beside.remove(fresh);
+    beside
+}
+
+#[test]
+fn an_unchanged_python_tree_has_no_findings() {
+    assert_eq!(found(&python_project(&[])), vec![]);
+}
+
 #[test]
 fn a_script_whose_first_line_names_python_is_judged_and_one_that_names_a_shell_is_not() {
     let repo = python_project(&[]);
     repo.put("bin/tool", format!("#!/usr/bin/env python3\n{}", flat("fresh", 16)).as_bytes());
     repo.put("bin/run", format!("#!/bin/sh\n{}", flat("shell", 16)).as_bytes());
-    assert_eq!(found_at(&repo), [("bin/tool".into(), Some(2), "cognitive-complexity over-limit".into())]);
+    assert_eq!(found_at(&repo), [over_limit("bin/tool", 2)]);
 }
 
 #[test]
@@ -401,8 +428,134 @@ fn a_python_file_with_a_byte_order_mark_or_a_coding_cookie_is_judged_as_python_r
     repo.put("bom.py", &[b"\xef\xbb\xbf", flat("marked", 16).as_bytes()].concat());
     let latin = [b"# -*- coding: latin-1 -*-\nCAFE = 'caf\xe9'\n", flat("declared", 16).as_bytes()].concat();
     repo.put("latin.py", &latin);
-    let over = |path: &str, line| (path.to_string(), Some(line), "cognitive-complexity over-limit".to_string());
-    assert_eq!(found_at(&repo), [over("bom.py", 1), over("latin.py", 3)]);
+    assert_eq!(found_at(&repo), [over_limit("bom.py", 1), over_limit("latin.py", 3)]);
+}
+
+#[test]
+fn a_python_base_with_a_byte_order_mark_or_a_coding_cookie_is_compared_as_python_reads_it() {
+    let (bom, cookie) = (&b"\xef\xbb\xbf"[..], &b"# -*- coding: latin-1 -*-\nCAFE = 'caf\xe9'\n"[..]);
+    let (marked, declared) = (flat("marked", 20), flat("declared", 20));
+    let repo = Repo::with(&[
+        ("bom.py", &[bom, marked.as_bytes()].concat()),
+        ("latin.py", &[cookie, declared.as_bytes()].concat()),
+    ]);
+    // Edits that leave both at 20.
+    repo.put("bom.py", &[bom, marked.replace("x += 3\n", "x += 30\n").as_bytes()].concat());
+    repo.put("latin.py", &[cookie, declared.replace("x += 3\n", "x += 30\n").as_bytes()].concat());
+    assert_eq!(found_beside_fresh(&repo), []);
+}
+
+#[test]
+fn a_python_file_renamed_and_edited_is_compared_with_its_base_under_its_old_name() {
+    let repo = python_project(&[("big.py", &flat("big", 20))]);
+    repo.git(&["mv", "big.py", "lib.py"]);
+    edit(&repo, "lib.py", "x += 19\n", "x += 190\n");
+    assert_eq!(found_beside_fresh(&repo), []);
+}
+
+#[test]
+fn a_python_script_the_change_renames_to_a_py_file_lends_its_functions_bases() {
+    let repo = python_project(&[("bin/tool", &format!("#!/usr/bin/env python3\n{}", flat("helper", 20)))]);
+    repo.git(&["rm", "--quiet", "bin/tool"]);
+    // A new file, which git may pair with the deleted script as its rename.
+    repo.put("lib.py", flat("helper", 20).as_bytes());
+    assert_eq!(found_beside_fresh(&repo), []);
+}
+
+#[test]
+fn a_python_function_out_of_tests_is_judged_as_new_as_tests_were_never_held_to_the_limit() {
+    let (helper, other) = (flat("helper", 20), flat("other_helper", 20).replace("x +=", "x -="));
+    let repo = python_project(&[("tests/helpers.py", &format!("{helper}\n\n{other}"))]);
+    // Renamed, with both functions, and an edit that leaves helper at 20.
+    std::fs::create_dir(repo.repo.join("lib")).unwrap();
+    repo.git(&["mv", "tests/helpers.py", "lib/helpers.py"]);
+    edit(&repo, "lib/helpers.py", "x += 3\n", "x += 30\n");
+    assert_eq!(found_at(&repo), [over_limit("lib/helpers.py", 1)]);
+    // lib/helpers.py's base is now in lib/, held to the limit: other_helper, moved out of it, keeps its base.
+    repo.commit(&[], "renamed");
+    repo.put("lib/helpers.py", helper.replace("x += 3\n", "x += 30\n").as_bytes());
+    repo.put("lib/more.py", other.as_bytes());
+    assert_eq!(found_beside_fresh(&repo), []);
+}
+
+/// big.py, a line and then a function over the limit, for [`python_project`]'s base, and the function alone.
+fn big_py() -> (String, String) {
+    let big = flat("big", 20);
+    (format!("X = 0\n\n\n{big}"), big)
+}
+
+#[test]
+fn a_function_moved_unchanged_into_a_python_script_keeps_its_base_from_a_copy_elsewhere() {
+    let (big_py, big) = big_py();
+    let repo = python_project(&[("big.py", &big_py)]);
+    repo.put("big.py", b"X = 0\n");
+    // The original, in a script with no .py, and a copy of it under another name.
+    repo.put("bin/tool", format!("#!/usr/bin/env python3\n{big}").as_bytes());
+    repo.put("lib.py", big.replace("def big(", "def copied(").as_bytes());
+    assert_eq!(found_at(&repo), [over_limit("lib.py", 1)]);
+}
+
+#[test]
+fn a_function_s_text_moved_into_a_file_that_is_not_python_leaves_its_base_to_its_copy() {
+    for (name, first) in [("notes.txt", "# python, kept for reference\n"), ("bin/run", "#!/bin/sh\n")] {
+        let (big_py, big) = big_py();
+        let repo = python_project(&[("big.py", &big_py)]);
+        repo.put("big.py", b"X = 0\n");
+        repo.put(name, format!("{first}{big}").as_bytes());
+        // The only function with big's body.
+        repo.put("lib.py", big.replace("def big(", "def copied(").as_bytes());
+        assert_eq!(found_beside_fresh(&repo), [], "{name}");
+    }
+}
+
+#[test]
+fn a_changed_symlink_is_not_read_so_one_to_a_fifo_cannot_block_the_checks() {
+    let repo = python_project(&[]);
+    let fifo = repo.outside.join("pipe");
+    assert!(Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+    std::os::unix::fs::symlink(&fifo, repo.repo.join("x.py")).unwrap();
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::scope(|scope| {
+        let repo = &repo;
+        scope.spawn(move || done.send(found_beside_fresh(repo)).unwrap());
+        let found = finished.recv_timeout(Duration::from_secs(10));
+        if found.is_err() {
+            // The FIFO's other end, opened and closed, ends the read blocked on it, so that the scope ends and the
+            // test fails rather than hangs. It fails to open only when no read is blocked on it after all.
+            drop(OpenOptions::new().write(true).custom_flags(libc::O_NONBLOCK).open(&fifo));
+        }
+        assert_eq!(found.ok(), Some(vec![]), "the checks read the FIFO a changed symlink points to");
+    });
+}
+
+#[test]
+fn a_python_module_renamed_with_a_symlink_left_under_its_old_name_keeps_its_functions_bases() {
+    let repo = python_project(&[("big.py", &flat("big", 20))]);
+    repo.git(&["mv", "big.py", "core.py"]);
+    std::os::unix::fs::symlink("core.py", repo.repo.join("big.py")).unwrap();
+    assert_eq!(found_beside_fresh(&repo), []);
+}
+
+#[test]
+fn a_python_function_in_mutmut_s_state_is_not_judged() {
+    let repo = python_project(&[]);
+    repo.put("mutants/calc.py", flat("x_big__mutmut_1", 20).as_bytes());
+    assert_eq!(found_beside_fresh(&repo), []);
+}
+
+#[test]
+fn a_removed_python_test_is_found_whatever_syntax_the_environment_gives_git_s_pathspecs() {
+    // Mutants/ is not mutmut's mutants/: a git that read the gate's pathspecs without regard to case would leave it
+    // out of the change, and one that read them as literal paths would leave out every file.
+    let tests = "def test_a():\n    assert 1\n\n\ndef test_b():\n    assert 2\n";
+    let repo = python_project(&[("pyproject.toml", "[tool.ruff]\n"), ("Mutants/test_case.py", tests)]);
+    edit(&repo, "Mutants/test_case.py", "def test_b():\n    assert 2\n", "");
+    for name in ["GIT_LITERAL_PATHSPECS", "GIT_ICASE_PATHSPECS"] {
+        // Through the binary: what it leaves out of its tools' environment is its own process's.
+        let done = repo.gate_command("HEAD").env(name, "1").output().unwrap();
+        let out = String::from_utf8(done.stdout).unwrap();
+        assert!(out.contains("`Mutants/test_case.py:5` warning test-integrity removed-test: "), "{name}: {out}");
+    }
 }
 
 #[test]
@@ -416,6 +569,86 @@ fn a_python_expected_value_changed_with_the_code_is_found_and_without_it_is_not(
     edit(&repo, "calc.py", "return a + b", "return b + a");
     let changed = "test-integrity expected-value-changed";
     assert_eq!(found_at(&repo), [("tests/test_calc.py".into(), Some(5), changed.into())]);
+}
+
+#[test]
+fn a_golden_file_changed_with_python_code_is_an_expected_value_changed_and_without_it_is_not() {
+    let repo = python_project(&[
+        ("tests/golden/sum.txt", "3\n"),
+        ("tests/golden/old.txt", "1\n"),
+        ("tests/golden/moved.txt", "2\n"),
+        ("tests/golden/cut.txt", "1\n2\n"),
+        ("docs/golden/notes.txt", "a\n"),
+    ]);
+    repo.put("tests/golden/sum.txt", b"4\n");
+    // Lines removed, none added.
+    repo.put("tests/golden/cut.txt", b"1\n");
+    repo.git(&["rm", "--quiet", "tests/golden/old.txt"]);
+    // Its expected value unchanged; then a new expected value, not a changed one; then a file no test reads.
+    repo.git(&["mv", "tests/golden/moved.txt", "tests/golden/kept.txt"]);
+    repo.put("tests/golden/new.txt", b"5\n");
+    repo.put("docs/golden/notes.txt", b"b\n");
+    edit(&repo, "tests/test_calc.py", "def test_add():", "def test_sum():");
+    assert_eq!(found(&repo), vec![]);
+    edit(&repo, "calc.py", "return a + b", "return b + a");
+    let found: Vec<(String, Option<u32>, String, String, String)> = findings(&repo)
+        .into_iter()
+        .map(|f| (f.path.unwrap_or_default().to_string_lossy().into(), f.line, f.rule, f.severity, f.message))
+        .collect();
+    let golden = |name: &str, what: &str| {
+        let message = format!("a golden file, the expected output of a test, {what}");
+        let rule = "test-integrity expected-value-changed".to_string();
+        (format!("tests/golden/{name}"), None, rule, "warning".to_string(), message)
+    };
+    let changed = "changed in a change that also edits the code under test; check that its diff is what the change \
+                   means the output to become.";
+    let deleted = "deleted in a change that also edits the code under test; check that no test still needs it.";
+    assert_eq!(found, [golden("cut.txt", changed), golden("old.txt", deleted), golden("sum.txt", changed)]);
+}
+
+/// Commits under mutants/ what mutmut leaves there after a run in [`python_project`]'s tree: its copy of the code
+/// and of the tests beside it.
+fn commit_mutmut_state(repo: &Repo) {
+    let state = [("mutants/calc.py", CALC_PY.as_bytes()), ("mutants/tests/test_calc.py", TEST_CALC_PY.as_bytes())];
+    repo.commit(&state, "mutmut's state");
+}
+
+#[test]
+fn removing_mutmut_s_state_removes_no_test() {
+    let repo = python_project(&[]);
+    commit_mutmut_state(&repo);
+    repo.git(&["rm", "-r", "--quiet", "mutants"]);
+    assert_eq!(found(&repo), vec![]);
+}
+
+#[test]
+fn an_edit_to_mutmut_s_state_is_no_change_to_the_code() {
+    let repo = python_project(&[]);
+    commit_mutmut_state(&repo);
+    edit(&repo, "mutants/calc.py", "return a + b", "return a + b + 1");
+    edit(&repo, "tests/test_calc.py", "== 3", "== 4");
+    assert_eq!(found(&repo), vec![]);
+}
+
+#[test]
+fn a_test_moved_out_of_mutmut_s_state_is_a_new_test() {
+    let skipped = "import pytest\n\n\n@pytest.mark.skip\ndef test_x():\n    assert 1\n";
+    let repo = python_project(&[("mutants/tests/test_skipped.py", skipped)]);
+    // Seen without mutants/, the move adds the file, so the skip at its base is on an added line.
+    repo.git(&["mv", "mutants/tests/test_skipped.py", "tests/test_skipped.py"]);
+    assert_eq!(found_at(&repo), [("tests/test_skipped.py".into(), Some(4), "test-integrity skip".into())]);
+}
+
+#[test]
+fn a_python_test_file_that_is_not_utf_8_fails_the_gate_as_unreadable() {
+    let repo = python_project(&[]);
+    repo.put("tests/test_calc.py", b"def test_a():\n    assert '\xff'\n");
+    let found: Vec<_> = findings(&repo).into_iter().filter(|f| f.check() == "test-integrity").collect();
+    let [unreadable] = found.as_slice() else { panic!("one finding, not {found:?}") };
+    let at = (unreadable.path.as_deref(), unreadable.line, unreadable.rule.as_str(), unreadable.severity.as_str());
+    assert_eq!(at, (Some("tests/test_calc.py".as_ref()), None, "test-integrity unreadable", "error"));
+    let why = &unreadable.message;
+    assert!(why.starts_with("could not be read (") && why.ends_with("), so its tests were not checked."), "{why}");
 }
 
 #[test]

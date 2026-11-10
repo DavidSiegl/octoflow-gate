@@ -5,7 +5,7 @@ mod common;
 
 use checks::integrity::weakened_tests;
 use checks::ChangedFile;
-use common::{added, among_tests, changed, deleted, edited};
+use common::{added, among_tests, changed, deleted, edited, replaced};
 
 const CALC_TESTS: &str = "\
 import unittest
@@ -64,12 +64,6 @@ fn found(files: &[ChangedFile]) -> (Vec<Found>, Vec<String>) {
         (f.path.as_ref().unwrap().to_string_lossy().into_owned(), f.line, rule)
     };
     (found.iter().map(place).collect(), found.into_iter().map(|f| f.message).collect())
-}
-
-/// `text` with its one `old` replaced by `new`.
-fn replaced(text: &str, old: &str, new: &str) -> String {
-    assert_eq!(text.matches(old).count(), 1, "{old:?}");
-    text.replacen(old, new, 1)
 }
 
 /// tests/test_calc.py edited by replacing `old` with `new`.
@@ -135,6 +129,20 @@ fn a_test_deeper_than_a_recursive_walk_could_go_is_matched_and_compared() {
     assert_eq!(found(&[code_edit(), edited(path, &deep, &deep.replace("x = 1", "x = 2"))]).0, []);
     let (place, _) = found(&[code_edit(), edited(path, &deep, &deep.replace("== 3001", "== 3002"))]);
     assert_eq!(place, [at(path, 3, "expected-value-changed")]);
+}
+
+#[test]
+fn an_assertion_with_an_int_too_long_to_print_in_decimal_is_reported_as_any_other() {
+    let path = "tests/test_big.py";
+    let big = format!("def test_big():\n    assert 1 == 0x{}\n", "f".repeat(4000));
+    let (place, messages) = found(&[code_edit(), edited(path, &big, &replaced(&big, "assert 1 ==", "assert 2 =="))]);
+    assert_eq!(place, [at(path, 2, "expected-value-changed")]);
+    // Quoted as written and cut short, where gate.py says "(code at line 2, too long to print)"
+    // (docs/port-differences.md, "Quoted code is quoted as written").
+    let [message] = messages.as_slice() else { panic!("one message, not {messages:?}") };
+    assert!(message.starts_with("`test_big`: `assert 1 == 0xfff"), "{message}");
+    assert!(message.contains("fff…` became `assert 2 == 0xfff"), "{message}");
+    assert!(message.ends_with("fff…`, in a change that also edits the code under test."), "{message}");
 }
 
 #[test]

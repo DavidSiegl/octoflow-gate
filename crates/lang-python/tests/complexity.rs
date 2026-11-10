@@ -1,7 +1,7 @@
 //! The cognitive-complexity check on Python read by lang_python: the score of each construct, after G. Ann Campbell's
 //! paper in its mapping to Python, each expected score added up in the comments, one increment per line; then the
-//! check over a change. tests/test_gate.py's TestCognitiveComplexity and, for what the front end decides,
-//! TestTooComplexFunctions; how the check pairs a function with its base is crates/lang-rust's tests' to show.
+//! check over a change, with how it pairs a function with its base. tests/test_gate.py's TestCognitiveComplexity and
+//! TestTooComplexFunctions, but for what the gate decides over a real change (crates/gate/tests/parser_checks.rs).
 
 mod common;
 
@@ -11,7 +11,7 @@ use std::path::Path;
 
 use checks::complexity::{scores, too_complex, LIMIT};
 use checks::ChangedFile;
-use common::{added, among_tests, edited};
+use common::{added, among_tests, changed, deleted, edited, replaced};
 
 /// Each function of `source`, Python, that the check judges as one, by its qualified name, with its score.
 fn scores_of(source: &str) -> BTreeMap<String, u32> {
@@ -506,15 +506,23 @@ fn flat(name: &str, n: u32, indent: &str) -> String {
     format!("{indent}def {name}(x):\n{ifs}{indent}    return x\n")
 }
 
+/// A function of two lines whose syntax tree is deeper than a recursive walk could go: 3000 operands of `operator`.
+fn long_chain(name: &str, operator: &str) -> String {
+    format!("def {name}(a):\n    return {}\n", vec!["a"; 3000].join(&format!(" {operator} ")))
+}
+
+/// A function as deep as [`long_chain`]'s by its branches: an if with 1000 elifs, which scores 1001.
+fn long_elif() -> String {
+    let elifs: String = (1..=1000).map(|k| format!("    elif x == {k}:\n        pass\n")).collect();
+    format!("def long_elif(x):\n    if x == 0:\n        pass\n{elifs}")
+}
+
 #[test]
 fn code_deeper_than_a_recursive_walk_could_go_is_scored() {
-    let long_sum = format!("def long_sum(a):\n    return {}\n", vec!["a"; 3000].join(" + "));
-    assert_eq!(score(&long_sum), 0);
-    let elifs: String = (1..=1000).map(|k| format!("    elif x == {k}:\n        pass\n")).collect();
+    assert_eq!(score(&long_chain("long_sum", "+")), 0);
     // The if, and one for each elif.
-    assert_eq!(score(&format!("def long_elif(x):\n    if x == 0:\n        pass\n{elifs}")), 1001);
-    let long_and = format!("def long_and(a):\n    return {}\n", vec!["a"; 3000].join(" and "));
-    assert_eq!(score(&long_and), 1);
+    assert_eq!(score(&long_elif()), 1001);
+    assert_eq!(score(&long_chain("long_and", "and")), 1);
 }
 
 /// The body of the first function of `source`.
@@ -583,6 +591,50 @@ fn found(files: &[ChangedFile]) -> (Vec<Found>, Vec<String>) {
 
 fn over_limit(path: &str, line: u32) -> Found {
     (path.into(), Some(line), "cognitive-complexity over-limit".into())
+}
+
+const CALC: &str = "calc.py";
+
+/// calc.py at the base of the changes below: grow just under the limit, big over it and small well under it, as
+/// TestTooComplexFunctions' BASE.
+fn base() -> String {
+    format!("{}\n\n{}\n\n{}", flat("grow", 14, ""), flat("big", 20, ""), flat("small", 3, ""))
+}
+
+/// [`base`]'s big under the name `name`, its body as it is there.
+fn big_as(name: &str) -> String {
+    replaced(&flat("big", 20, ""), "def big(", &format!("def {name}("))
+}
+
+/// [`base`] once big is moved out of it.
+fn without_big() -> String {
+    replaced(&base(), &format!("\n\n{}", big_as("big")), "")
+}
+
+/// [`base`] with an edit inside big that leaves it at 20.
+fn big_edited() -> String {
+    replaced(&base(), "'big 3':\n        x += 3\n", "'big 3':\n        x += 30\n")
+}
+
+/// [`base`] with big renamed in place, its body unchanged.
+fn big_renamed() -> String {
+    replaced(&base(), "def big(", "def legacy_big(")
+}
+
+/// (path, message) of each of the check's findings on `files` and on fresh.py, which holds a new function over the
+/// limit, but the finding on fresh.py: so a test that expects no finding fails when the check finds nothing at all.
+fn found_beside_fresh(mut files: Vec<ChangedFile>) -> Vec<(String, String)> {
+    files.push(added("fresh.py", &flat("fresh", 16, "")));
+    let (places, messages) = found(&files);
+    let mut beside: Vec<(String, String)> = places.into_iter().map(|(path, ..)| path).zip(messages).collect();
+    let fresh = beside.iter().position(|(path, _)| path == "fresh.py").expect("fresh.py's function is found");
+    beside.remove(fresh);
+    beside
+}
+
+/// What [`found_beside_fresh`] gives for the function `name` of the file at `path` that scores `score` with no base.
+fn new_function(path: &str, name: &str, score: u32) -> (String, String) {
+    (path.into(), format!("`{name}`: cognitive complexity {score}, a new function; the limit is 15."))
 }
 
 #[test]
@@ -674,4 +726,224 @@ fn files_that_cannot_be_read_or_parsed_are_findings_and_the_others_are_still_jud
 fn a_base_that_does_not_parse_leaves_its_functions_judged_as_new() {
     let (_, messages) = found(&[edited("broken.py", "def big(:\n", &flat("big", 16, ""))]);
     assert_eq!(messages, ["`big`: cognitive complexity 16, a new function; the limit is 15."]);
+}
+
+#[test]
+fn a_base_whose_coding_cookie_names_no_text_encoding_leaves_its_functions_judged_as_new() {
+    // rot13 is a codec that decodes no bytes to text, which Python refuses; the Rust gate reads no cookie but
+    // UTF-8's, ASCII's and Latin-1's (docs/port-differences.md, "Reading a Python file").
+    let rotated = flat("rotated", 20, "");
+    let now = replaced(&rotated, "x += 3\n", "x += 30\n");
+    let files = vec![edited("rot.py", &format!("# coding: rot13\n{rotated}"), &now)];
+    assert_eq!(found_beside_fresh(files), [new_function("rot.py", "rotated", 20)]);
+}
+
+#[test]
+fn code_deeper_than_a_recursive_walk_could_go_is_judged_in_the_change_and_at_the_base() {
+    let deep = format!("{}\n\n{}", long_chain("long_sum", "+"), long_elif());
+    assert_eq!(found(&[added("deep.py", &deep)]).0, [over_limit("deep.py", 5)]);
+    // An else: 1001 becomes 1002.
+    let last = "    elif x == 1000:\n        pass\n";
+    let deeper = replaced(&deep, last, &format!("{last}    else:\n        pass\n"));
+    let (_, messages) = found(&[edited("deep.py", &deep, &deeper)]);
+    assert_eq!(messages, ["`long_elif`: cognitive complexity 1002, 1001 at the base; the limit is 15."]);
+}
+
+#[test]
+fn an_integer_too_long_to_print_in_decimal_is_judged_like_any_code() {
+    // 4000 hex digits are about 4800 decimal ones, past the 4300 that Python's int prints.
+    let source = format!("def h():\n    return 0x{}\n\n\n{}", "f".repeat(4000), flat("big_one", 16, ""));
+    assert_eq!(found(&[added("huge.py", &source)]).0, [over_limit("huge.py", 5)]);
+}
+
+#[test]
+fn a_score_that_rises_to_the_limit_is_not_found() {
+    // grow: 14 becomes 15.
+    let now = replaced(&base(), "    if x == 'grow 13':\n", "    if x == 'grow 13' and x:\n");
+    assert_eq!(found_beside_fresh(vec![edited(CALC, &base(), &now)]), []);
+}
+
+#[test]
+fn a_function_over_the_limit_whose_score_the_change_leaves_alone_is_not_found() {
+    assert_eq!(found_beside_fresh(vec![edited(CALC, &base(), &big_edited())]), []);
+}
+
+#[test]
+fn a_method_is_scored_with_its_class_at_the_base_too() {
+    // 15 ifs, and a call of itself through self: 16 at the base and after an edit that adds no point.
+    let method = flat("size", 15, "    ").replace("return x", "return self.size(x)");
+    let base = format!("class Box:\n{method}");
+    assert_eq!(found_beside_fresh(vec![edited("shapes.py", &base, &replaced(&base, "x += 3\n", "x += 30\n"))]), []);
+}
+
+#[test]
+fn an_unchanged_function_moved_and_renamed_is_compared_with_its_old_self() {
+    let files = vec![edited(CALC, &base(), &without_big()), added("other.py", &big_as("huge"))];
+    assert_eq!(found_beside_fresh(files), []);
+}
+
+#[test]
+fn an_unchanged_function_moved_out_of_a_deleted_file_is_compared_with_its_old_self() {
+    let files = vec![deleted(CALC, &base()), added("other.py", &format!("CONSTANT = 0\n\n\n{}", big_as("big")))];
+    assert_eq!(found_beside_fresh(files), []);
+}
+
+#[test]
+fn an_unchanged_function_made_a_method_in_its_file_is_compared_with_its_old_self() {
+    let now = replaced(&base(), &big_as("big"), &format!("class Box:\n{}", flat("big", 20, "    ")));
+    assert_eq!(found_beside_fresh(vec![edited(CALC, &base(), &now)]), []);
+}
+
+#[test]
+fn a_copy_of_a_function_over_the_limit_is_new_wherever_it_goes() {
+    let copy = big_as("copied");
+    let beside = format!("{}\n\n{copy}", base());
+    assert_eq!(found_beside_fresh(vec![edited(CALC, &base(), &beside)]), [new_function(CALC, "copied", 20)]);
+    // In another file: the original's file untouched, then edited elsewhere.
+    let new = [new_function("other.py", "copied", 20)];
+    assert_eq!(found_beside_fresh(vec![added("other.py", &copy)]), new);
+    let elsewhere = replaced(&base(), "'small 2':\n        x += 2\n", "'small 2':\n        x += 20\n");
+    assert_eq!(found_beside_fresh(vec![edited(CALC, &base(), &elsewhere), added("other.py", &copy)]), new);
+}
+
+#[test]
+fn a_function_moved_and_made_more_complex_is_judged_as_new() {
+    let worse = replaced(&big_as("big"), "        x += 19\n", "        x += 19\n        if x:\n            x -= 1\n");
+    let files = vec![edited(CALC, &base(), &without_big()), added("other.py", &worse)];
+    assert_eq!(found_beside_fresh(files), [new_function("other.py", "big", 22)]);
+}
+
+#[test]
+fn a_function_moved_unchanged_out_of_tests_is_judged_as_new() {
+    // The tests were never held to the limit, so they lend no base to a function that is.
+    let helper = flat("helper", 20, "");
+    let files = vec![edited("tests/helpers.py", &format!("X = 0\n\n\n{helper}"), "X = 0\n"), added("lib.py", &helper)];
+    assert_eq!(found_beside_fresh(files), [new_function("lib.py", "helper", 20)]);
+}
+
+#[test]
+fn a_function_moved_unchanged_where_nothing_is_judged_keeps_its_base_from_a_copy_of_any_name() {
+    for copy in ["copied", "big"] {
+        let files = vec![
+            edited(CALC, &base(), &without_big()),
+            added("tests/helpers.py", &big_as("big")),
+            added("lib.py", &big_as(copy)),
+        ];
+        assert_eq!(found_beside_fresh(files), [new_function("lib.py", copy, 20)], "{copy}");
+    }
+}
+
+/// tests/helpers.py with [`base`]'s big in it on both sides, a copy of calc.py's, edited above it: a file the check
+/// does not judge.
+fn helpers_with_big() -> ChangedFile {
+    let helpers = format!("X = 0\n\n\n{}", big_as("big"));
+    edited("tests/helpers.py", &helpers, &replaced(&helpers, "X = 0\n", "X = 1\n"))
+}
+
+#[test]
+fn a_function_in_a_file_the_check_does_not_judge_keeps_its_own_base_from_a_moved_twin() {
+    // calc.py's big, moved unchanged to lib.py.
+    let files = vec![edited(CALC, &base(), &without_big()), added("lib.py", &big_as("big")), helpers_with_big()];
+    assert_eq!(found_beside_fresh(files), []);
+}
+
+#[test]
+fn an_unchanged_copy_in_a_file_the_check_does_not_judge_takes_no_base_from_its_original() {
+    assert_eq!(found_beside_fresh(vec![edited(CALC, &base(), &big_edited()), helpers_with_big()]), []);
+    // Nor from its original renamed in place, when the change adds the copy.
+    let files = vec![edited(CALC, &base(), &big_renamed()), added("tests/helpers.py", &big_as("big"))];
+    assert_eq!(found_beside_fresh(files), []);
+}
+
+#[test]
+fn a_copy_of_its_name_takes_no_base_from_an_original_renamed_in_place() {
+    let files = vec![edited(CALC, &base(), &big_renamed()), added("lib.py", &big_as("big"))];
+    assert_eq!(found_beside_fresh(files), [new_function("lib.py", "big", 20)]);
+}
+
+#[test]
+fn a_function_moved_unchanged_keeps_its_base_from_a_new_function_under_its_old_name() {
+    let new_big = flat("big", 18, "").replace("'big ", "'new big ");
+    let calc = replaced(&base(), &big_as("big"), &new_big);
+    for to in ["lib.py", "tests/helpers.py", "bin/tool"] {
+        let first = if to == "bin/tool" { "#!/usr/bin/env python3\n" } else { "" };
+        let files = vec![edited(CALC, &base(), &calc), added(to, &format!("{first}{}", big_as("big")))];
+        assert_eq!(found_beside_fresh(files), [new_function(CALC, "big", 18)], "{to}");
+    }
+}
+
+#[test]
+fn a_function_renamed_unchanged_keeps_its_base_from_a_new_function_under_its_old_name() {
+    let new_big = flat("big", 16, "").replace("'big ", "'new big ");
+    let calc = format!("{}\n\n{new_big}", big_renamed());
+    assert_eq!(found_beside_fresh(vec![edited(CALC, &base(), &calc)]), [new_function(CALC, "big", 16)]);
+}
+
+#[test]
+fn a_function_moved_unchanged_out_of_a_file_that_keeps_its_name_keeps_its_base_from_a_copy() {
+    // Two functions named _, as @singledispatch registrations are: the one scoring 20 moves where nothing is judged,
+    // the other stays, and a copy of the first is added elsewhere.
+    let moved = flat("_", 20, "").replace("'_ ", "'moved ");
+    let stays = flat("_", 3, "").replace("'_ ", "'stays ");
+    let files = vec![
+        edited("disp.py", &format!("{moved}\n\n{stays}"), &stays),
+        added("tests/helpers.py", &moved),
+        added("lib.py", &moved),
+    ];
+    assert_eq!(found_beside_fresh(files), [new_function("lib.py", "_", 20)]);
+}
+
+#[test]
+fn a_function_moved_unchanged_out_of_a_file_that_keeps_its_twin_keeps_its_base() {
+    let twin = big_as("twin");
+    let with_twin = format!("{}\n\n{twin}", base());
+    assert_eq!(found_beside_fresh(vec![edited(CALC, &with_twin, &base()), added("lib.py", &twin)]), []);
+}
+
+#[test]
+fn a_copy_of_a_function_the_change_edits_takes_its_base_as_bodies_first_decides() {
+    // The cost TODO.md records ("A copy of a function whose original the change edits keeps the old score and
+    // passes"): the copy is taken for the original moved unchanged, and the edited original for a new function.
+    for copy in ["lib.py", "tests/helpers.py"] {
+        let files = vec![edited(CALC, &base(), &big_edited()), added(copy, &big_as("big"))];
+        assert_eq!(found_beside_fresh(files), [new_function(CALC, "big", 20)], "{copy}");
+    }
+}
+
+#[test]
+fn one_base_function_is_the_base_of_one_function_only() {
+    let moved = [edited(CALC, &base(), &without_big()), added("other.py", &big_as("big"))];
+    let copy = |path: &str| added(path, &big_as("copied"));
+    let copy_last = [&moved[..], &[copy("third.py")]].concat();
+    assert_eq!(found_beside_fresh(copy_last), [new_function("third.py", "copied", 20)]);
+    // The copy in a file read before the original's new one, so that only the name decides.
+    let copy_first = [&[copy("a_copy.py")], &moved[..]].concat();
+    assert_eq!(found_beside_fresh(copy_first), [new_function("a_copy.py", "copied", 20)]);
+}
+
+/// A function named _ that does nothing, as one @singledispatch registration or @overload stub can be.
+const TRIVIAL: &str = "def _(a):\n    return a\n\n\n";
+
+#[test]
+fn a_namesake_removed_or_added_above_a_function_leaves_it_compared_with_its_own_base() {
+    let big = flat("_", 20, "");
+    let still_20 = replaced(&big, "x += 3\n", "x += 30\n");
+    let namesake_removed = edited("disp.py", &format!("{TRIVIAL}{big}"), &still_20);
+    assert_eq!(found_beside_fresh(vec![namesake_removed]), []);
+    let namesake_added = edited("disp.py", &big, &format!("{TRIVIAL}{still_20}"));
+    assert_eq!(found_beside_fresh(vec![namesake_added]), []);
+}
+
+#[test]
+fn a_rise_of_a_function_whose_name_others_share_is_found() {
+    let big = flat("_", 20, "");
+    let worse = replaced(&big, "        x += 19\n", "        x += 19\n        if x:\n            x -= 1\n");
+    let (_, messages) = found(&[edited("disp.py", &big, &worse)]);
+    assert_eq!(messages, ["`_`: cognitive complexity 22, 20 at the base; the limit is 15."]);
+}
+
+#[test]
+fn a_file_renamed_and_edited_is_compared_with_its_base_under_its_old_name() {
+    let renamed = changed(Some((CALC, &base())), Some(("lib.py", &big_edited())));
+    assert_eq!(found_beside_fresh(vec![renamed]), []);
 }

@@ -192,14 +192,7 @@ fn parse_args(argv: impl IntoIterator<Item = OsString>) -> Result<Asked, String>
             "--mutation-budget" => {
                 given.mutation_budget = Some(seconds(&value()?).map_err(|e| format!("argument {name}: {e}"))?);
             }
-            "--python" => {
-                let python = value()?;
-                // As gate.toml's `python` (settings::Settings::python).
-                if text::py_strip(&text::path(&python)).is_empty() {
-                    return Err(format!("argument {name}: must be the path or the name of a Python"));
-                }
-                given.python = Some(python.into());
-            }
+            "--python" => given.python = Some(python(value()?).map_err(|e| format!("argument {name}: {e}"))?.into()),
             "--test-contexts" => given.test_contexts = Some(value()?.into()),
             "--rust-syntax" => {
                 value()?;
@@ -243,6 +236,15 @@ fn seconds(text: &OsStr) -> Result<u64, String> {
     let shown = text::path(text);
     let n: i64 = shown.trim().parse().map_err(|_| format!("expected a whole number of seconds, not '{shown}'"))?;
     u64::try_from(n).ok().filter(|&n| n >= 1).ok_or_else(|| format!("must be at least 1, not {n}"))
+}
+
+/// `named`, the judged project's Python given on the command line; errs with why it is none when it is blank, as
+/// gate.toml's `python` may not be either (settings::Settings::python).
+fn python(named: OsString) -> Result<OsString, String> {
+    match text::py_strip(&text::path(&named)).is_empty() {
+        true => Err("must be the path or the name of a Python".into()),
+        false => Ok(named),
+    }
 }
 
 /// Whether `gate --config path` names a file of the gate's settings rather than a pyproject.toml of rules.

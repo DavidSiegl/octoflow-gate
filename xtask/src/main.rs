@@ -7,8 +7,8 @@
 //!
 //! `compare` judges the change the git working tree at DIR (default the current directory) makes since BASE (default
 //! `main`) with gate.py and with the Rust `gate`, each given `--base BASE --out FILE` and GATE_ARGS, and compares
-//! their quality.json and their quality file in the parts the Rust gate has ported so far ([`ported`],
-//! [`ported_markdown`]). It exits 0 when they agree, 1 when they differ, printing each part that does, and 2 when
+//! their quality.json, part by part, and their quality file, line by line. It exits 0 when they agree, 1 when they
+//! differ, printing each part that does and the quality files from their first line that does, and 2 when
 //! either gate could not judge the change or the arguments are bad. Both run in this workspace's Python environment,
 //! with its dev tools on PATH: gate.py as `uv run --project <workspace> python <workspace>/gate.py`, reading Rust with
 //! the gate-rust helper built from the workspace's gate-rust/, and `gate` as `uv run --project <workspace> cargo run`,
@@ -17,14 +17,14 @@
 //! two commits is compared with the later one checked out.
 //!
 //! `fixture` makes DIR, which must not exist, a git repository whose working tree holds a change since its branch
-//! `main` that gives every part ported so far something to report ([`fixture`]), for `cargo xtask compare --repo
+//! `main` that gives every linter and check something to report ([`fixture`]), for `cargo xtask compare --repo
 //! DIR`. It exits 0 once DIR is made, and 2 when it cannot make it.
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-use serde_json::{json, Value};
+use serde_json::Value;
 
 mod fixture;
 
@@ -75,15 +75,17 @@ fn compare(args: Vec<OsString>) -> Result<bool, String> {
     }
     let (python, rust) = judged?;
     let mut agree = true;
-    let (json_python, json_rust) = (ported(&python.json, true), ported(&rust.json, false));
-    for (part, from_python) in json_python.as_object().into_iter().flatten() {
-        let from_rust = &json_rust[part];
+    let parts = |report: &Value| report.as_object().cloned().unwrap_or_default();
+    let (json_python, json_rust) = (parts(&python.json), parts(&rust.json));
+    for part in json_python.keys().chain(json_rust.keys().filter(|part| !json_python.contains_key(*part))) {
+        let (from_python, from_rust) = (&python.json[part], &rust.json[part]);
         if from_python != from_rust {
             agree = false;
             println!("{part} differ:\n  gate.py: {from_python}\n  gate:    {from_rust}");
         }
     }
-    let (md_python, md_rust) = (ported_markdown(&python, true), ported_markdown(&rust, false));
+    let lines = |reports: &'_ Reports| -> Vec<String> { reports.markdown.split('\n').map(String::from).collect() };
+    let (md_python, md_rust) = (lines(&python), lines(&rust));
     if let Some(k) = (0..md_python.len().max(md_rust.len())).find(|&k| md_python.get(k) != md_rust.get(k)) {
         agree = false;
         // Five lines from the first that differs, of each.
@@ -91,10 +93,10 @@ fn compare(args: Vec<OsString>) -> Result<bool, String> {
             md.get(k..).unwrap_or_default().iter().take(5).map(|l| format!("\n    {l}")).collect()
         };
         let (from_python, from_rust) = (from(&md_python), from(&md_rust));
-        println!("the quality files differ from ported line {}:\n  gate.py:{from_python}\n  gate:{from_rust}", k + 1);
+        println!("the quality files differ from line {}:\n  gate.py:{from_python}\n  gate:{from_rust}", k + 1);
     }
     if agree {
-        println!("gate.py and gate agree on the parts ported so far.");
+        println!("gate.py and gate agree.");
     }
     Ok(agree)
 }
@@ -172,117 +174,4 @@ fn gate_rust(workspace: &Path, cargo: &OsStr) -> Result<PathBuf, String> {
         .filter(|m| m["reason"] == "compiler-artifact")
         .filter_map(|m| m["executable"].as_str().map(PathBuf::from));
     executables.next().ok_or_else(|| "cargo built no gate-rust helper executable".into())
-}
-
-/// The linters the Rust gate runs; gate.py's findings of any other are not compared.
-const PORTED_LINTERS: [&str; 4] = ["pymarkdown", "shellcheck", "actionlint", "clippy"];
-
-/// The parts of `report`, a quality.json, that the Rust gate has ported, as an object of the parts by name; those of
-/// gate.py's when `from_python`, which leaves out what comes of the parts not ported. The verdict and the count of
-/// findings are left out of both: they count what was not ported too, and the findings themselves are compared.
-fn ported(report: &Value, from_python: bool) -> Value {
-    let kept = |part: &str, keep: Keep| -> Vec<Value> {
-        let entries = report[part].as_array().into_iter().flatten();
-        entries.filter(|e| keep(e, from_python)).cloned().collect()
-    };
-    json!({
-        "base": report["base"],
-        "head": report["head"],
-        "failed_conditions": kept("failed_conditions", ported_condition),
-        "findings": kept("findings", ported_finding),
-        "failing_tests": report["failing_tests"],
-        "coverage": report["coverage"],
-        "suppressions": report["suppressions"],
-        "build_config": report["build_config"],
-    })
-}
-
-/// Whether an entry of one of quality.json's lists is compared, given whether it is gate.py's.
-type Keep = fn(&Value, bool) -> bool;
-
-/// The lines of `reports`' quality file that come of the parts the Rust gate has ported, gate.py's when
-/// `from_python`. The verdict's line is left out. Of the sections that list the failed conditions and the findings,
-/// only the items are kept, without their numbers, and only those whose entry in quality.json [`ported`] keeps; a
-/// section none of whose items are kept is left out whole. Their other lines are left out, for they count what was
-/// not ported too; whether a list is empty, and how much of it is not listed, quality.json's comparison already
-/// holds. The two files agree only while gate.py's quality file lists every finding it has, fewer than
-/// `QUALITY_ISSUE_LIMIT`: beyond, the findings it leaves unlisted can differ from the Rust gate's.
-fn ported_markdown(reports: &Reports, from_python: bool) -> Vec<String> {
-    let entries = |part: &str| reports.json[part].as_array().cloned().unwrap_or_default();
-    let (issues, to_weigh): (Vec<Value>, Vec<Value>) =
-        entries("findings").into_iter().partition(|f| f["fails"].as_bool() == Some(true));
-    let mut out = vec![];
-    for (k, section) in reports.markdown.split("\n## ").enumerate() {
-        let mut lines = section.lines();
-        let title = lines.next().unwrap_or_default();
-        if k == 0 {
-            out.extend(lines.map(String::from));
-            continue;
-        }
-        // Each item of a list stands for the next entry of the quality.json list it comes from, in order.
-        let (listed, keep): (Vec<Value>, Keep) = match title {
-            "Failed conditions" => (entries("failed_conditions"), ported_condition),
-            "Issues on changed lines" => (issues.clone(), ported_finding),
-            "Findings to weigh" => (to_weigh.clone(), ported_finding),
-            _ => {
-                out.push(format!("## {title}"));
-                out.extend(lines.map(String::from));
-                continue;
-            }
-        };
-        let mut listed = listed.iter();
-        let mut items = vec![];
-        for item in lines.filter_map(list_item) {
-            if listed.next().is_some_and(|entry| keep(entry, from_python)) {
-                items.push(item.to_string());
-            }
-        }
-        if !items.is_empty() {
-            out.push(format!("## {title}"));
-            out.extend(items);
-        }
-    }
-    out
-}
-
-/// `line` without its bullet, `- `, or its number, as `12. `; None when it is no item of a list.
-fn list_item(line: &str) -> Option<&str> {
-    line.strip_prefix("- ").or_else(|| {
-        let (number, item) = line.split_once(". ")?;
-        number.parse::<usize>().is_ok().then_some(item)
-    })
-}
-
-/// Whether quality.json's failed condition `c` is compared, given whether it is gate.py's: not the count of the
-/// linters' findings on added lines, nor of a check's findings, which count what was not ported too, and of
-/// gate.py's, only those that [`ported_condition_of_python`] keeps.
-fn ported_condition(c: &Value, from_python: bool) -> bool {
-    let c = c.as_str().unwrap_or_default();
-    let counts_findings = c.ends_with(" findings on lines the change added; each is listed below.")
-        || (c.contains(" findings of the `") && c.ends_with("` check; each is listed below."));
-    !counts_findings && (!from_python || ported_condition_of_python(c))
-}
-
-/// Whether gate.py's failed condition `c` comes of a part the Rust gate has ported: a ported linter that could not
-/// run, a test command or failing tests, coverage, files under mutmut's state, or a stray line end. The wording is
-/// gate.py's judge_change's and run_test_commands's.
-fn ported_condition_of_python(c: &str) -> bool {
-    PORTED_LINTERS.iter().any(|linter| c.starts_with(&format!("`{linter}` ")))
-        || c.starts_with("The test command `")
-        || c.ends_with(" tests fail; each is listed below.")
-        || c.starts_with("Coverage of new code is ")
-        || (c.starts_with("The change adds or edits ") && c.contains(" under `mutants/`, "))
-        || c.contains(", which a linter that reads the file ends a line at and git does not.")
-}
-
-/// The checks the Rust gate runs, each over every language gate.py runs it over (gate::parser_checks,
-/// gate::flaky_tests, gate::passes_at_base, gate::mutants).
-const PORTED_CHECKS: [&str; 6] =
-    ["test-integrity", "cognitive-complexity", "vague-names", "flaky-tests", "passes-at-base", "surviving-mutants"];
-
-/// Whether quality.json's finding `f` is compared, given whether it is gate.py's: of gate.py's, only a ported
-/// linter's and one of the [`PORTED_CHECKS`].
-fn ported_finding(f: &Value, from_python: bool) -> bool {
-    let check = f["check"].as_str().unwrap_or_default();
-    !from_python || PORTED_LINTERS.contains(&check) || PORTED_CHECKS.contains(&check)
 }

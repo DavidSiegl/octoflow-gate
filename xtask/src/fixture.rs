@@ -1,7 +1,6 @@
 //! The fixture `cargo xtask compare` judges: a git repository whose working tree changes its branch `main` so that
-//! each part the Rust gate has ported has something to report. Its files are written here rather than committed to
-//! this repository, whose own gate would judge their findings, stray line end and `mutants/` file as this
-//! repository's.
+//! each linter and check has something to report. Its files are written here rather than committed to this
+//! repository, whose own gate would judge their findings, stray line end and `mutants/` file as this repository's.
 
 use std::path::Path;
 use std::process::Command;
@@ -51,9 +50,8 @@ fn change() -> Vec<(&'static str, String)> {
         ),
         // actionlint's finding of an untrusted value expanded in a script, on line 8.
         (".github/workflows/ci.yml", format!("{WORKFLOW}      - run: echo \"${{{{ {UNTRUSTED} }}}}\"\n")),
-        // What a linter the Rust gate does not run reports, which the comparison leaves out: ruff's F401 on line 1,
-        // ahead of every ported finding in gate.py's list.
-        ("a.py", "import os\n".into()),
+        // ruff's F401 on line 1, and mypy's error of an assignment on line 3.
+        ("a.py", "import os\n\nx: int = \"a\"\n".into()),
         // What the parser checks report of Python, in a change to its code: a function over the cognitive-complexity
         // limit on lines 5-39 of calc.py, with a vague name on its line 6, which a comment for ruff follows; and in
         // its tests, a test removed, a skip added on line 12 of test_calc.py, and a constant an assertion reads
@@ -96,10 +94,11 @@ fn change() -> Vec<(&'static str, String)> {
     ]
 }
 
-/// The base's pyproject.toml: mutmut mutates calc.py, by test_scale.py alone, for test_calc.py's tests do not all
-/// pass.
-const PYPROJECT: &str = "[project]\nname = \"fixture\"\nversion = \"0.1.0\"\n\n[tool.mutmut]\n\
-                         source_paths = [\"calc.py\"]\npytest_add_cli_args_test_selection = [\"test_scale.py\"]\n";
+/// The base's pyproject.toml: mypy checks a.py, and mutmut mutates calc.py, by test_scale.py alone, for
+/// test_calc.py's tests do not all pass.
+const PYPROJECT: &str = "[project]\nname = \"fixture\"\nversion = \"0.1.0\"\n\n[tool.mypy]\nfiles = [\"a.py\"]\n\n\
+                         [tool.mutmut]\nsource_paths = [\"calc.py\"]\n\
+                         pytest_add_cli_args_test_selection = [\"test_scale.py\"]\n";
 
 const TINY_LIB: &str = "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n";
 

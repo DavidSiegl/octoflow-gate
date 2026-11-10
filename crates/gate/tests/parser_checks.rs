@@ -463,6 +463,15 @@ fn a_python_script_the_change_renames_to_a_py_file_lends_its_functions_bases() {
 }
 
 #[test]
+fn a_python_file_renamed_from_any_name_is_compared_with_its_base() {
+    // Python by its new name alone: the base has neither `.py` nor a `#!` line.
+    let repo = python_project(&[("bin/tool", &flat("helper", 20))]);
+    repo.git(&["mv", "bin/tool", "bin/tool.py"]);
+    edit(&repo, "bin/tool.py", "x += 3\n", "x += 30\n");
+    assert_eq!(found_beside_fresh(&repo), []);
+}
+
+#[test]
 fn a_python_function_out_of_tests_is_judged_as_new_as_tests_were_never_held_to_the_limit() {
     let (helper, other) = (flat("helper", 20), flat("other_helper", 20).replace("x +=", "x -="));
     let repo = python_project(&[("tests/helpers.py", &format!("{helper}\n\n{other}"))]);

@@ -75,8 +75,11 @@ runs the checks of `crates/checks` over it.
   a test file as UTF-8 alone and calls any other `unreadable`.
 - **A base file is read only where git holds a regular file.** gate.py reads a base symlink's target, the text git
   stores for it, as Python. The working tree's rule is gate.py's: only a regular file is read.
-- **A working-tree file that cannot be read stops the gate** (exit 2), as for Rust above; gate.py lists it as a
-  finding of each check.
+- **A working-tree file that cannot be read stops the gate** (exit 2), as for Rust above; gate.py lists it as a finding
+  of each check. One that is gone by the time the gate reads it has no working-tree side, where gate.py's
+  cognitive-complexity says it "could not be read".
+- **A base file git cannot show stops the gate** (exit 2) when it is one the gate reads as Python by its name, or the
+  base of a Python file. gate.py's cognitive-complexity then judges the file's functions as new.
 
 ### cognitive-complexity over Python
 

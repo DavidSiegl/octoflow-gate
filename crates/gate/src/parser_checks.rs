@@ -169,6 +169,9 @@ struct Language {
     /// Whether `settings` place among the language's tests the side at `path` of one of the language's files, whose
     /// other side, where the change gives it one, is at `other`.
     among_tests: fn(settings: &Settings, path: &OsStr, other: Option<&OsStr>) -> bool,
+    /// Whether a file that holds the language's source in the working tree has its base read as the language's too,
+    /// whatever the base's name and first line say: gate.py compares a Python file with its base under any name.
+    base_of_any_name: bool,
     /// The front end's reading of `source`, the file at `path`.
     read: fn(source: &[u8], path: &OsStr, among_tests: bool) -> Result<SourceFile, Unreadable>,
 }
@@ -178,12 +181,14 @@ const PYTHON: Language = Language {
     // A file is a test file by either of its paths, so that a rename into or out of the tests loses none of them
     // unseen: gate.py's `weakened_tests`.
     among_tests: |settings, path, other| python_test(settings, path) || other.is_some_and(|o| python_test(settings, o)),
+    base_of_any_name: true,
     read: |source, path, among_tests| lang_python::read(source, Path::new(path), among_tests),
 };
 
 const RUST: Language = Language {
     holds: |path, _| path.ends_with(b".rs"),
     among_tests: |settings, path, _| settings.rust_tests.matches(path),
+    base_of_any_name: false,
     read: |source, _, among_tests| lang_rust::read(source, among_tests),
 };
 
@@ -217,12 +222,15 @@ impl<'a> Stored<'a> {
         };
         let mut out = vec![];
         for file in &change.files {
-            let before = match file.before.as_ref().filter(|path| self.regular_at_base.contains(*path)) {
-                Some(path) => self.at_base(path, language)?.map(|blob| side(path, &file.after, &blob)),
-                None => None,
-            };
             let after = match file.after.as_ref().filter(|path| regular_file(&change.root.join(path))) {
                 Some(path) => self.in_working_tree(path, language)?.map(|bytes| side(path, &file.before, &bytes)),
+                None => None,
+            };
+            let whatever_it_holds = language.base_of_any_name && after.is_some();
+            let before = match file.before.as_ref().filter(|path| self.regular_at_base.contains(*path)) {
+                Some(path) => {
+                    self.at_base(path, language, whatever_it_holds)?.map(|blob| side(path, &file.after, &blob))
+                }
                 None => None,
             };
             if before.is_none() && after.is_none() {
@@ -235,9 +243,10 @@ impl<'a> Stored<'a> {
         Ok(out)
     }
 
-    /// The bytes of the base's regular file at `path`, when it holds `language`'s source. A file git cannot show is
-    /// not the language's when its name does not decide, and an error when it does.
-    fn at_base(&self, path: &OsStr, language: &Language) -> Result<Option<Vec<u8>>, Unjudged> {
+    /// The bytes of the base's regular file at `path`, when it holds `language`'s source or `whatever_it_holds`. A
+    /// file git cannot show is not the language's when its name would have to decide and does not, and an error
+    /// otherwise.
+    fn at_base(&self, path: &OsStr, language: &Language, whatever_it_holds: bool) -> Result<Option<Vec<u8>>, Unjudged> {
         let blob = OnceCell::new();
         let show = || {
             blob.get_or_init(|| {
@@ -247,7 +256,7 @@ impl<'a> Stored<'a> {
             })
         };
         let head = || show().as_ref().map(|blob| blob[..blob.len().min(FIRST_LINE_BYTES)].to_vec()).unwrap_or_default();
-        if !(language.holds)(path.as_bytes(), &head) {
+        if !whatever_it_holds && !(language.holds)(path.as_bytes(), &head) {
             return Ok(None);
         }
         show();
@@ -259,7 +268,8 @@ impl<'a> Stored<'a> {
         let full = self.change.root.join(path);
         let head = || {
             let mut head = vec![];
-            let read = std::fs::File::open(&full).and_then(|file| file.take(FIRST_LINE_BYTES as u64).read_to_end(&mut head));
+            let first = |file: std::fs::File| file.take(FIRST_LINE_BYTES as u64).read_to_end(&mut head);
+            let read = std::fs::File::open(&full).and_then(first);
             if read.is_ok() { head } else { vec![] }
         };
         if !(language.holds)(path.as_bytes(), &head) {

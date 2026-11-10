@@ -527,7 +527,11 @@ fn body(source: &str) -> String {
 fn a_body_is_the_same_whatever_its_name_layout_comments_and_quotes() {
     let written = body("def f(a):\n    if a:\n        return 'x'\n    return [a,\n            1]\n");
     assert_eq!(written, body("def g(a):\n    # why\n    if a:  # when\n        return \"x\"\n\n    return [a, 1]\n"));
-    assert_eq!(written, body("class C:\n    @staticmethod\n    def f(a):\n        if a:\n            return 'x'\n        return [a, 1]\n"));
+    assert_eq!(
+        written,
+        body("class C:\n    @staticmethod\n    def f(a):\n        if a:\n            return 'x'\n\
+              \x20       return [a, 1]\n")
+    );
 }
 
 #[test]
@@ -538,7 +542,10 @@ fn a_body_differs_with_its_structure_and_its_literals() {
         body("def f(a):\n    if a:\n        a = 1\n        return a\n")
     );
     assert_ne!(body("def f(a, b, c):\n    return {**a, b: c}\n"), body("def f(a, b, c):\n    return {b: a, **c}\n"));
-    assert_ne!(body("def f():\n    def g(*, a=1, b):\n        pass\n"), body("def f():\n    def g(*, a, b=1):\n        pass\n"));
+    assert_ne!(
+        body("def f():\n    def g(*, a=1, b):\n        pass\n"),
+        body("def f():\n    def g(*, a, b=1):\n        pass\n")
+    );
     assert_ne!(body("def f():\n    return 'x'\n"), body("def f():\n    return b'x'\n"));
     assert_ne!(body("def f():\n    return 'x'\n"), body("def f():\n    return x\n"));
     let huge = format!("def f():\n    return 0x{}\n", "f".repeat(4000));

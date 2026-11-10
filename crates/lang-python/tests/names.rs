@@ -62,7 +62,8 @@ def load(path):
 
 #[test]
 fn an_attribute_of_cls_binds_a_name_and_one_of_anything_else_does_not() {
-    let added = "\n\nclass C:\n    @classmethod\n    def make(cls, other):\n        cls.manager = 1\n        other.info = 2\n        other.data[0] = 3\n";
+    let added = "\n\nclass C:\n    @classmethod\n    def make(cls, other):\n\
+        \x20       cls.manager = 1\n        other.info = 2\n        other.data[0] = 3\n";
     assert_eq!(names(added), pairs(&[(6, "manager")]));
 }
 
@@ -149,13 +150,20 @@ fn a_name_on_a_line_the_change_left_alone_is_not_found() {
 
 #[test]
 fn a_class_or_function_named_by_a_vague_word_is_found_at_its_keyword() {
-    let found = found(&[added("tests/test_calc.py", "class Manager:\n    pass\n\n\n@decorated\nasync def handle():\n    pass\n")]);
+    let found = found(&[added(
+        "tests/test_calc.py",
+        "class Manager:\n    pass\n\n\n@decorated\nasync def handle():\n    pass\n",
+    )]);
     assert_eq!(found.iter().map(|f| f.line).collect::<Vec<_>>(), [Some(1), Some(6)]);
 }
 
 #[test]
 fn every_file_s_findings_are_listed_by_path_then_line_an_unparsable_one_as_not_read() {
-    let files = [added("c.py", "status = 1\n"), added("b_broken.py", "def broken(:\n"), added("a.py", "\n\nraw_data = 1\n")];
+    let files = [
+        added("c.py", "status = 1\n"),
+        added("b_broken.py", "def broken(:\n"),
+        added("a.py", "\n\nraw_data = 1\n"),
+    ];
     let found = found(&files);
     let place: Vec<_> = found.iter().map(|f| (f.path.clone().unwrap(), f.line, f.rule.as_str())).collect();
     assert_eq!(

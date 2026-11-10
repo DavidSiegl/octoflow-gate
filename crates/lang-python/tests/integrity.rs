@@ -89,14 +89,16 @@ fn an_unchanged_file_has_no_findings() {
 
 #[test]
 fn a_removed_test_is_found_at_its_line_at_the_base() {
-    let (place, messages) = found(&[calc_tests_with("    def test_large(self):\n        assert add(10, 20) == 30\n\n", "")]);
+    let (place, messages) =
+        found(&[calc_tests_with("    def test_large(self):\n        assert add(10, 20) == 30\n\n", "")]);
     assert_eq!(place, [at(CALC_PATH, 11, "removed-test")]);
     assert_eq!(messages, ["`TestAdd.test_large` is gone; this was line 11 at the base."]);
 }
 
 #[test]
 fn a_removed_class_is_one_finding_with_its_tests() {
-    let class = &CALC_TESTS[CALC_TESTS.find("class TestNegative").unwrap()..CALC_TESTS.find("def test_function").unwrap()];
+    let class =
+        &CALC_TESTS[CALC_TESTS.find("class TestNegative").unwrap()..CALC_TESTS.find("def test_function").unwrap()];
     let (place, messages) = found(&[calc_tests_with(class, "")]);
     assert_eq!(place, [at(CALC_PATH, 15, "removed-test")]);
     assert_eq!(messages, ["`TestNegative` and its 2 tests are gone; this was line 15 at the base."]);
@@ -113,7 +115,10 @@ fn a_deleted_test_file_is_one_finding() {
 fn a_test_renamed_or_moved_with_the_same_body_is_not_removed() {
     assert_eq!(found(&[calc_tests_with("def test_large(self):", "def test_big(self):")]).0, []);
     // Renamed within a renamed file.
-    let moved = changed(Some((OTHER_PATH, OTHER_TESTS)), Some(("tests/test_moved.py", &OTHER_TESTS.replace("test_b", "test_bee"))));
+    let moved = changed(
+        Some((OTHER_PATH, OTHER_TESTS)),
+        Some(("tests/test_moved.py", &OTHER_TESTS.replace("test_b", "test_bee"))),
+    );
     assert_eq!(found(&[moved]).0, []);
     // Into another file, re-quoted and re-wrapped on the way.
     let rewritten = "def test_a():\n    # as before\n    assert True\n\n\ndef test_b():\n    assert (\n        1)\n";
@@ -134,9 +139,18 @@ fn a_test_deeper_than_a_recursive_walk_could_go_is_matched_and_compared() {
 
 #[test]
 fn added_skips_are_found_at_their_lines() {
-    let calc = replaced(CALC_TESTS, "    def test_small(self):\n", "    @unittest.skip('later')\n    def test_small(self):\n");
-    let calc = replaced(&calc, "    def test_one(self):\n        assert", "    def test_one(self):\n        self.skipTest('flaky')\n        assert");
-    let other = replaced(OTHER_TESTS, "def test_b():\n", "import pytest\n\n\n@pytest.mark.xfail\ndef test_b():\n    pytest.skip('no')\n");
+    let calc =
+        replaced(CALC_TESTS, "    def test_small(self):\n", "    @unittest.skip('later')\n    def test_small(self):\n");
+    let calc = replaced(
+        &calc,
+        "    def test_one(self):\n        assert",
+        "    def test_one(self):\n        self.skipTest('flaky')\n        assert",
+    );
+    let other = replaced(
+        OTHER_TESTS,
+        "def test_b():\n",
+        "import pytest\n\n\n@pytest.mark.xfail\ndef test_b():\n    pytest.skip('no')\n",
+    );
     let (place, messages) = found(&[edited(CALC_PATH, CALC_TESTS, &calc), edited(OTHER_PATH, OTHER_TESTS, &other)]);
     assert_eq!(
         place,
@@ -148,7 +162,9 @@ fn added_skips_are_found_at_their_lines() {
 
 #[test]
 fn a_skip_is_a_name_python_reads_not_one_it_binds_or_passes_by_keyword() {
-    let other = format!("{OTHER_TESTS}\n\nfrom unittest import skip as skipIf\n\n\ndef test_c(xfail=1):\n    assert run(skip=xfail)\n");
+    let other =
+        format!("{OTHER_TESTS}\n\nfrom unittest import skip as skipIf\n\n\ndef test_c(xfail=1):\n\
+                 \x20   assert run(skip=xfail)\n");
     let (place, messages) = found(&[edited(OTHER_PATH, OTHER_TESTS, &other)]);
     assert_eq!(place, [at(OTHER_PATH, 13, "skip")]);
     assert_eq!(messages, ["`xfail` added: it skips a test or expects it to fail."]);
@@ -163,7 +179,11 @@ fn skips_already_at_the_base_are_not_found() {
 #[test]
 fn fewer_assertions_are_found_at_the_test() {
     let calc = replaced(CALC_TESTS, "        self.assertEqual(add(0, 0), 0)\n", "");
-    let calc = replaced(&calc, "        with self.assertRaises(TypeError):\n            add(None, 1)\n", "        add(None, 1)\n");
+    let calc = replaced(
+        &calc,
+        "        with self.assertRaises(TypeError):\n            add(None, 1)\n",
+        "        add(None, 1)\n",
+    );
     let (place, messages) = found(&[edited(CALC_PATH, CALC_TESTS, &calc)]);
     assert_eq!(place, [at(CALC_PATH, 7, "fewer-assertions"), at(CALC_PATH, 18, "fewer-assertions")]);
     assert_eq!(messages[0], "`TestAdd.test_small` has 1 assertions, 2 at the base.");
@@ -171,18 +191,30 @@ fn fewer_assertions_are_found_at_the_test() {
 
 #[test]
 fn more_assertions_and_new_tests_are_not_found() {
-    let calc = calc_tests_with("        assert add(10, 20) == 30\n", "        assert add(10, 20) == 30\n        assert add(20, 10) == 30\n");
-    let other = edited(OTHER_PATH, OTHER_TESTS, &replaced(OTHER_TESTS, "def test_a():", "def test_new():\n    assert 3\n\n\ndef test_a():"));
+    let calc = calc_tests_with(
+        "        assert add(10, 20) == 30\n",
+        "        assert add(10, 20) == 30\n        assert add(20, 10) == 30\n",
+    );
+    let other = edited(
+        OTHER_PATH,
+        OTHER_TESTS,
+        &replaced(OTHER_TESTS, "def test_a():", "def test_new():\n    assert 3\n\n\ndef test_a():"),
+    );
     assert_eq!(found(&[calc, other]).0, []);
 }
 
 #[test]
 fn swallowed_errors_are_found() {
-    let calc = replaced(CALC_TESTS, "        assert add(-1, -1) == -2\n", "        try:\n            assert add(-1, -1) == -2\n        except:\n            pass\n");
+    let calc = replaced(
+        CALC_TESTS,
+        "        assert add(-1, -1) == -2\n",
+        "        try:\n            assert add(-1, -1) == -2\n        except:\n            pass\n",
+    );
     let calc = replaced(
         &calc,
         "    assert add(2, 2) == 4\n",
-        "    try:\n        assert add(2, 2) == 4\n    except (Exception) as e:  # all of them\n        'ignored'\n        ...\n\
+        "    try:\n        assert add(2, 2) == 4\n    except (Exception) as e:  # all of them\n\
+         \x20       'ignored'\n        ...\n\
          \x20   try:\n        add(1, 1)\n    except ValueError:\n        pass\n\
          \x20   try:\n        add(1, 1)\n    except Exception:\n        raise\n",
     );
@@ -270,7 +302,10 @@ fn an_edited_constant_is_not_found_without_a_code_change_or_when_only_its_layout
     assert_eq!(found(&[edit]).0, []);
     assert_eq!(found_after_golden_edit(GOLDEN_TESTS, "GOLDEN = \"a\"", "GOLDEN = (  # the same\n    'a')").0.len(), 1);
     assert_eq!(found_after_golden_edit(GOLDEN_TESTS, "GOLDEN = \"a\"", "GOLDEN = 'a'  # the same").0, []);
-    assert_eq!(found_after_golden_edit(GOLDEN_TESTS, "from calc import add\n", "from calc import add  # the code\n").0, []);
+    assert_eq!(
+        found_after_golden_edit(GOLDEN_TESTS, "from calc import add\n", "from calc import add  # the code\n").0,
+        []
+    );
 }
 
 #[test]
@@ -285,11 +320,13 @@ fn a_constant_computed_by_a_call_is_none_and_one_that_becomes_so_or_is_bound_aga
     let computed = GOLDEN_TESTS.replace("GOLDEN = \"a\"", "GOLDEN = str(\"a\")");
     assert_eq!(found_after_golden_edit(&computed, "str(\"a\")", "str(\"b\")").0, []);
     assert_eq!(found_after_golden_edit(GOLDEN_TESTS, "GOLDEN = \"a\"", "GOLDEN = str(\"b\")").0, changed_at_10());
-    let (place, messages) = found_after_golden_edit(GOLDEN_TESTS, "GOLDEN = \"a\"\n", "GOLDEN = \"a\"\nGOLDEN = \"b\"\n");
+    let (place, messages) =
+        found_after_golden_edit(GOLDEN_TESTS, "GOLDEN = \"a\"\n", "GOLDEN = \"a\"\nGOLDEN = \"b\"\n");
     assert_eq!(place, [at(GOLDEN_PATH, 11, "expected-value-changed")]);
     assert!(
         messages[0].starts_with(
-            "`GOLDEN` (line 5 at the base), which `TestGolden.test_add` names in its assertions, is no longer a constant"
+            "`GOLDEN` (line 5 at the base), which `TestGolden.test_add` names in its assertions, \
+             is no longer a constant"
         ),
         "{messages:?}"
     );
@@ -308,7 +345,9 @@ fn two_tests_asserting_against_one_edited_constant_are_one_finding_each() {
 
 #[test]
 fn a_function_s_local_of_the_constant_s_name_leaves_it_a_constant() {
-    let tests = format!("{GOLDEN_TESTS}\n\ntry:\n    import json\nexcept ImportError:\n    def helper():\n        GOLDEN = 1\n");
+    let tests =
+        format!("{GOLDEN_TESTS}\n\ntry:\n    import json\nexcept ImportError:\n    def helper():\n\
+                 \x20       GOLDEN = 1\n");
     assert_eq!(golden_edited(&tests), changed_at_10());
 }
 
@@ -340,12 +379,14 @@ fn a_name_the_test_binds_anywhere_is_not_the_constant() {
     // Shadowing is not resolved: any binding of the name in the test, at any depth, leaves the constant out.
     for inner in [
         "        GOLDEN = \"a\"\n        self.assertEqual(add(\"\", \"a\"), GOLDEN)\n",
-        "        try:\n            add(None, 1)\n        except TypeError as GOLDEN:\n            self.assertIn(\"x\", str(GOLDEN))\n",
+        "        try:\n            add(None, 1)\n        except TypeError as GOLDEN:\n\
+         \x20           self.assertIn(\"x\", str(GOLDEN))\n",
         "        def check(GOLDEN):\n            assert add('', 'a') == GOLDEN\n\n        check('a')\n",
         "        assert all(GOLDEN for GOLDEN in ['a'])\n",
         "        assert [GOLDEN for GOLDEN in ['a']]\n",
         "        assert (lambda GOLDEN: GOLDEN)('a')\n",
-        "        class F:\n            GOLDEN = 1\n\n            def m(self):\n                assert add(\"\", \"a\") == GOLDEN\n\n        F().m()\n",
+        "        class F:\n            GOLDEN = 1\n\n            def m(self):\n\
+         \x20               assert add(\"\", \"a\") == GOLDEN\n\n        F().m()\n",
         "        assert (lambda GOLDEN=GOLDEN: add(\"\", \"a\") == GOLDEN)()\n",
         "        assert all(GOLDEN for GOLDEN in [GOLDEN])\n",
         "        global GOLDEN\n        assert add(\"\", \"a\") == GOLDEN\n",
@@ -370,9 +411,11 @@ fn a_constant_read_inside_nested_generators_or_lambdas_is_found() {
 
 #[test]
 fn an_attribute_of_a_name_the_test_binds_is_not_the_module_s_constant() {
-    let aliased = GOLDEN_TESTS.replace("from calc import add\n\n", "from calc import add\nimport tests.test_golden as tg\n");
+    let aliased =
+        GOLDEN_TESTS.replace("from calc import add\n\n", "from calc import add\nimport tests.test_golden as tg\n");
     for spelled in ["tg", "test_golden", "tests"] {
-        let read = if spelled == "tests" { "tests.test_golden.GOLDEN".to_string() } else { format!("{spelled}.GOLDEN") };
+        let read =
+            if spelled == "tests" { "tests.test_golden.GOLDEN".to_string() } else { format!("{spelled}.GOLDEN") };
         let tests = aliased
             .replace("    def test_add(self):\n", &format!("    def test_add(self, {spelled}=None):\n"))
             .replace(", GOLDEN)", &format!(", {read})"));
@@ -382,7 +425,14 @@ fn an_attribute_of_a_name_the_test_binds_is_not_the_module_s_constant() {
     for lines in [
         &["import tests.test_golden", "self.assertEqual(add(\"\", \"a\"), tests.test_golden.GOLDEN)"][..],
         &["from tests import test_golden", "self.assertEqual(add(\"\", \"a\"), test_golden.GOLDEN)"],
-        &["import tests.test_golden as tg", "", "def check():", "    assert add(\"\", \"a\") == tg.GOLDEN", "", "check()"],
+        &[
+            "import tests.test_golden as tg",
+            "",
+            "def check():",
+            "    assert add(\"\", \"a\") == tg.GOLDEN",
+            "",
+            "check()",
+        ],
         &["if tg:", "    import tests.test_golden as tg", "self.assertEqual(add(\"\", \"a\"), tg.GOLDEN)"],
     ] {
         let inner: String = lines.iter().map(|x| format!("        {x}\n")).collect();
@@ -402,21 +452,30 @@ fn a_test_file_that_does_not_parse_or_cannot_be_read_says_so() {
     let coded = edited(OTHER_PATH, OTHER_TESTS, &format!("# coding: cp1252\n{OTHER_TESTS}"));
     let (place, messages) = found(&[coded]);
     assert_eq!(place, [at(OTHER_PATH, None, "unreadable")]);
-    assert!(messages[0].starts_with("could not be read (") && messages[0].ends_with(", so its tests were not checked."));
+    assert!(
+        messages[0].starts_with("could not be read (") && messages[0].ends_with(", so its tests were not checked.")
+    );
     // A file with no tests at the base loses none by not parsing.
     assert_eq!(found(&[added("tests/test_new.py", "def test_b(:\n")]).0, []);
 }
 
 #[test]
 fn a_helper_class_is_no_test_and_only_test_files_are_read() {
-    assert_eq!(found(&[edited("tests/test_help.py", "class Helper:\n    def make(self):\n        return 1\n", "")]).0, []);
-    let files = [deleted("helpers.py", "def test_helper():\n    assert 1\n"), added("pkg/sub_test.py", "def test_x():\n    pass\n")];
+    assert_eq!(
+        found(&[edited("tests/test_help.py", "class Helper:\n    def make(self):\n        return 1\n", "")]).0,
+        []
+    );
+    let files = [
+        deleted("helpers.py", "def test_helper():\n    assert 1\n"),
+        added("pkg/sub_test.py", "def test_x():\n    pass\n"),
+    ];
     assert_eq!(found(&files).0, []);
 }
 
 #[test]
 fn a_decorated_or_async_test_and_one_under_a_statement_are_read_as_python_s_runners_find_them() {
-    let base = "import pytest\n\n\n@pytest.fixture\nasync def test_a():\n    assert 1\n\n\nif True:\n    def test_hidden():\n        assert 1\n";
+    let base = "import pytest\n\n\n@pytest.fixture\nasync def test_a():\n    assert 1\n\n\n\
+                if True:\n    def test_hidden():\n        assert 1\n";
     let source = lang_python::read(base.as_bytes(), std::path::Path::new("tests/test_x.py"), true).unwrap();
     let tests: Vec<_> = source.tests.iter().map(|t| (t.name.as_str(), t.line, t.lines.first, t.lines.last)).collect();
     assert_eq!(tests, [("test_a", 5, 4, 6)]);

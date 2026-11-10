@@ -37,10 +37,12 @@ impl<'a> Sources<'a> {
     pub fn read(change: &'a Change) -> Result<Sources<'a>, Unjudged> {
         let stored = Stored::of(change)?;
         let gone = change.files.iter().filter(|f| f.before != f.after).filter_map(|f| f.before.clone()).collect();
+        let (python, bases_not_python) = stored.files(&PYTHON)?;
+        let (rust, _) = stored.files(&RUST)?;
         Ok(Sources {
             change,
-            python: PythonChange { change, files: stored.files(&PYTHON)? },
-            rust: RustChange { change, files: stored.files(&RUST)?, gone },
+            python: PythonChange { change, files: python, bases_not_python },
+            rust: RustChange { change, files: rust, gone },
         })
     }
 }
@@ -52,12 +54,17 @@ pub struct PythonChange<'a> {
     /// (lang_python::is_python), in the change's order, read with crates/lang-python as [`Sources`] says. A file
     /// with a `.py` path on a side that gate.toml's `test-files.python` matches is read as test code whole on both.
     pub files: Vec<ChangedFile>,
+    /// The base paths of [`files`] that held no Python by their name or first line, each read as the base of the
+    /// Python file it became.
+    ///
+    /// [`files`]: PythonChange::files
+    bases_not_python: HashSet<OsString>,
 }
 
 impl PythonChange<'_> {
     /// Whether `path`, on either side of the change, is Python code under test: a path named `*.py`, whatever is
-    /// there, or one a side of [`files`] was read at, that gate.toml places neither among the Python tests nor with
-    /// what supports the tests (`test-files.support`). Unlike Rust's ([`RustChange::is_code`]), it does not ask
+    /// there, or one where a side of [`files`] held Python, that gate.toml places neither among the Python tests nor
+    /// with what supports the tests (`test-files.support`). Unlike Rust's ([`RustChange::is_code`]), it does not ask
     /// what the change edits in the file: Python's test code is told by its file alone. gate.py's `_python_code`.
     ///
     /// [`files`]: PythonChange::files
@@ -67,7 +74,8 @@ impl PythonChange<'_> {
             return false;
         }
         let at = |side: &Option<Side>| side.as_ref().is_some_and(|s| s.path == path);
-        path.as_bytes().ends_with(b".py") || self.files.iter().any(|f| at(&f.before) || at(&f.after))
+        let held_python = |f: &ChangedFile| at(&f.after) || (at(&f.before) && !self.bases_not_python.contains(path));
+        path.as_bytes().ends_with(b".py") || self.files.iter().any(held_python)
     }
 
     /// Whether the change edits Python code under test: whether a path on a side of one of its files [`is_code`].
@@ -212,15 +220,17 @@ impl<'a> Stored<'a> {
         })
     }
 
-    /// Each file of the change that holds `language`'s source on a side, in the change's order, each such side read.
-    /// Errs when git cannot show such a file at the base, or one cannot be read in the working tree.
-    fn files(&self, language: &Language) -> Result<Vec<ChangedFile>, Unjudged> {
+    /// Each file of the change that holds `language`'s source on a side, in the change's order, each such side read;
+    /// and the base paths among them that held none of it by their name or first line, read all the same
+    /// ([`Language::base_of_any_name`]). Errs when git cannot show such a file at the base, or one cannot be read in
+    /// the working tree.
+    fn files(&self, language: &Language) -> Result<(Vec<ChangedFile>, HashSet<OsString>), Unjudged> {
         let change = self.change;
         let side = |path: &OsString, other: &Option<OsString>, source: &[u8]| {
             let among_tests = (language.among_tests)(&change.settings, path, other.as_deref());
             Side { source: (language.read)(source, path, among_tests), path: path.clone(), among_tests }
         };
-        let mut out = vec![];
+        let (mut out, mut bases_holding_none) = (vec![], HashSet::new());
         for file in &change.files {
             let after = match file.after.as_ref().filter(|path| regular_file(&change.root.join(path))) {
                 Some(path) => self.in_working_tree(path, language)?.map(|bytes| side(path, &file.before, &bytes)),
@@ -228,9 +238,12 @@ impl<'a> Stored<'a> {
             };
             let whatever_it_holds = language.base_of_any_name && after.is_some();
             let before = match file.before.as_ref().filter(|path| self.regular_at_base.contains(*path)) {
-                Some(path) => {
-                    self.at_base(path, language, whatever_it_holds)?.map(|blob| side(path, &file.after, &blob))
-                }
+                Some(path) => self.at_base(path, language, whatever_it_holds)?.map(|(blob, holds)| {
+                    if !holds {
+                        bases_holding_none.insert(path.clone());
+                    }
+                    side(path, &file.after, &blob)
+                }),
                 None => None,
             };
             if before.is_none() && after.is_none() {
@@ -240,13 +253,18 @@ impl<'a> Stored<'a> {
                 |from: &ChangedLines| file.after.as_ref().and_then(|p| from.get(p)).cloned().unwrap_or_default();
             out.push(ChangedFile { added: lines(&change.changed), removed: lines(&self.removed), before, after });
         }
-        Ok(out)
+        Ok((out, bases_holding_none))
     }
 
-    /// The bytes of the base's regular file at `path`, when it holds `language`'s source or `whatever_it_holds`. A
-    /// file git cannot show is not the language's when its name would have to decide and does not, and an error
-    /// otherwise.
-    fn at_base(&self, path: &OsStr, language: &Language, whatever_it_holds: bool) -> Result<Option<Vec<u8>>, Unjudged> {
+    /// The bytes of the base's regular file at `path`, when it holds `language`'s source or `whatever_it_holds`,
+    /// with whether it holds that source. A file git cannot show is not the language's when its name would have to
+    /// decide and does not, and an error otherwise.
+    fn at_base(
+        &self,
+        path: &OsStr,
+        language: &Language,
+        whatever_it_holds: bool,
+    ) -> Result<Option<(Vec<u8>, bool)>, Unjudged> {
         let blob = OnceCell::new();
         let show = || {
             blob.get_or_init(|| {
@@ -256,11 +274,12 @@ impl<'a> Stored<'a> {
             })
         };
         let head = || show().as_ref().map(|blob| blob[..blob.len().min(FIRST_LINE_BYTES)].to_vec()).unwrap_or_default();
-        if !whatever_it_holds && !(language.holds)(path.as_bytes(), &head) {
+        let holds = (language.holds)(path.as_bytes(), &head);
+        if !whatever_it_holds && !holds {
             return Ok(None);
         }
         show();
-        blob.into_inner().transpose()
+        Ok(blob.into_inner().transpose()?.map(|bytes| (bytes, holds)))
     }
 
     /// The bytes of the working tree's regular file at `path`, when it holds `language`'s source.

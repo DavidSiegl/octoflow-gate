@@ -472,6 +472,19 @@ fn a_python_file_renamed_from_any_name_is_compared_with_its_base() {
 }
 
 #[test]
+fn a_base_read_under_a_name_that_is_not_python_s_is_no_code_under_test() {
+    // Renamed into the tests: its new path is a test file's, and its old one never held Python by name or first line.
+    let repo = python_project(&[("scripts/check_calc", "def test_check():\n    assert True\n")]);
+    repo.git(&["mv", "scripts/check_calc", "scripts/test_check_calc.py"]);
+    edit(&repo, "tests/test_calc.py", "== 3\n", "== 4\n");
+    assert_eq!(found_at(&repo), []);
+    // With code under test edited too, the changed assertion is found.
+    edit(&repo, "calc.py", "a + b", "b + a");
+    let changed = ("tests/test_calc.py".into(), Some(5), "test-integrity expected-value-changed".into());
+    assert_eq!(found_at(&repo), [changed]);
+}
+
+#[test]
 fn a_python_function_out_of_tests_is_judged_as_new_as_tests_were_never_held_to_the_limit() {
     let (helper, other) = (flat("helper", 20), flat("other_helper", 20).replace("x +=", "x -="));
     let repo = python_project(&[("tests/helpers.py", &format!("{helper}\n\n{other}"))]);

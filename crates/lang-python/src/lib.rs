@@ -17,7 +17,7 @@ mod testing;
 mod units;
 
 use binds::{binds, type_parameters, How};
-pub use units::{units, Unit};
+pub use units::{header_ends_outside, units, Statement, Unit};
 
 use syntax::{children, decorated, digest, end_line, fields, line, line_of, named, Text};
 

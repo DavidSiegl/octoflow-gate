@@ -10,8 +10,8 @@ use checks::{ChangedFile, Side};
 
 /// A file of a change: `before`, its path and text at the base, None where the change adds it; `after`, its path and
 /// text in the working tree, None where the change deletes it. Each side is read as the gate's default settings read
-/// it: among the tests whole when [`among_tests`] says so of either side's path. Its added and removed lines are those of a shortest line
-/// diff between the two texts, as git's would be wherever the shortest is one.
+/// it: among the tests whole when [`among_tests`] says so of either side's path. Its added and removed lines are those
+/// of a shortest line diff between the two texts, as git's would be wherever the shortest is one.
 pub fn changed(before: Option<(&str, &str)>, after: Option<(&str, &str)>) -> ChangedFile {
     let tests = [before, after].into_iter().flatten().any(|(path, _)| among_tests(path));
     let side = |(path, text): (&str, &str)| Side {

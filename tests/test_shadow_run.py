@@ -4,6 +4,7 @@ A stub stands in for the Rust gate: it records its arguments and writes the repo
 """
 
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -57,13 +58,29 @@ class TestShadowRun(unittest.TestCase):
             f.write(text)
         os.chmod(gate, 0o755)  # noqa: S103
 
-    def shorten_limit(self, minutes):
-        """Give the release's shadow-run.sh a time limit of minutes in place of its own."""
+    def shorten(self, wait, to):
+        """Give the release's shadow-run.sh `to` as its GATE_MINUTES or KILL_AFTER, whichever `wait` names."""
         with open(self.script) as f:
             text = f.read()
-        self.assertIn("\nGATE_MINUTES=20\n", text)
+        shortened = re.sub(rf"^{wait}=\d+$", f"{wait}={to}", text, flags=re.MULTILINE)
+        self.assertNotEqual(shortened, text)
         with open(self.script, "w") as f:
-            f.write(text.replace("\nGATE_MINUTES=20\n", f"\nGATE_MINUTES={minutes}\n"))
+            f.write(shortened)
+
+    def start_in_a_session(self, sigint):
+        """Start shadow-run.sh on the reports' directory in a session of its own, so that a signal to its process
+        group is what a terminal's would be, with sigint as what SIGINT does to it; returns it once the stub gate has
+        written GATE_LOG."""
+        run = subprocess.Popen([self.script, self.dir], env={**os.environ, "GATE_LOG": self.log},  # noqa: S603
+                               preexec_fn=lambda: signal.signal(signal.SIGINT, sigint),  # noqa: PLW1509
+                               start_new_session=True, stderr=subprocess.DEVNULL)
+        self.addCleanup(run.kill)
+        deadline = time.monotonic() + 10
+        while not os.path.exists(self.log):
+            self.assertIsNone(run.poll())
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(0.05)
+        return run
 
     def write(self, name, text):
         """Write text to the file name in the reports' directory."""
@@ -139,11 +156,11 @@ class TestShadowRun(unittest.TestCase):
 
     def test_a_gate_past_its_time_limit_is_stopped_though_what_it_started_runs_on(self):
         # What the gate started is in a session of its own, as the Rust gate's tools are, and holds its standard error.
-        self.shorten_limit("0.02")
-        self.put_gate("#!/bin/sh\necho 'gate: running the tests' >&2\nsetsid sleep 20 >&2 &\nexec sleep 20\n")
+        self.shorten("GATE_MINUTES", "0.02")
+        self.put_gate("#!/bin/sh\necho 'gate: running the tests' >&2\nsetsid sleep 9 >&2 &\nexec sleep 9\n")
         started = time.monotonic()
         shadow_exit, stderr = self.shadow()
-        self.assertLess(time.monotonic() - started, 15)
+        self.assertLess(time.monotonic() - started, 8)
         self.assertEqual((shadow_exit, stderr), (0, "gate: running the tests\n"))
         self.assertEqual(self.read("quality-diff.txt"),
                          "The Rust gate was stopped after 0.02 minutes without a verdict. It said:\n"
@@ -164,20 +181,31 @@ class TestShadowRun(unittest.TestCase):
 
     @pytest.mark.real_sleep
     def test_ctrl_c_reaches_the_gate_and_ends_the_script(self):
-        # Ctrl-C goes to the terminal's foreground process group, which the script's session stands in for.
         self.put_gate("#!/bin/sh\ntrap 'trap \"\" INT; echo interrupted >> \"$GATE_LOG\"; exit 130' INT\n"
-                      "echo started >> \"$GATE_LOG\"\nsleep 20 &\nwait\n")
-        run = subprocess.Popen([self.script, self.dir], env={**os.environ, "GATE_LOG": self.log},  # noqa: S603
-                               preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL),  # noqa: PLW1509
-                               start_new_session=True, stderr=subprocess.DEVNULL)
-        self.addCleanup(run.kill)
-        while not os.path.exists(self.log):
-            self.assertIsNone(run.poll())
-            time.sleep(0.05)
+                      "echo started >> \"$GATE_LOG\"\nsleep 9 &\nwait\n")
+        run = self.start_in_a_session(signal.SIG_DFL)
         os.killpg(run.pid, signal.SIGINT)
-        self.assertEqual(run.wait(timeout=15), 130)
+        self.assertEqual(run.wait(timeout=8), 130)
         with open(self.log) as f:
             self.assertEqual(f.read(), "started\ninterrupted\n")
+
+    @pytest.mark.real_sleep
+    def test_a_gate_started_with_sigint_ignored_judges_on_through_one(self):
+        # timeout would pass the signal on and, the gate ignoring it, kill the gate KILL_AFTER seconds later.
+        self.shorten("KILL_AFTER", "1")
+        self.put_gate("#!/bin/sh\necho started >> \"$GATE_LOG\"\nsleep 3\necho 'gate: judged on' >&2\nexit 2\n")
+        run = self.start_in_a_session(signal.SIG_IGN)
+        os.killpg(run.pid, signal.SIGINT)
+        self.assertEqual(run.wait(timeout=8), 0)
+        self.assertEqual(self.read("quality-diff.txt"),
+                         "The Rust gate could not judge the change (exit status 2). It said:\ngate: judged on\n")
+
+    def test_a_release_whose_path_holds_an_equals_sign_runs_with_sigint_ignored_too(self):
+        release = os.path.join(self.tmp.name, "a=b")
+        os.rename(self.release, release)
+        self.script = os.path.join(release, "shadow-run.sh")
+        self.assertEqual(self.shadow(sigint=signal.SIG_IGN), (0, ""))
+        self.assertEqual(self.read("quality-rust.md"), "GATE: OK\n")
 
     def test_a_gate_that_cannot_be_started_is_said_too(self):
         os.remove(os.path.join(self.release, "gate-linux-x86_64"))

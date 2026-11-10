@@ -423,21 +423,59 @@ fn a_pyproject_that_is_a_link_out_of_the_tree_is_read_and_not_written_through() 
 }
 
 #[test]
-fn a_pyproject_that_links_to_nothing_in_the_copy_is_a_finding() {
-    // A relative link out of the tree names nothing from the copy, where it is the same text: the project's settings
-    // cannot be read there, and are not taken for none.
+fn a_pyproject_that_is_a_relative_link_out_of_the_tree_is_read_from_the_tree_s_place() {
+    // From the copy's place the same link names another file, here one that is not there.
     let repo = calc();
     let (own, shared) = (repo.repo.join("pyproject.toml"), repo.outside.join("shared.toml"));
     std::fs::rename(&own, &shared).unwrap();
     std::os::unix::fs::symlink("../outside/shared.toml", &own).unwrap();
     repo.commit(&[], "rules elsewhere");
     change_the_functions(&repo, &[]);
-    let found = findings(&repo, Gate::default());
+    assert_eq!(places(&findings(&repo, Gate::default())), at(&WEAKLY_TESTED));
+}
+
+#[test]
+fn a_linked_pyproject_configures_the_tests_the_test_contexts_narrow_to() {
+    // What the link names holds pytest's configuration too, by which the recorded tests are collected: its addopts
+    // leave test_unchecked out. Taken for no configuration, the narrowing would collect both tests.
+    let repo = calc();
+    let (own, shared) = (repo.repo.join("pyproject.toml"), repo.outside.join("shared.toml"));
+    let rules = std::fs::read_to_string(&own).unwrap();
+    let options = "\n[tool.pytest.ini_options]\naddopts = \"-k test_checked\"\n";
+    std::fs::write(&shared, format!("{rules}{options}")).unwrap();
+    std::fs::remove_file(&own).unwrap();
+    std::os::unix::fs::symlink("../outside/shared.toml", &own).unwrap();
+    repo.commit(&[], "rules elsewhere");
+    change_the_functions(&repo, &["checked", "unchecked"]);
+    let recorded: [(&str, &[u32]); 2] =
+        [("tests/test_calc.py::test_checked", &[1, 2]), ("tests/test_calc.py::test_unchecked", &[5, 6])];
+    let data_file = contexts(&repo, "test", "calc.py", &recorded);
+    let found = || findings(&repo, Gate { test_contexts: Some(data_file.clone()), ..Gate::default() });
+    let linked = found();
+    // The same settings in a file of the tree's own, then the rules without pytest's configuration.
+    std::fs::remove_file(&own).unwrap();
+    std::fs::copy(&shared, &own).unwrap();
+    assert_eq!(linked, found());
+    std::fs::write(&own, rules).unwrap();
+    assert_ne!(linked, found());
+}
+
+#[test]
+fn a_pyproject_that_links_to_no_file_is_a_finding() {
+    // Its settings are somewhere the gate cannot read, which is not a project without the file. The rules are
+    // --config's: a tree whose own rules cannot be read is not judged at all.
+    let repo = calc();
+    let (own, rules) = (repo.repo.join("pyproject.toml"), repo.outside.join("pyproject.toml"));
+    std::fs::rename(&own, &rules).unwrap();
+    std::os::unix::fs::symlink("../outside/shared.toml", &own).unwrap();
+    repo.commit(&[], "settings nowhere");
+    change_the_functions(&repo, &[]);
+    let found = findings(&repo, Gate { rules: Some(rules), ..Gate::default() });
     assert_eq!(places(&found), [whole("not-run")]);
     assert_eq!(
         found[0].3,
-        "could not start mutmut: `pyproject.toml` is a symbolic link to a file that is not in the copy of the tree \
-         mutmut runs in; the change's functions were not mutation-tested."
+        "could not start mutmut: `pyproject.toml` is a symbolic link, and what it names cannot be read: No such \
+         file or directory (os error 2); the change's functions were not mutation-tested."
     );
 }
 

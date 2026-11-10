@@ -446,6 +446,8 @@ fn on_copy(
     let set_up = (|| -> Result<Option<Table>, String> {
         let start = |e: &dyn std::fmt::Display| format!("could not start mutmut: {e}");
         copy_tracked(root, copy.tree).map_err(|e| start(&e))?;
+        // Before anything reads the copy's pyproject.toml, pytest's configuration among it.
+        own_pyproject(root, copy.tree)?;
         // mutmut takes what it finds under its state for its own cache, results included, so it starts without
         // what the tree tracks there.
         let state = copy.state();
@@ -612,31 +614,36 @@ fn marked(source: &[u8], ends: &[u32]) -> Vec<u8> {
     lines.join(&b'\n')
 }
 
-/// Puts `table` in place of the `[tool.mutmut]` of `tree`'s pyproject.toml, leaving the rest of the file, the tests'
-/// own settings among it, as the tree has it. A pyproject.toml that is a symbolic link, as a copy holds one the
-/// tree tracks, becomes a file of its own: what it links to is read, and left as it is. Errs with the problem, a
-/// clause, when the file cannot be read or written, when it is a link to nothing `tree` holds, as a copy's link out
-/// of the tree may be, or when the result does not read back as `table` ([`with_table`]).
+/// Makes the pyproject.toml of `copy`, a copy of the tree `root` (copies::copy_tracked), a file of the copy's own
+/// where `root`'s is a symbolic link, which the copy holds as the same link: the file holds what the link names
+/// from `root`, since from the copy's place a relative link names another file or none, and written through, a link
+/// would change the file it names. Anything else is left as it is. Errs with the problem, a clause, when what the
+/// link names cannot be read, a link to no file among it, or the copy's file cannot be written.
+fn own_pyproject(root: &Path, copy: &Path) -> Result<(), String> {
+    let path = copy.join("pyproject.toml");
+    if !path.is_symlink() {
+        return Ok(());
+    }
+    let linked = std::fs::read(root.join("pyproject.toml")).map_err(|e| {
+        format!("could not start mutmut: `pyproject.toml` is a symbolic link, and what it names cannot be read: {e}")
+    })?;
+    let start = |e: std::io::Error| format!("could not start mutmut: {e}");
+    std::fs::remove_file(&path).map_err(start)?;
+    std::fs::write(&path, linked).map_err(start)
+}
+
+/// Puts `table` in place of the `[tool.mutmut]` of `tree`'s pyproject.toml, a file or missing ([`own_pyproject`]),
+/// leaving the rest of the file, the tests' own settings among it, as the tree has it. Errs with the problem, a
+/// clause, when the file cannot be read or written, or the result does not read back as `table` ([`with_table`]).
 fn use_mutmut_table(tree: &Path, table: &Table) -> Result<(), String> {
     let path = tree.join("pyproject.toml");
     let start = |e: std::io::Error| format!("could not start mutmut: {e}");
-    let link = path.is_symlink();
     let own = match std::fs::read_to_string(&path) {
         Ok(own) => own,
-        // A link that names nothing is not a project without the file: its settings are somewhere this cannot read.
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound && link => {
-            return Err("could not start mutmut: `pyproject.toml` is a symbolic link to a file that is not in the \
-                        copy of the tree mutmut runs in"
-                .into());
-        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(e) => return Err(start(e)),
     };
     let replaced = with_table(&own, table)?;
-    // Written through, a link would change the file it names, which may lie outside the copy.
-    if link {
-        std::fs::remove_file(&path).map_err(start)?;
-    }
     std::fs::write(&path, replaced).map_err(start)
 }
 
@@ -1060,10 +1067,10 @@ mod tests {
         let late = Instant::now().checked_duration_since(deadline);
         assert_eq!(listed, Err(format!("mutmut did not list its results within {REPORT_TIMEOUT} seconds")));
         assert_eq!(late, None, "the listing ended after its deadline");
-        // With no time left for a listing and its stop, none is started: this Python would outlast the deadline.
-        let deadline = Instant::now() + STOP_GRACE + KILL_WAIT;
-        assert_eq!(mutant_statuses(&copy, deadline), listed);
-        assert_eq!(Instant::now().checked_duration_since(deadline), None, "a listing was started and stopped");
+        // With no time left for a listing and its stop, none is started: a Python that is not there would be an
+        // error of its own.
+        let copy = TreeCopy { python: &tree.join("no-python"), tree: &tree };
+        assert_eq!(mutant_statuses(&copy, Instant::now() + STOP_GRACE + KILL_WAIT), listed);
         std::fs::remove_dir_all(&tree).unwrap();
     }
 

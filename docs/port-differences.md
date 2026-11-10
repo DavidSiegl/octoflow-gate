@@ -201,8 +201,11 @@ runs the checks of `crates/checks` over it.
   or small one with an exponent.
 - **A `pyproject.toml` that is a tracked symbolic link is replaced in the copy by a file** that holds what it
   links to with the rules' `[tool.mutmut]`; gate.py writes through the link, into the file it names, which may lie
-  outside the copy (TODO.md). A link to nothing the copy holds, as a relative one out of the tree, is a "could not
-  start mutmut" finding that says so; gate.py makes the file the link names.
+  outside the copy (TODO.md). What it links to is read from the tree's place, before pytest's configuration is
+  looked for in the copy; gate.py follows the copy's link from the copy's place, where a relative link out of the
+  tree names another file or none, and takes one that names none for an empty file. A link that names no file from
+  the tree either, which only a change judged by `--config`'s rules can hold, is a "could not start mutmut" finding
+  that says so.
 - **A Python that cannot be started is named**: "could not start pytest with the Python `PATH`, ..." and "could not
   start mutmut with the Python `PATH`: ...", where gate.py, which runs both with the Python that runs it, has
   "could not start pytest, ..." and "could not start mutmut: ...", and likewise "coverage.py could not be started

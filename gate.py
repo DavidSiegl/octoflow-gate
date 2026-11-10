@@ -72,7 +72,7 @@ CLIPPY_CONFIG_NAMES = ("Cargo.toml", "clippy.toml", ".clippy.toml", "rust-toolch
 CARGO_CONFIG_NAMES = ("config", "config.toml")
 # This gate's version: pyproject.toml's, which tests/test_invariants.py holds it to, carried here for a copy of gate.py
 # taken from a release, which has no pyproject.toml beside it. quality.json names it (QualityReport.json).
-GATE_VERSION = "0.5.0"
+GATE_VERSION = "0.6.0"
 # The most findings the quality file lists, issues and findings to weigh numbered as one list, and the most failing
 # tests; the rest are counted.
 QUALITY_ISSUE_LIMIT = 50

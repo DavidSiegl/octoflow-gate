@@ -60,18 +60,26 @@ pub fn weakened_tests(files: &[ChangedFile], code_changed: bool) -> Vec<Finding>
         out.extend(added_weakenings(file));
     }
     out.extend(removed_tests(files, &before, &after));
+    out.extend(kept_tests(files, &before, &after, code_changed));
+    out.sort_by(|a, b| (&a.path, a.line.unwrap_or(0)).cmp(&(&b.path, b.line.unwrap_or(0))));
+    out
+}
+
+/// The findings on the tests the change kept, those of `after`, the tests of `files` in the working tree, with a test
+/// of their key in `before`, the tests at the base: what [`kept_test`] finds of each and, when `code_changed`, what
+/// [`changed_constants`] does.
+fn kept_tests(files: &[ChangedFile], before: &[Keyed], after: &[Keyed], code_changed: bool) -> Vec<Finding> {
     let at_base: HashMap<Key, &Keyed> = before.iter().map(|t| (t.key(), t)).collect();
-    for t in &after {
-        if let Some(was) = at_base.get(&t.key()) {
-            let file = &files[t.file];
-            let path = file.after.as_ref().map(|a| &a.path);
-            out.extend(kept_test(path, was.test, t.test, code_changed));
-            if let (true, Some(base), Some(now)) = (code_changed, file.base(), file.now()) {
-                out.extend(changed_constants(path, (was.test, base), (t.test, now)));
-            }
+    let mut out = vec![];
+    for t in after {
+        let Some(was) = at_base.get(&t.key()) else { continue };
+        let file = &files[t.file];
+        let path = file.after.as_ref().map(|a| &a.path);
+        out.extend(kept_test(path, was.test, t.test, code_changed));
+        if let (true, Some(base), Some(now)) = (code_changed, file.base(), file.now()) {
+            out.extend(changed_constants(path, (was.test, base), (t.test, now)));
         }
     }
-    out.sort_by(|a, b| (&a.path, a.line.unwrap_or(0)).cmp(&(&b.path, b.line.unwrap_or(0))));
     out
 }
 

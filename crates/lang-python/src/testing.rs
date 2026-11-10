@@ -325,35 +325,42 @@ pub fn module_spellings(root: Node, path: &Path, text: Text) -> HashSet<String> 
     let path = path.with_extension("");
     let parts: Vec<String> = path.iter().map(|p| p.to_string_lossy().into_owned()).collect();
     let mut spellings: HashSet<String> = (0..parts.len()).map(|k| parts[k..].join(".")).collect();
-    for statement in named(root) {
-        // The module an import names, without the spaces Python allows around its dots.
-        let dotted = |node: Node| text.of(node).split_whitespace().collect::<String>();
-        let module = match statement.kind() {
-            "import_statement" => None,
-            "import_from_statement" => match statement.child_by_field_name("module_name") {
-                Some(module) if module.kind() == "dotted_name" => Some(dotted(module)),
-                _ => continue,
-            },
+    for (module, name, alias) in imports(root, text) {
+        let bound = match (module, alias) {
+            // `import a.b as c` binds c to a.b; without `as` it binds a, which is no new spelling.
+            (None, Some(alias)) if spellings.contains(&name) => alias.to_string(),
+            (Some(module), alias) if spellings.contains(&format!("{module}.{name}")) => {
+                alias.map_or(name, str::to_string)
+            }
             _ => continue,
         };
-        for imported in fields(statement, "name") {
-            let (name, alias) = match imported.kind() {
-                "aliased_import" => (imported.child_by_field_name("name"), imported.child_by_field_name("alias")),
-                _ => (Some(imported), None),
-            };
-            let Some(name) = name.map(dotted) else { continue };
-            let bound = match (&module, alias) {
-                // `import a.b as c` binds c to a.b; without `as` it binds a, which is no new spelling.
-                (None, Some(alias)) if spellings.contains(&name) => text.of(alias).to_string(),
-                (Some(module), alias) if spellings.contains(&format!("{module}.{name}")) => {
-                    alias.map_or(name, |a| text.of(a).to_string())
-                }
-                _ => continue,
-            };
-            spellings.insert(bound);
-        }
+        spellings.insert(bound);
     }
     let bindings = scope_bindings(named(root), text);
     spellings.retain(|n| n.contains('.') || bindings.get(n.as_str()).is_none_or(|&times| times <= 1));
     spellings
+}
+
+/// What the module-level import statements of the module `root` import, in the order written, each as the module a
+/// `from` statement names (None for an `import` statement), the dotted name imported, and the name after `as`. The
+/// dotted names are without the spaces Python allows around their dots. A `from` statement that names its module
+/// relatively, by leading dots, is left out.
+fn imports<'t>(root: Node, text: Text<'t>) -> Vec<(Option<String>, String, Option<&'t str>)> {
+    let dotted = |node: Node| text.of(node).split_whitespace().collect::<String>();
+    let mut out = vec![];
+    for statement in named(root) {
+        let module = statement.child_by_field_name("module_name").filter(|m| m.kind() == "dotted_name");
+        let module = match (statement.kind(), module) {
+            ("import_statement", _) => None,
+            ("import_from_statement", Some(module)) => Some(dotted(module)),
+            _ => continue,
+        };
+        for imported in fields(statement, "name") {
+            // An `aliased_import` holds the name and the alias; any other import is the name itself.
+            let name = imported.child_by_field_name("name").unwrap_or(imported);
+            let alias = imported.child_by_field_name("alias").map(|a| text.of(a));
+            out.push((module.clone(), dotted(name), alias));
+        }
+    }
+    out
 }

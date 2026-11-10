@@ -9,8 +9,10 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::Duration;
 
+use lang_python::Unit;
 use regex::Regex;
 
+use crate::parser_checks::{python_test, PythonChange, UnreadFiles};
 use crate::paths::rel_path;
 use crate::process::{run_with, Extras, Finished};
 use crate::report::Finding;
@@ -19,6 +21,24 @@ use crate::text;
 /// The changed tests a check runs: the line of each one's def, by its file's path and its qualified name, `test_f`
 /// or `TestC.test_m`. The path is from the copy's top, or from a group's directory ([`Group::own`]).
 pub type Tests = BTreeMap<(OsString, String), u32>;
+
+/// The test functions and methods the change touched in the test files it left in the working tree
+/// (PythonChange::changed_units, of the files gate.toml's `test-files.python` names): a unit whose own name starts
+/// with `test`, to which the change added a line, or from which it removed one, between the statement before it and
+/// its end. What lies above its def, such as its decorators and comments, may have changed it, and a decorator
+/// replaced or removed leaves no line of the def itself changed; lines removed right after its last line count too,
+/// though they may have been the blank lines below it. And each such file that could not be read or parsed.
+/// gate.py's `_changed_python_tests`.
+pub fn changed_tests(python: &PythonChange) -> (Tests, UnreadFiles) {
+    let in_scope = |path: &OsStr| python_test(&python.change.settings, path);
+    let (units, unreadable) = python.changed_units(in_scope, |unit, added, removal_points| {
+        added.iter().any(|&n| unit.floor < n && n <= unit.lines.last)
+            || removal_points.iter().any(|&n| unit.floor <= n && n <= unit.lines.last)
+    });
+    let named_test = |unit: &Unit| unit.name.rsplit('.').next().is_some_and(|own| own.starts_with("test"));
+    let tests = units.into_iter().filter(|(_, unit)| named_test(unit));
+    (tests.map(|(path, unit)| ((path, unit.name), unit.line)).collect(), unreadable)
+}
 
 /// How the gate runs pytest in a copy of a tree: with which Python, where, and by what configuration.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -367,6 +387,70 @@ mod tests {
         assert_eq!(inifile(&dir), Some(dir.join("pyproject.toml")));
         write(&dir, ".pytest.ini", "");
         assert_eq!(inifile(&dir), Some(dir.join(".pytest.ini")));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_configuration_is_found_as_pytest_finds_it() {
+        // TestFlakyTests' cases (tests/test_gate.py): the files of a directory, and the one pytest takes.
+        type Files = [(&'static str, &'static str)];
+        let cases: [(&Files, Option<&str>); 10] = [
+            (&[], None),
+            (&[("pyproject.toml", "[project]\n"), ("tox.ini", "[tox]\n"), ("setup.cfg", "[metadata]\n")], None),
+            (&[("pyproject.toml", "[tool.pytest]\n")], None),
+            (&[("pyproject.toml", "[tool.pytest.ini_options]\n"), ("pytest.ini", "")], Some("pytest.ini")),
+            (&[("pyproject.toml", "[tool.pytest.ini_options]\n"), ("tox.ini", "[pytest]\n")], Some("pyproject.toml")),
+            (&[("pyproject.toml", "[tool.pytest]\naddopts = []\n")], Some("pyproject.toml")),
+            (&[("tox.ini", "[pytest]\n"), ("setup.cfg", "[tool:pytest]\n")], Some("tox.ini")),
+            (&[("tox.ini", "[tool:pytest]\n"), ("setup.cfg", "[tool:pytest]\n")], Some("setup.cfg")),
+            (&[(".pytest.ini", ""), ("pytest.toml", "")], Some("pytest.toml")),
+            (&[("pyproject.toml", "not toml [")], Some("pyproject.toml")),
+        ];
+        for (n, (files, expected)) in cases.into_iter().enumerate() {
+            let dir = scratch(&format!("inifile-case-{n}"));
+            for (name, contents) in files {
+                write(&dir, name, contents);
+            }
+            assert_eq!(inifile(&dir), expected.map(|name| dir.join(name)), "{files:?}");
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_group_s_label_names_its_configuration_or_its_lack_of_one() {
+        let group = |inifile: &str| {
+            let top = PathBuf::from("/w/tree");
+            let setup = Setup { python: "py".into(), root: top.clone(), inifile: inifile.into(), top };
+            Group { setup, paths: BTreeSet::new() }
+        };
+        assert_eq!(group("/w/pytest.ini").label(), "the changed tests with no pytest configuration");
+        assert_eq!(group("/w/tree/..ci/pytest.ini").label(), "the changed tests configured by ..ci/pytest.ini");
+        assert_eq!(group("/w/tree/b/tox.ini").label(), "the changed tests configured by b/tox.ini");
+    }
+
+    #[test]
+    fn a_run_that_tells_nothing_is_a_problem_that_says_why() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("run");
+        // A Python that is a shell script, running `script` whatever it is asked.
+        let run_script = |script: &str, timeout: u64| {
+            let python = dir.join("python");
+            std::fs::write(&python, format!("#!/bin/sh\n{script}\n")).unwrap();
+            std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let setup = Setup { python, root: dir.clone(), inifile: dir.join("pytest.ini"), top: dir.clone() };
+            run(&setup, "collecting", &[], Duration::from_secs(timeout), &[0, 5], &[])
+        };
+        assert_eq!(run_script("echo listed; exit 5", 10).unwrap().stdout, b"listed\n");
+        let failed = run_script("echo 'ERROR: usage' >&2; exit 4", 10).unwrap_err();
+        assert_eq!(failed.clause, "pytest, collecting, exited with status 4: ERROR: usage");
+        assert!(failed.stopped.is_none());
+        let late = run_script("echo started; exec sleep 30", 1).unwrap_err();
+        assert_eq!(late.clause, "pytest, collecting, did not finish within 1 seconds");
+        assert_eq!(late.stopped.unwrap().stdout, b"started\n");
+        let python = dir.join("none");
+        let setup = Setup { python, root: dir.clone(), inifile: dir.join("pytest.ini"), top: dir.clone() };
+        let missing = run(&setup, "collecting", &[], Duration::from_secs(10), &[0], &[]).unwrap_err();
+        assert_eq!(missing.clause, "could not start pytest, collecting: No such file or directory (os error 2)");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

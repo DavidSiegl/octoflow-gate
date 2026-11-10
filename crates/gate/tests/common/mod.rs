@@ -78,6 +78,27 @@ impl Repo {
         self.git(&["commit", "--quiet", "-m", message]);
     }
 
+    /// Commits a submodule at vendor/lib and puts a named pipe in its working tree. A copy of the tracked files
+    /// (copies::copy_tracked) takes a submodule's directory whole, so it meets the pipe, which git does not track,
+    /// and refuses it: the tree cannot be copied, though git reads its change.
+    pub fn make_uncopyable(&self) {
+        let lib = self.outside.join("lib");
+        std::fs::create_dir_all(&lib).unwrap();
+        let git = |args: &[&str]| {
+            let done = Command::new("git").current_dir(&lib).args(args).output().unwrap();
+            assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+        };
+        git(&["init", "--quiet", "-b", "main"]);
+        std::fs::write(lib.join("notes.txt"), "notes\n").unwrap();
+        git(&["add", "notes.txt"]);
+        let me = ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"];
+        git(&[&me[..], &["commit", "--quiet", "-m", "lib"]].concat());
+        let lib = lib.to_str().unwrap();
+        self.git(&["-c", "protocol.file.allow=always", "submodule", "--quiet", "add", lib, "vendor/lib"]);
+        self.commit(&[], "a submodule");
+        assert!(Command::new("mkfifo").arg(self.repo.join("vendor/lib/pipe")).status().unwrap().success());
+    }
+
     /// Puts an executable `name` that runs the sh `script` in a directory outside the repository, and gives back
     /// that directory, to put ahead of PATH.
     pub fn stub(&self, name: &str, script: &str) -> PathBuf {
@@ -88,6 +109,20 @@ impl Repo {
         std::fs::set_permissions(bin.join(name), std::fs::Permissions::from_mode(0o755)).unwrap();
         bin
     }
+}
+
+/// The Python of the workspace's own environment, which has the pytest, pytest-randomly, pytest-cov and mutmut that
+/// the checks run with a judged project's Python. uv names it, and makes the environment first where the tree has
+/// none, as in the copy of the tracked files that cargo-mutants runs these tests in.
+pub fn python() -> PathBuf {
+    let workspace = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let named = Command::new("uv")
+        .current_dir(workspace)
+        .args(["run", "--frozen", "python", "-c", "import sys; print(sys.executable)"])
+        .output()
+        .unwrap();
+    assert!(named.status.success(), "uv failed: {}", String::from_utf8_lossy(&named.stderr));
+    PathBuf::from(String::from_utf8(named.stdout).unwrap().trim_end())
 }
 
 impl Drop for Repo {

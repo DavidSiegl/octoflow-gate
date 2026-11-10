@@ -259,22 +259,7 @@ fn a_workspace_cargo_is_missing_to_tell_names_cargo_mutants() {
 #[test]
 fn a_tree_that_cannot_be_copied_is_not_run() {
     let repo = repo(&[]);
-    // A submodule's directory is copied whole, so a named pipe in its working tree, which git does not track, is
-    // copied too, and refused.
-    let lib = repo.outside.join("lib");
-    std::fs::create_dir_all(&lib).unwrap();
-    let git = |args: &[&str]| {
-        let done = Command::new("git").current_dir(&lib).args(args).output().unwrap();
-        assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
-    };
-    git(&["init", "--quiet", "-b", "main"]);
-    std::fs::write(lib.join("notes.txt"), "notes\n").unwrap();
-    git(&["add", "notes.txt"]);
-    git(&["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "--quiet",
-          "-m", "lib"]);
-    repo.git(&["-c", "protocol.file.allow=always", "submodule", "--quiet", "add", lib.to_str().unwrap(), "vendor/lib"]);
-    repo.commit(&[], "a submodule");
-    assert!(Command::new("mkfifo").arg(repo.repo.join("vendor/lib/pipe")).status().unwrap().success());
+    repo.make_uncopyable();
     repo.put("src/lib.rs", format!("{LIB}{ADDED}").as_bytes());
     let found = findings(&repo, None, &[]);
     assert_eq!(found.len(), 1, "{found:?}");

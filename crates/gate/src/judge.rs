@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use crate::config_edits::{cargo_home_in, clippy_config_files, edited_config};
 use crate::coverage::new_coverage;
 use crate::diff::{change_diff, changed_files, changed_lines, ChangedFile, ChangedLines};
+use crate::flaky_tests::flaky_tests;
 use crate::linters::{tracked_from, Linter, LINTERS};
 use crate::mutants::surviving_mutants;
 use crate::parser_checks::{too_complex, vague_names, weakened_tests, Sources};
@@ -222,10 +223,10 @@ pub fn judge_change(cwd: &Path, base: &str, given: &Given) -> Result<QualityRepo
 }
 
 /// Runs the checks beside the linters on `change`, in the order gate.py's `gate_checks` runs them: test-integrity,
-/// cognitive-complexity, surviving-mutants and passes-at-base, whose runs may take the seconds `budgets` gives,
-/// (mutation, base run), and vague-names. Appends to `conditions` a failed condition for each check with findings of
-/// severity "error", in that order, and to `issues` those findings; returns the others, to weigh. Errs as
-/// [`Sources::read`] does, having appended nothing.
+/// cognitive-complexity, flaky-tests, surviving-mutants and passes-at-base, the last two's runs within the seconds
+/// `budgets` gives, (mutation, base run), and vague-names. Appends to `conditions` a failed condition for each check
+/// with findings of severity "error", in that order, and to `issues` those findings; returns the others, to weigh.
+/// Errs as [`Sources::read`] does, having appended nothing.
 fn judge_checks(
     change: &Change,
     (mutation_budget, base_run_budget): (u64, u64),
@@ -236,6 +237,7 @@ fn judge_checks(
     let found = [
         weakened_tests(&sources),
         too_complex(&sources),
+        named("flaky-tests", flaky_tests(&sources.python)),
         named("surviving-mutants", surviving_mutants(&sources.rust, mutation_budget)),
         named("passes-at-base", passes_at_base(&sources.rust, base_run_budget)),
         vague_names(&sources),

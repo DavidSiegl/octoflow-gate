@@ -677,17 +677,7 @@ fn mutmut_findings(
     if no_tests {
         statuses.iter_mut().for_each(|(_, status)| *status = "no tests".into());
     }
-    // Each function's mutants and their statuses, in the order mutmut lists them, which is the order it made them
-    // in, the functions in the order of their first mutants; a function mutmut listed no mutant of has no entry.
-    let by_prefix: HashMap<String, usize> = functions.iter().enumerate().map(|(k, f)| (mutant_prefix(f), k)).collect();
-    let mut mutants: Vec<(usize, Vec<(&str, &str)>)> = vec![];
-    for (mutant, status) in &statuses {
-        let Some(&owner) = by_prefix.get(prefix_of(mutant)) else { continue };
-        match mutants.iter_mut().find(|(k, _)| *k == owner) {
-            Some((_, mine)) => mine.push((mutant, status)),
-            None => mutants.push((owner, vec![(mutant, status)])),
-        }
-    }
+    let mutants = mutants_by_function(functions, &statuses);
     // A function mutmut was given but listed no mutant of. mutmut saves a module's mutants, none or more, in
     // mutants/<path>.meta once it has made them all, so stopped by the budget it had not reached a module without
     // one, or the stop lost its results (statuses_after_run).
@@ -708,22 +698,48 @@ fn mutmut_findings(
         })
         .collect();
     for (owner, mine) in &mutants {
-        let f = functions[*owner];
-        let tried = mine.iter().filter(|(_, status)| !UNTRIED.contains(status)).count();
-        let of = |wanted: &str| -> Vec<&str> { mine.iter().filter(|(_, s)| *s == wanted).map(|(m, _)| *m).collect() };
-        let survived = of("survived");
-        if !survived.is_empty() {
-            out.push(survivors(copy, f, &survived, tried, deadline));
-        }
-        let untested = of("no tests").len();
-        if untested > 0 {
-            let name = &f.unit.name;
-            let message = format!("no test calls `{name}`, so none of its {untested} mutants can make one fail.");
-            out.push(f.finding("untested", message));
-        }
+        out.extend(listed_findings(copy, functions[*owner], mine, deadline));
     }
     if run.stopped {
         out.push(budget_reached(&statuses, seconds, &unreached, &cut_off));
+    }
+    out
+}
+
+/// The mutants of one function with their statuses, each a (mutant, status) pair as [`Statuses`] holds them.
+type Listed<'a> = Vec<(&'a str, &'a str)>;
+
+/// Each of `functions` that `statuses` lists a mutant of, as its index in `functions`, with its mutants in the
+/// order mutmut lists them, which is the order it made them in; the functions come in the order of their first
+/// mutants, and a mutant of none of them is left out.
+fn mutants_by_function<'a>(functions: &[&Function], statuses: &'a Statuses) -> Vec<(usize, Listed<'a>)> {
+    let by_prefix: HashMap<String, usize> = functions.iter().enumerate().map(|(k, f)| (mutant_prefix(f), k)).collect();
+    let mut mutants: Vec<(usize, Listed)> = vec![];
+    for (mutant, status) in statuses {
+        let Some(&owner) = by_prefix.get(prefix_of(mutant)) else { continue };
+        match mutants.iter_mut().find(|(k, _)| *k == owner) {
+            Some((_, mine)) => mine.push((mutant, status)),
+            None => mutants.push((owner, vec![(mutant, status)])),
+        }
+    }
+    mutants
+}
+
+/// The findings for `f` from `mine`, the mutants mutmut listed of it: one for those that survived, with what
+/// [`survivors`] has mutmut show of them in `copy` by `deadline`, and one for those no test calls.
+fn listed_findings(copy: &TreeCopy, f: &Function, mine: &Listed, deadline: Instant) -> Vec<Finding> {
+    let tried = mine.iter().filter(|(_, status)| !UNTRIED.contains(status)).count();
+    let of = |wanted: &str| -> Vec<&str> { mine.iter().filter(|(_, s)| *s == wanted).map(|(m, _)| *m).collect() };
+    let mut out = vec![];
+    let survived = of("survived");
+    if !survived.is_empty() {
+        out.push(survivors(copy, f, &survived, tried, deadline));
+    }
+    let untested = of("no tests").len();
+    if untested > 0 {
+        let name = &f.unit.name;
+        let message = format!("no test calls `{name}`, so none of its {untested} mutants can make one fail.");
+        out.push(f.finding("untested", message));
     }
     out
 }
@@ -892,23 +908,25 @@ fn why_no_mutant(unit: &Unit, table: &Table) -> String {
     let mut read: Vec<Option<Regex>> = vec![None; patterns.len()];
     for statement in &unit.body {
         let line = usize::try_from(statement.line - unit.lines.first).ok().and_then(|k| unit.source.get(k));
-        let Some(line) = line else { return EVERY_CAUSE.into() };
-        let mut matched = false;
-        for (k, pattern) in patterns.iter().enumerate() {
-            if read[k].is_none() {
-                let Ok(regex) = Regex::new(pattern) else { return EVERY_CAUSE.into() };
-                read[k] = Some(regex);
-            }
-            if read[k].as_ref().is_some_and(|regex| regex.is_match(line)) {
-                matched = true;
-                break;
-            }
-        }
-        if !matched {
+        if line.and_then(|line| first_match(&patterns, &mut read, line)).is_none() {
             return EVERY_CAUSE.into();
         }
     }
     "the rules' do_not_mutate_patterns match each statement in it".into()
+}
+
+/// The index of the first of `patterns` that matches `line`; None when none does, or when one tried before a match
+/// is no regex. `read[k]` holds pattern k as a regex once a line has needed it, and is filled here.
+fn first_match(patterns: &[String], read: &mut [Option<Regex>], line: &str) -> Option<usize> {
+    for (k, pattern) in patterns.iter().enumerate() {
+        if read[k].is_none() {
+            read[k] = Some(Regex::new(pattern).ok()?);
+        }
+        if read[k].as_ref().is_some_and(|regex| regex.is_match(line)) {
+            return Some(k);
+        }
+    }
+    None
 }
 
 /// What `comment` says to mutmut 3.8.0, as its _parse_pragma_token reads it: "block", "start", "end" or "bare" for

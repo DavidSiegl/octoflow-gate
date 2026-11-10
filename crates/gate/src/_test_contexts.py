@@ -9,8 +9,12 @@ measured path relative in the file is taken from the current directory. A missin
 exit with status 1 and say so on standard error.
 """
 
-import json, os, sys
+import json
+import os
+import sys
+
 from coverage import CoverageData
+
 if not os.path.isfile(sys.argv[1]):
     sys.exit(f"no such file: {sys.argv[1]}")
 recorded = CoverageData(basename=sys.argv[1])

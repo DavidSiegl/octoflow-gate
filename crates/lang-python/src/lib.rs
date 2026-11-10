@@ -14,8 +14,11 @@ mod decode;
 mod flow;
 mod syntax;
 mod testing;
+mod units;
 
 use binds::{binds, type_parameters, How};
+pub use units::{units, Unit};
+
 use syntax::{children, decorated, digest, end_line, fields, line, line_of, named, Text};
 
 /// The Python source `source`, the file at `path` from the tree's top level, as the model has it. `among_tests` says

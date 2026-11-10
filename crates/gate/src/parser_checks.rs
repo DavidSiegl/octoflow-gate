@@ -11,6 +11,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
 use checks::{complexity, integrity, names, ChangedFile, Finding, Side};
+use lang_python::FIRST_LINE_BYTES;
 use model::{SourceFile, Unreadable};
 
 use crate::diff::{removed_lines, ChangedLines};
@@ -162,8 +163,8 @@ fn by_path_and_line(mut findings: Vec<Finding>) -> Vec<Finding> {
 /// How one language's source files are told among a change's and read.
 struct Language {
     /// Whether the file at `path`, from the tree's top level, holds the language's source. `head` gives the file's
-    /// first [`HEAD_BYTES`] bytes, none for a file that cannot be read, and is called only when the name does not
-    /// decide.
+    /// first [`FIRST_LINE_BYTES`] bytes, none for a file that cannot be read, and is called only when the name does
+    /// not decide.
     holds: fn(path: &[u8], head: &dyn Fn() -> Vec<u8>) -> bool,
     /// Whether `settings` place among the language's tests the side at `path` of one of the language's files, whose
     /// other side, where the change gives it one, is at `other`.
@@ -185,9 +186,6 @@ const RUST: Language = Language {
     among_tests: |settings, path, _| settings.rust_tests.matches(path),
     read: |source, _, among_tests| lang_rust::read(source, among_tests),
 };
-
-/// How much of a file a [`Language`] is given to tell its source by: as much as lang_python::is_python reads.
-const HEAD_BYTES: usize = 256;
 
 /// What git and the working tree hold of a change's files, for each [`Language`] to read its own from.
 struct Stored<'a> {
@@ -248,7 +246,7 @@ impl<'a> Stored<'a> {
                 git::output(&self.change.root, &[OsStr::new("cat-file"), OsStr::new("blob"), &spec])
             })
         };
-        let head = || show().as_ref().map(|blob| blob[..blob.len().min(HEAD_BYTES)].to_vec()).unwrap_or_default();
+        let head = || show().as_ref().map(|blob| blob[..blob.len().min(FIRST_LINE_BYTES)].to_vec()).unwrap_or_default();
         if !(language.holds)(path.as_bytes(), &head) {
             return Ok(None);
         }
@@ -261,7 +259,7 @@ impl<'a> Stored<'a> {
         let full = self.change.root.join(path);
         let head = || {
             let mut head = vec![];
-            let read = std::fs::File::open(&full).and_then(|file| file.take(HEAD_BYTES as u64).read_to_end(&mut head));
+            let read = std::fs::File::open(&full).and_then(|file| file.take(FIRST_LINE_BYTES as u64).read_to_end(&mut head));
             if read.is_ok() { head } else { vec![] }
         };
         if !(language.holds)(path.as_bytes(), &head) {

@@ -56,12 +56,13 @@ pub fn read(source: &[u8], path: &Path, among_tests: bool) -> Result<SourceFile,
     Ok(file)
 }
 
+/// How much of a file's first line [`is_python`] reads, in bytes: enough for any `#!` line.
+pub const FIRST_LINE_BYTES: usize = 256;
+
 /// Whether the file at `path` holds Python source: its name ends in `.py`, or its first line is a `#!` naming python.
-/// `head` gives the file's first bytes, 256 or more of them when it has as many, and none for a file that cannot be
-/// read; it is called only when the name does not decide.
+/// `head` gives the file's first bytes, [`FIRST_LINE_BYTES`] or more of them when it has as many, and none for a file
+/// that cannot be read; it is called only when the name does not decide.
 pub fn is_python(path: &[u8], head: impl FnOnce() -> Vec<u8>) -> bool {
-    /// How much of a first line is read: enough for any `#!` line.
-    const FIRST_LINE_BYTES: usize = 256;
     if path.ends_with(b".py") {
         return true;
     }

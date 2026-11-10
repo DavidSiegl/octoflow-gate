@@ -1,7 +1,8 @@
 //! What the gate's parser checks (crates/checks) know of one source file, whatever its language: its functions and
-//! the flow of their bodies, its tests and their assertions, the skips and swallowed errors in it, and the names it
-//! binds. A language's front end, such as crates/lang-rust, reads a file into a [`SourceFile`]; the checks compare
-//! the two sides of a change through these types alone, so that nothing in them is one language's.
+//! the flow of their bodies, its tests and their assertions, the skips and swallowed errors in it, the names it
+//! binds and the constants its tests name. A language's front end, such as crates/lang-rust, reads a file into a
+//! [`SourceFile`]; the checks compare the two sides of a change through these types alone, so that nothing in them is
+//! one language's.
 //!
 //! Lines are numbered from 1, as git and the quality file number them.
 
@@ -25,6 +26,9 @@ pub struct SourceFile {
     pub weakenings: Vec<Weakening>,
     /// Every name the file binds, in the order they are written.
     pub bindings: Vec<Binding>,
+    /// The constants whose values the file spells out, which a test's assertions can name ([`Assertion::reads`]), in
+    /// the order they are written; none in a language whose front end follows none.
+    pub constants: Vec<Constant>,
 }
 
 /// A file the front end could not read as its language, with where and why.
@@ -131,6 +135,22 @@ pub struct Assertion {
     pub shape: String,
     /// Its literals, as written, in order.
     pub literals: Vec<String>,
+    /// The names it reads that the file's top level may bind, each once, in the order they are written: those that
+    /// name one of [`SourceFile::constants`] when the file has such a constant. A name the test itself binds anywhere
+    /// is not among them. None in a language whose front end follows no constants.
+    pub reads: Vec<String>,
+}
+
+/// A constant of a file ([`SourceFile::constants`]): a name its top level binds once, to an expression that calls
+/// nothing, so that the file itself says what it holds.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Constant {
+    pub name: String,
+    /// The line its assignment starts on.
+    pub line: u32,
+    /// The expression assigned to it, without its comments or its layout: equal for two expressions that are the same
+    /// code.
+    pub value: String,
 }
 
 /// An item that can hold tests ([`SourceFile::test_groups`]).

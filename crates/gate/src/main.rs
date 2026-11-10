@@ -4,10 +4,11 @@
 //! ```text
 //! gate --base REV [--config PYPROJECT] [--config GATE_TOML] [--tests JUNIT]... [--coverage XML]...
 //!      [--out FILE] [--json FILE] [--mutation-budget SECONDS] [--base-run-budget SECONDS]
-//!      [--test-contexts COVERAGE] [--rust-syntax PATH]
+//!      [--test-contexts COVERAGE] [--rust-syntax PATH] [--python PATH]
 //! ```
 //!
-//! Its flags are gate.py's. `--test-contexts` is read, but nothing uses it until mutmut's half of surviving-mutants is
+//! Its flags are gate.py's, and `--python`, which names what gate.py takes from the Python that runs it
+//! (judge::Change::python). `--test-contexts` is read, but nothing uses it until mutmut's half of surviving-mutants is
 //! ported (gate-standalone/16); `--rust-syntax` names gate.py's helper, which this binary does not need. Exit status 0
 //! for GATE: OK, 1 for GATE: ERROR, 2 when it could not judge the change or the arguments are bad, and 130 for Ctrl-C;
 //! with 2 or 130 it writes no report.
@@ -30,7 +31,7 @@ const EXIT_UNJUDGED: u8 = 2;
 
 const USAGE: &str = "usage: gate --base REV [--config FILE] [--coverage XML] [--tests XML] [--out FILE] [--json FILE]
             [--mutation-budget SECONDS] [--base-run-budget SECONDS] [--test-contexts COVERAGE]
-            [--rust-syntax PATH] [--help]";
+            [--rust-syntax PATH] [--python PATH] [--help]";
 
 const HELP: &str = "
 The Rust port of gate.py, which judges only what has been ported so far: pymarkdown, shellcheck, actionlint and clippy
@@ -63,7 +64,10 @@ options:
                           of gate.toml's budgets.base-run
   --test-contexts COVERAGE
                           accepted for gate.py's sake; no check uses it yet
-  --rust-syntax PATH      accepted for gate.py's sake, and ignored";
+  --rust-syntax PATH      accepted for gate.py's sake, and ignored
+  --python PATH           the Python of the judged project, in which its pytest, pytest-randomly and mutmut are
+                          installed, in place of gate.toml's python: a path, or a name without a slash for PATH to
+                          find. Without either, python3";
 
 /// The command line, parsed: what [`gate_command`] runs.
 #[derive(Debug, PartialEq, Eq)]
@@ -79,7 +83,7 @@ struct Args {
 /// What a command line asks for.
 #[derive(Debug, PartialEq, Eq)]
 enum Asked {
-    Run(Args),
+    Run(Box<Args>),
     Help,
 }
 
@@ -186,6 +190,7 @@ fn parse_args(argv: impl IntoIterator<Item = OsString>) -> Result<Asked, String>
             "--mutation-budget" => {
                 given.mutation_budget = Some(seconds(&value()?).map_err(|e| format!("argument {name}: {e}"))?);
             }
+            "--python" => given.python = Some(value()?.into()),
             "--test-contexts" | "--rust-syntax" => {
                 value()?;
             }
@@ -208,7 +213,7 @@ fn parse_args(argv: impl IntoIterator<Item = OsString>) -> Result<Asked, String>
             return Err("--json names the file --out writes".into());
         }
     }
-    Ok(Asked::Run(Args { base, given, out, json }))
+    Ok(Asked::Run(Box::new(Args { base, given, out, json })))
 }
 
 /// `arg` as an option's name and the value it carries after `=`, as in `--name=value`; the whole of `arg` and None
@@ -305,7 +310,7 @@ mod tests {
 
     fn run(args: &[&str]) -> Args {
         match parse(args) {
-            Ok(Asked::Run(args)) => args,
+            Ok(Asked::Run(args)) => *args,
             other => panic!("{other:?}"),
         }
     }
@@ -343,6 +348,7 @@ mod tests {
                    "argument --base-run-budget: expected a whole number of seconds, not '1.5'");
         assert_eq!(run(&["--base", "m", "--base-run-budget", "7"]).given.base_run_budget, Some(7));
         assert_eq!(run(&["--base", "m", "--mutation-budget", "5"]).given.mutation_budget, Some(5));
+        assert_eq!(run(&["--base", "m", "--python=.venv/bin/python"]).given.python, Some(".venv/bin/python".into()));
         let ignored = ["--rust-syntax", "x", "--test-contexts", "y"];
         assert!(parse(&[&["--base", "m"][..], &ignored].concat()).is_ok());
         assert_eq!(parse(&["--base", "m", "-x", "y"]).unwrap_err(), "unrecognized arguments: -x y");

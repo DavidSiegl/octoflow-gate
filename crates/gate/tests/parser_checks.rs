@@ -84,7 +84,7 @@ type Found = (Option<String>, Option<u32>, String, String);
 /// default settings, in the order the gate runs the checks.
 fn findings(repo: &Repo) -> Vec<gate::report::Finding> {
     repo.git(&["add", "-A"]);
-    let change = Change::from_tree(&repo.repo, "HEAD", Settings::default()).unwrap();
+    let change = Change::from_tree(&repo.repo, "HEAD", Settings::default(), None).unwrap();
     run_checks(&change).into_iter().flatten().collect()
 }
 
@@ -268,7 +268,7 @@ fn a_check_s_errors_fail_the_gate_and_its_warnings_are_to_weigh() {
 #[test]
 fn the_checks_run_in_the_gate_s_order_one_list_each() {
     let repo = package(&[]);
-    let change = Change::from_tree(&repo.repo, "HEAD", Settings::default()).unwrap();
+    let change = Change::from_tree(&repo.repo, "HEAD", Settings::default(), None).unwrap();
     assert_eq!(run_checks(&change), vec![vec![], vec![], vec![]]);
     // A new fn over the limit, and a vague name, beside a skip.
     let ifs: String = (0..16).map(|k| format!("    if x == {k} {{\n        x += {k};\n    }}\n")).collect();

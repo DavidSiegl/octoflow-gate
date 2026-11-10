@@ -153,3 +153,14 @@ runs the checks of `crates/checks` over it.
   needs every tried mutant's name, where gate.py reads only those of the first few survivors of a function.
 - **outcomes.json that is not a list of outcomes** is "PATH holds no list of outcomes", where gate.py quotes the
   `KeyError` or `TypeError`.
+
+## The checks that run Python's tools (gate-standalone/16)
+
+### Which Python
+
+- **The judged project's Python is named, not the one that runs the gate.** gate.py runs pytest, pytest-randomly and
+  mutmut through `sys.executable`, so it is started with the project's Python. The Rust gate is no Python program:
+  it takes `--python PATH`, else the `python` key at the top of `gate.toml`, else `python3` from `PATH`. A name
+  without a slash is found on `PATH`; a path is read from the current directory when `--python` gives it and from the
+  tree's top level when `gate.toml` does. gate.py knows neither the flag nor the key, and refuses a `gate.toml` that
+  holds the key as it does any key it does not know.

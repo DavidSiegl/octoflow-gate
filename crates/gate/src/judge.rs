@@ -45,6 +45,9 @@ pub struct Given {
     pub mutation_budget: Option<u64>,
     /// Seconds the passes-at-base check's runs may take, in place of gate.toml's `budgets.base-run`.
     pub base_run_budget: Option<u64>,
+    /// The judged project's Python, in place of gate.toml's `python`: a path, absolute or relative to the current
+    /// directory, or a name without a slash, which PATH finds.
+    pub python: Option<PathBuf>,
 }
 
 /// The change the gate judges, as [`Change::from_tree`] reads it, and as each check is given it.
@@ -64,17 +67,21 @@ pub struct Change {
     pub mutmut_state: Vec<OsString>,
     /// How the gate reads the project, as its gate.toml says.
     pub settings: Settings,
+    /// The program that runs the judged project's Python, in which the checks expect its pytest, pytest-randomly and
+    /// mutmut: an absolute path, or a name without a slash, which PATH finds. Nothing has looked for it: one that is
+    /// missing, or lacks a module, is for the check that runs it to report.
+    pub python: PathBuf,
 }
 
 impl Change {
     /// The change from `base`, a full sha, to the working tree of the repository whose top level is `root`, read by
-    /// `settings`.
+    /// `settings`, its Python the one `--python` names, `python`, else the settings', else `python3`.
     ///
     /// Its diff, changed and files show the change as if git tracked nothing under [`MUTMUT_STATE`] on either side,
     /// so nothing that reads them selects a test, a function or a changed line there, or counts an edit there as a
     /// change to the code. A file moved out of it is an added file, and one moved into it a deleted one, which
     /// mutmut_state names instead. Errs when git cannot diff the tree against base.
-    pub fn from_tree(root: &Path, base: &str, settings: Settings) -> Result<Change, Unjudged> {
+    pub fn from_tree(root: &Path, base: &str, settings: Settings, python: Option<&Path>) -> Result<Change, Unjudged> {
         let diff = change_diff(root, base, &[OUTSIDE_MUTMUT_STATE])?;
         let mut mutmut_state: Vec<OsString> =
             changed_files(root, base, &[INSIDE_MUTMUT_STATE])?.into_iter().filter_map(|f| f.after).collect();
@@ -86,8 +93,23 @@ impl Change {
             files: changed_files(root, base, &[OUTSIDE_MUTMUT_STATE])?,
             diff,
             mutmut_state,
+            python: match (python, &settings.python) {
+                (Some(given), _) => program(given, &crate::paths::abs_path(Path::new("."))),
+                (None, Some(own)) => program(Path::new(own), root),
+                (None, None) => PathBuf::from("python3"),
+            },
             settings,
         })
+    }
+}
+
+/// The program `named` as a process started in any directory finds it: a name without a slash as it is, for PATH to
+/// find, and a path made absolute from `start`, an absolute directory, and normalized (paths::normpath).
+fn program(named: &Path, start: &Path) -> PathBuf {
+    if named.as_os_str().as_bytes().contains(&b'/') {
+        crate::paths::normpath(&start.join(named))
+    } else {
+        named.to_path_buf()
     }
 }
 
@@ -137,7 +159,7 @@ pub fn judge_change(cwd: &Path, base: &str, given: &Given) -> Result<QualityRepo
         return Err(Unjudged(format!("no rules: {} is not a file", text::path(rules.as_os_str()))));
     }
     let (settings, settings_from) = Settings::for_tree(&root, &rules, given.settings.as_deref())?;
-    let change = Change::from_tree(&root, &base_sha, settings)?;
+    let change = Change::from_tree(&root, &base_sha, settings, given.python.as_deref())?;
     let changed = &change.changed;
     let tests = test_results(&root, &change.settings.test_commands, &given.tests, &given.coverage)?;
 
@@ -293,6 +315,20 @@ mod tests {
         ];
         let kept = on_changed_lines(found, &changed);
         assert_eq!(kept, vec![finding("a.sh", None), finding("a.sh", Some(3)), finding("b.sh", None)]);
+    }
+
+    #[test]
+    fn a_program_is_a_name_for_path_to_find_or_a_path_from_the_start() {
+        let start = Path::new("/tree");
+        for (named, found) in [
+            ("python3.13", "python3.13"),
+            (".venv/bin/python", "/tree/.venv/bin/python"),
+            ("./python", "/tree/python"),
+            ("../venv/bin/python", "/venv/bin/python"),
+            ("/usr/bin/python3", "/usr/bin/python3"),
+        ] {
+            assert_eq!(program(Path::new(named), start), PathBuf::from(found), "{named}");
+        }
     }
 
     #[test]

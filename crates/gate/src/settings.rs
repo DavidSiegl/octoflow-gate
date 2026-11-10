@@ -38,6 +38,9 @@ pub struct Settings {
     pub mutation_budget: u64,
     pub base_run_budget: u64,
     pub test_commands: Vec<TestCommand>,
+    /// The judged project's Python, which `--python` replaces: a path, absolute or relative to the tree's top level,
+    /// or a name without a slash, which PATH finds. None for `python3`. Never blank.
+    pub python: Option<String>,
 }
 
 /// A command that runs the project's tests, one `[[test]]` entry of gate.toml, which the gate runs and whose reports
@@ -66,6 +69,7 @@ impl Default for Settings {
             mutation_budget: 600,
             base_run_budget: 120,
             test_commands: vec![],
+            python: None,
         }
     }
 }
@@ -82,6 +86,10 @@ impl Settings {
             .map_err(|e| Unjudged(format!("cannot read the gate's settings {shown}: {}", e.to_string().trim_end())))?;
         let invalid = |why: String| Unjudged(format!("{shown}: {why}"));
         let mut settings = Settings::default();
+        if file.python.as_deref().is_some_and(|python| crate::text::py_strip(python).is_empty()) {
+            return Err(invalid("`python` must be the path or the name of a Python".into()));
+        }
+        settings.python = file.python;
         if let Some(files) = file.test_files {
             let globs = |g: Option<Vec<String>>, default: Globs| g.map_or(default, |g| Globs::new(&g));
             settings.python_tests = globs(files.python, settings.python_tests);
@@ -193,6 +201,7 @@ pub fn tree_s_own(root: &Path, path: &Path, name: &str) -> bool {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct File {
+    python: Option<String>,
     #[serde(rename = "test-files")]
     test_files: Option<TestFiles>,
     complexity: Option<Complexity>,
@@ -332,6 +341,8 @@ mod tests {
     fn unknown_keys_and_wrong_values_are_refused() {
         for (source, why) in [
             ("[test-file]\n", "unknown field `test-file`"),
+            ("python = \" \"\n", "<path>: `python` must be the path or the name of a Python"),
+            ("python = 3\n", ""),
             ("[test-files]\npyton = []\n", "unknown field `pyton`"),
             ("[linters]\nflake8 = []\n", "<path>: unknown key `linters.flake8`"),
             ("[budgets]\nmutation = 0\n", "<path>: `budgets.mutation` must be a whole number of seconds, at least 1"),
@@ -350,6 +361,12 @@ mod tests {
             let got = read(source).err().unwrap_or_else(|| panic!("{source:?} was read"));
             assert!(got.contains(why), "{source:?}: {got}");
         }
+    }
+
+    #[test]
+    fn the_python_is_the_one_named_or_none() {
+        assert_eq!(read("python = \".venv/bin/python\"\n").unwrap().python.as_deref(), Some(".venv/bin/python"));
+        assert_eq!(read("").unwrap().python, None);
     }
 
     #[test]

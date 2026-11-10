@@ -408,6 +408,7 @@ mod tests {
             ],
             mutmut_state: vec![],
             settings: Settings::default(),
+            python: PathBuf::from("python3"),
         };
         let found: Vec<(String, String)> = changed_golden_files(&change)
             .into_iter()

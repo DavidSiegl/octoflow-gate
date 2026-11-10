@@ -423,6 +423,25 @@ fn a_pyproject_that_is_a_link_out_of_the_tree_is_read_and_not_written_through() 
 }
 
 #[test]
+fn a_pyproject_that_links_to_nothing_in_the_copy_is_a_finding() {
+    // A relative link out of the tree names nothing from the copy, where it is the same text: the project's settings
+    // cannot be read there, and are not taken for none.
+    let repo = calc();
+    let (own, shared) = (repo.repo.join("pyproject.toml"), repo.outside.join("shared.toml"));
+    std::fs::rename(&own, &shared).unwrap();
+    std::os::unix::fs::symlink("../outside/shared.toml", &own).unwrap();
+    repo.commit(&[], "rules elsewhere");
+    change_the_functions(&repo, &[]);
+    let found = findings(&repo, Gate::default());
+    assert_eq!(places(&found), [whole("not-run")]);
+    assert_eq!(
+        found[0].3,
+        "could not start mutmut: `pyproject.toml` is a symbolic link to a file that is not in the copy of the tree \
+         mutmut runs in; the change's functions were not mutation-tested."
+    );
+}
+
+#[test]
 fn the_project_s_own_pytest_configuration_still_applies() {
     let repo = calc();
     change_the_functions(&repo, &[]);
@@ -1000,6 +1019,17 @@ fn a_mutmut_that_cannot_start_is_a_finding() {
             python.display()
         )
     );
+}
+
+#[test]
+fn a_python_that_cannot_start_to_read_the_test_contexts_is_named() {
+    let repo = calc();
+    change_the_functions(&repo, &[]);
+    let python = repo.outside.join("no-python");
+    let how = Gate { test_contexts: Some(repo.outside.join("test.coverage")), ..Gate::with_python(python.clone()) };
+    let found = findings(&repo, how);
+    let said = format!("coverage.py could not be started with the Python `{}` to read ", python.display());
+    assert!(found.iter().any(|f| f.3.contains(&said)), "{found:?}");
 }
 
 #[test]

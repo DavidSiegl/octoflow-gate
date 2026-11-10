@@ -335,7 +335,10 @@ fn recorded_tests(
     let argv = [python.as_os_str(), "-I".as_ref(), "-c".as_ref(), TEST_CONTEXTS_PROGRAM.as_ref()];
     let argv = [&argv[..], &[data_file.as_os_str(), spans.as_ref()]].concat();
     let read = process::run(&argv, root, Duration::from_secs(TEST_CONTEXTS_TIMEOUT))
-        .map_err(|e| format!("coverage.py could not be started to read `{named}`: {e}"))?;
+        .map_err(|e| {
+            let python = text::path(python.as_os_str());
+            format!("coverage.py could not be started with the Python `{python}` to read `{named}`: {e}")
+        })?;
     if read.stopped {
         return Err(format!("reading `{named}` took longer than {TEST_CONTEXTS_TIMEOUT} seconds"));
     }
@@ -612,18 +615,26 @@ fn marked(source: &[u8], ends: &[u32]) -> Vec<u8> {
 /// Puts `table` in place of the `[tool.mutmut]` of `tree`'s pyproject.toml, leaving the rest of the file, the tests'
 /// own settings among it, as the tree has it. A pyproject.toml that is a symbolic link, as a copy holds one the
 /// tree tracks, becomes a file of its own: what it links to is read, and left as it is. Errs with the problem, a
-/// clause, when the file cannot be read or written, or the result does not read back as `table` ([`with_table`]).
+/// clause, when the file cannot be read or written, when it is a link to nothing `tree` holds, as a copy's link out
+/// of the tree may be, or when the result does not read back as `table` ([`with_table`]).
 fn use_mutmut_table(tree: &Path, table: &Table) -> Result<(), String> {
     let path = tree.join("pyproject.toml");
     let start = |e: std::io::Error| format!("could not start mutmut: {e}");
+    let link = path.is_symlink();
     let own = match std::fs::read_to_string(&path) {
         Ok(own) => own,
+        // A link that names nothing is not a project without the file: its settings are somewhere this cannot read.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && link => {
+            return Err("could not start mutmut: `pyproject.toml` is a symbolic link to a file that is not in the \
+                        copy of the tree mutmut runs in"
+                .into());
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(e) => return Err(start(e)),
     };
     let replaced = with_table(&own, table)?;
     // Written through, a link would change the file it names, which may lie outside the copy.
-    if path.is_symlink() {
+    if link {
         std::fs::remove_file(&path).map_err(start)?;
     }
     std::fs::write(&path, replaced).map_err(start)
@@ -810,15 +821,14 @@ type Statuses = Vec<(String, String)>;
 
 /// Each mutant mutmut made in `copy` with its status, as `mutmut results` words it: killed, survived, no tests, not
 /// checked and the like. Errs with the problem, a clause, when they could not be listed by `deadline`, which
-/// mutmut's stop is kept within.
+/// mutmut's stop is kept within: with too little time left for a listing and its stop, none is started.
 fn mutant_statuses(copy: &TreeCopy, deadline: Instant) -> Result<Statuses, String> {
-    let listed = copy
-        .mutmut(&["results", "--all", "true"], time_left(deadline).unwrap_or_default())
-        .map_err(|e| {
-            format!("could not start mutmut with the Python `{}` to list its results: {e}", copy.python_named())
-        })?;
+    let late = || format!("mutmut did not list its results within {REPORT_TIMEOUT} seconds");
+    let listed = copy.mutmut(&["results", "--all", "true"], time_left(deadline).ok_or_else(late)?).map_err(|e| {
+        format!("could not start mutmut with the Python `{}` to list its results: {e}", copy.python_named())
+    })?;
     if listed.stopped {
-        return Err(format!("mutmut did not list its results within {REPORT_TIMEOUT} seconds"));
+        return Err(late());
     }
     if listed.status != 0 {
         let said = said_by_mutmut(&listed);
@@ -1050,8 +1060,10 @@ mod tests {
         let late = Instant::now().checked_duration_since(deadline);
         assert_eq!(listed, Err(format!("mutmut did not list its results within {REPORT_TIMEOUT} seconds")));
         assert_eq!(late, None, "the listing ended after its deadline");
-        // With no time left for a listing and its stop, none is started.
-        assert_eq!(time_left(Instant::now() + STOP_GRACE + KILL_WAIT), None);
+        // With no time left for a listing and its stop, none is started: this Python would outlast the deadline.
+        let deadline = Instant::now() + STOP_GRACE + KILL_WAIT;
+        assert_eq!(mutant_statuses(&copy, deadline), listed);
+        assert_eq!(Instant::now().checked_duration_since(deadline), None, "a listing was started and stopped");
         std::fs::remove_dir_all(&tree).unwrap();
     }
 

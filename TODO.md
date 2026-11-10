@@ -494,3 +494,9 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   (`crates/lang-python/src/testing.rs`) does not leave out a type parameter's own name, so `def test_a[skip]():`
   added to a test file is a `skip` finding of test-integrity, where `ast` has no `Name` there. Found with
   gate-standalone/15 (2026-11-10). Closes with `type_parameter`'s name told from an expression.
+- **A `.rs` file whose first line is `#![...python...]` is read as Python.** As review 13 put it (F9, 2026-11-10):
+  "`crates/lang-python/src/lib.rs:70` (`is_python`). `#![cfg(feature = "python")]` starts with `#!` and holds
+  `python`. Run, `crate/src/python.rs` so begun and edited: the Rust gate exits 1 with `cognitive-complexity
+  not-scored` and `vague-names not-read`, "does not parse as Python". gate.py's `_holds_python` reports the same two
+  findings, so the port agrees with it; the defect is both gates'." Closes, in both gates together for `cargo xtask
+  compare`, with a `#!` that `[` follows read as no interpreter line.

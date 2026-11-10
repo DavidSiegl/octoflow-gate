@@ -1,6 +1,5 @@
-//! The linters the gate runs over the files a tree tracks, and how it reads what they print. Ported so far:
-//! pymarkdown, shellcheck and actionlint, which print a finding a line, and clippy (clippy.rs); ruff and mypy come
-//! with Python (gate-standalone/16).
+//! The linters the gate runs over the files a tree tracks, and how it reads what they print: ruff, mypy, pymarkdown,
+//! shellcheck and actionlint, which print a finding a line, and clippy (clippy.rs).
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
@@ -48,7 +47,32 @@ enum Kind {
 }
 
 /// The linters, in the order the gate runs them.
-pub static LINTERS: [Linter; 4] = [
+pub static LINTERS: [Linter; 6] = [
+    Linter {
+        name: "ruff",
+        globs: &["**/*.py"],
+        line_ends: &['\r'],
+        kind: Kind::Lines {
+            command: |rules, files| {
+                let words = ["--output-format", "concise", "--no-cache"];
+                argv(&["ruff", "check", "--config"], Some(rules), &words, files)
+            },
+            detail: r"(?P<rule>[\w-]+):? (?:\[\*\] )?(?P<message>.+)",
+        },
+    },
+    // Which files mypy checks is one of its rules, [tool.mypy] files. A note elaborates an error; it is not one.
+    Linter {
+        name: "mypy",
+        globs: &["**/*.py"],
+        line_ends: &['\r'],
+        kind: Kind::Lines {
+            command: |rules, _| {
+                let words = ["--show-column-numbers", "--no-error-summary", "--cache-dir", "/dev/null"];
+                argv(&["mypy", "--config-file"], Some(rules), &words, &[])
+            },
+            detail: r"(?P<severity>error): (?P<message>.+?)(?:  \[(?P<rule>[\w-]+)\])?",
+        },
+    },
     Linter {
         name: "pymarkdown",
         globs: &["**/*.md"],
@@ -282,6 +306,58 @@ mod tests {
         let tracked = Tracked::new(vec!["README.md".into()]);
         let found = read("pymarkdown", b"README.md:2:1: MD013: Line length", Path::new("/t"), &tracked);
         assert_eq!((found[0].severity.as_str(), found[0].rule.as_str()), ("error", "pymarkdown MD013"));
+    }
+
+    /// Each finding's path, line, severity, rule and message.
+    fn fields(found: &[Finding]) -> Vec<(&str, Option<u32>, &str, &str, &str)> {
+        let mut out = vec![];
+        for f in found {
+            let path = f.path.as_ref().unwrap().to_str().unwrap();
+            out.push((path, f.line, f.severity.as_str(), f.rule.as_str(), f.message.as_str()));
+        }
+        out
+    }
+
+    #[test]
+    fn ruff_s_rule_is_a_code_or_a_name_before_a_colon_and_its_fix_mark_is_left_out() {
+        let tracked = Tracked::new(vec!["orchestrator.py".into()]);
+        let printed = "orchestrator.py:595:18: F402 Import `field` from line 55 shadowed\n\
+                       orchestrator.py:1:8: invalid-syntax: Expected an expression\n\
+                       orchestrator.py:6:8: F401 [*] `os` imported but unused\n\
+                       build/x.py:1:1: F401 unused\n\
+                       Found 4 errors.\n";
+        let found = read("ruff", printed.as_bytes(), Path::new("/repo"), &tracked);
+        assert_eq!(
+            fields(&found),
+            [
+                ("orchestrator.py", Some(595), "error", "ruff F402", "Import `field` from line 55 shadowed"),
+                ("orchestrator.py", Some(1), "error", "ruff invalid-syntax", "Expected an expression"),
+                ("orchestrator.py", Some(6), "error", "ruff F401", "`os` imported but unused"),
+            ]
+        );
+    }
+
+    #[test]
+    fn mypy_s_notes_are_dropped_and_an_error_without_a_code_is_mypy_s_own() {
+        let tracked = Tracked::new(vec!["orchestrator.py".into()]);
+        let printed = "orchestrator.py:594:5: error: Need type annotation for \"tokens\"  [var-annotated]\n\
+                       orchestrator.py:594:5: note: See https://x\n\
+                       orchestrator.py:7: error: Bad [x] thing\n";
+        let found = read("mypy", printed.as_bytes(), Path::new("/repo"), &tracked);
+        assert_eq!(
+            fields(&found),
+            [
+                ("orchestrator.py", Some(594), "error", "mypy var-annotated", "Need type annotation for \"tokens\""),
+                ("orchestrator.py", Some(7), "error", "mypy", "Bad [x] thing"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_name_ruff_prints_lossily_is_not_guessed_between_two_files() {
+        let names = [&b"a\xe9.py"[..], b"a\xe8.py"].map(|n| OsString::from_vec(n.to_vec()));
+        let printed = "a\u{fffd}.py:1:8: F401 `os` imported but unused\n";
+        assert!(read("ruff", printed.as_bytes(), Path::new("/repo"), &Tracked::new(names.to_vec())).is_empty());
     }
 
     #[test]

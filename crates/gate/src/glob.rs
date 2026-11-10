@@ -59,7 +59,7 @@ fn translate(glob: &str) -> String {
             }
             "**" => out.push_str(".*"),
             part => {
-                out.push_str(&translate_name(part));
+                out.push_str(&translate_name(part, false));
                 if k < last {
                     out.push('/');
                 }
@@ -69,9 +69,18 @@ fn translate(glob: &str) -> String {
     out
 }
 
-/// One `/`-free part of a glob as a regex, `*` and `?` and bracket expressions within one name; fnmatch's
-/// `_translate` with Python's star and question mark replaced by ones that stop at a slash.
-fn translate_name(part: &str) -> String {
+/// Whether the pattern `pattern` matches `name` whole, as Python's `fnmatch.fnmatchcase` reads one: `*`, `?` and a
+/// bracket expression match a slash like any other character, so `*` crosses directories and `**` means no more
+/// than `*`. What mutmut's only_mutate and do_not_mutate are, where [`Globs`] are gate.toml's.
+pub fn fnmatch(name: &str, pattern: &str) -> bool {
+    let whole = Regex::new(&format!("^(?s:{})$", translate_name(pattern, true)));
+    whole.expect("a translated pattern is a valid regex").is_match(name)
+}
+
+/// `part` as a regex, by fnmatch's `_translate`: `*`, `?` and bracket expressions, which match a slash only when
+/// `across_slashes`; without it `part` is one `/`-free part of a glob, and they stay within one name.
+fn translate_name(part: &str, across_slashes: bool) -> String {
+    let one = if across_slashes { "." } else { "[^/]" };
     let chars: Vec<char> = part.chars().collect();
     let mut out = String::new();
     let mut i = 0;
@@ -80,12 +89,14 @@ fn translate_name(part: &str) -> String {
         i += 1;
         match c {
             '*' => {
-                if !out.ends_with("[^/]*") {
-                    out.push_str("[^/]*");
+                // A run of stars is one star.
+                if i < 2 || chars[i - 2] != '*' {
+                    out.push_str(one);
+                    out.push('*');
                 }
             }
-            '?' => out.push_str("[^/]"),
-            '[' => match bracket(&chars, i) {
+            '?' => out.push_str(one),
+            '[' => match bracket(&chars, i, across_slashes) {
                 Some((class, end)) => {
                     out.push_str(&class);
                     i = end;
@@ -98,9 +109,10 @@ fn translate_name(part: &str) -> String {
     out
 }
 
-/// The bracket expression whose members start at `chars[start]`, just past its `[`, as a regex class that never
-/// matches a slash, and the index past its `]`; None when no `]` closes it, so the `[` is itself.
-fn bracket(chars: &[char], start: usize) -> Option<(String, usize)> {
+/// The bracket expression whose members start at `chars[start]`, just past its `[`, as a regex class, which matches
+/// a slash only when `across_slashes` and its members say so, and the index past its `]`; None when no `]` closes
+/// it, so the `[` is itself.
+fn bracket(chars: &[char], start: usize, across_slashes: bool) -> Option<(String, usize)> {
     let j = closing_bracket(chars, start)?;
     let negated = chars[start] == '!';
     let mut chunks = range_chunks(chars, start, j, negated);
@@ -116,6 +128,8 @@ fn bracket(chars: &[char], start: usize) -> Option<(String, usize)> {
         (false, true) => NEVER.to_string(),
         // `[!]` with no member: any character, a slash too, as fnmatch's `.`.
         (true, true) => "(?s:.)".to_string(),
+        (false, false) if across_slashes => format!("[{members}]"),
+        (true, false) if across_slashes => format!("[^{members}]"),
         (false, false) => format!("[[{members}]&&[^/]]"),
         (true, false) => format!("[^{members}/]"),
     };
@@ -207,6 +221,21 @@ mod tests {
         assert!(matches("[!]]", "a"));
         assert!(!matches("[!]]", "]"));
         assert!(matches("[-a]", "-"));
+    }
+
+    #[test]
+    fn fnmatch_s_wildcards_and_brackets_match_a_slash() {
+        assert!(fnmatch("src/pkg/deep/mod.py", "src/*.py"));
+        assert!(fnmatch("src/a.py", "src?a.py"));
+        assert!(fnmatch("a/c", "a[.-0]c"));
+        assert!(fnmatch("a/c", "a[!b]c"));
+        assert!(!fnmatch("abc", "a[!b]c"));
+        assert!(fnmatch("a/b/c.py", "**/c.py"));
+        assert!(!fnmatch("c.py", "**/c.py"));
+        assert!(!fnmatch("src/a.pyc", "src/*.py"));
+        assert!(fnmatch("a\nb", "a*b"));
+        assert!(fnmatch("a[", "a["));
+        assert!(!fnmatch("m", "[z-a]"));
     }
 
     #[test]

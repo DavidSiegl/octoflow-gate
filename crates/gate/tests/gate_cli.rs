@@ -1,23 +1,61 @@
 //! The `gate` binary run on a git repository of its own, as gate.py's TestGate runs gate.py (tests/test_gate.py):
-//! the whole report it writes held to gate.py's golden files, and its exit statuses.
-//!
-//! Only `gate_ok` is reproduced here. `gate_error` is a failing change whose findings are ruff's and the
-//! test-integrity check's, and ruff comes with gate-standalone/16: until then golden_reports.rs renders it
-//! from a report built to match, as it does the quality_report_* files.
+//! the whole report it writes held to gate.py's golden files, and its exit statuses. The linters are stubs, as
+//! TestGate's are ([`Repo::stub_linters`]).
 
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
-use std::path::PathBuf;
-use std::process::Command;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
 
 use common::Repo;
 use gate::report::GATE_VERSION;
 
 mod common;
 
-/// TestGate's BASE_FILES: rules for ruff, which this binary does not run yet, and f.py of three lines.
+/// TestGate's BASE_FILES: rules for ruff, and f.py of three lines.
 fn test_gate_repo() -> Repo {
     Repo::with(&[("pyproject.toml", b"[tool.ruff]\n"), ("f.py", b"line1 = 1\nline2 = 2\nline3 = 3\n")])
+}
+
+/// TestGate's junit: a pytest JUnit report, results.xml in the tree, of test_ok passing and `failing`, each a test
+/// and its failure's message.
+fn junit(repo: &Repo, failing: &[(&str, &str)]) {
+    let case = |(name, message): &(&str, &str)| {
+        let failure = format!("<failure message=\"{message}\">trace</failure>");
+        format!("<testcase classname=\"tests.T\" name=\"{name}\">{failure}</testcase>")
+    };
+    let cases: String = failing.iter().map(case).collect();
+    let report = format!(
+        "<?xml version=\"1.0\"?><testsuites><testsuite name=\"pytest\">\
+         <testcase classname=\"tests.T\" name=\"test_ok\"/>{cases}</testsuite></testsuites>"
+    );
+    repo.put("results.xml", report.as_bytes());
+}
+
+/// TestGate's coverage: a Cobertura report, coverage.xml in the tree, of f.py, with each of `hits` a line and how
+/// often it ran. Gives back its path.
+fn coverage(repo: &Repo, hits: &[(u32, u32)]) -> PathBuf {
+    let lines: String = hits.iter().map(|(n, hits)| format!("<line number=\"{n}\" hits=\"{hits}\"/>")).collect();
+    let report = format!(
+        "<?xml version=\"1.0\" ?><coverage><sources><source>{}</source></sources><packages><package name=\".\">\
+         <classes><class name=\"f.py\" filename=\"f.py\"><lines>{lines}</lines></class>\
+         </classes></package></packages></coverage>",
+        repo.repo.display()
+    );
+    repo.put("coverage.xml", report.as_bytes());
+    repo.repo.join("coverage.xml")
+}
+
+/// Runs `gate --base base --tests results.xml --coverage coverage --out <outside>/quality.md` in `repo` with the
+/// linters' stubs; gives back the finished process and the quality file and quality.json it wrote.
+fn golden_run(repo: &Repo, base: &str, coverage: &Path) -> (Output, [String; 2]) {
+    let out = repo.outside.join("quality.md");
+    let mut gate = repo.gate_command(base);
+    gate.args(["--python".as_ref(), common::python().as_os_str()]);
+    gate.args(["--tests".as_ref(), "results.xml".as_ref(), "--coverage".as_ref(), coverage.as_os_str()]);
+    let done = gate.arg("--out").arg(&out).env("PATH", repo.stub_linters()).output().unwrap();
+    let written = [out, repo.outside.join("quality.json")].map(|p| std::fs::read_to_string(p).unwrap());
+    (done, written)
 }
 
 /// Passes when `written`, the quality file and quality.json, are tests/golden/<name>.txt and .json, with each sha of
@@ -41,29 +79,48 @@ fn the_file_of_a_passing_change_is_golden() {
     repo.put(name, b"m = 1\n");
     repo.git(&[OsStr::new("add"), name]);
     repo.put("f.py", b"line1 = 1\nline2 = 2\nline3 = 3\nnew4 = 4\n");
-    repo.put("results.xml", b"<?xml version=\"1.0\"?><testsuites><testsuite name=\"pytest\">\
-                               <testcase classname=\"tests.T\" name=\"test_ok\"/></testsuite></testsuites>");
-    let coverage = format!(
-        "<?xml version=\"1.0\" ?><coverage><sources><source>{}</source></sources><packages><package name=\".\">\
-         <classes><class name=\"f.py\" filename=\"f.py\"><lines><line number=\"4\" hits=\"1\"/></lines></class>\
-         </classes></package></packages></coverage>",
-        repo.repo.display()
-    );
-    repo.put("coverage.xml", coverage.as_bytes());
-    let out = repo.outside.join("quality.md");
-    let coverage = repo.repo.join("coverage.xml");
-    let done = repo.gate("HEAD", &[
-        "--tests".as_ref(), "results.xml".as_ref(), "--coverage".as_ref(), coverage.as_os_str(),
-        "--out".as_ref(), out.as_os_str(),
-    ]);
+    junit(&repo, &[]);
+    let (done, written) = golden_run(&repo, "HEAD", &coverage(&repo, &[(4, 1)]));
     assert_eq!(done.status.code(), Some(0), "{}", String::from_utf8_lossy(&done.stderr));
     assert_eq!(done.stdout, b"");
-    let json = repo.outside.join("quality.json");
+    let (out, json) = (repo.outside.join("quality.md"), repo.outside.join("quality.json"));
     let said = format!("GATE: OK, in {} and {}\n", out.display(), json.display());
     assert_eq!(String::from_utf8_lossy(&done.stderr), said);
     let head = repo.git(&["rev-parse", "HEAD"]).trim().to_string();
-    let written = [&out, &json].map(|p| std::fs::read_to_string(p).unwrap());
     assert_golden("gate_ok", written, &[(head, "<head>")]);
+}
+
+/// gate.py's test of this change runs test-integrity as its only check, the others running pytest, whose words are
+/// the host's. This binary runs them all, and flaky-tests has one finding to weigh, of the test the change skips,
+/// which is taken out of both files before they are held to the golden ones.
+#[test]
+fn the_file_of_a_failing_change_is_golden() {
+    let repo = test_gate_repo();
+    let tests = "def test_one():\n    assert 1\n\n\ndef test_two():\n    assert 2\n";
+    repo.commit(&[("tests/test_f.py", tests.as_bytes()), ("uv.lock", b"version = 1\n")], "tests");
+    let base = repo.git(&["rev-parse", "HEAD"]).trim().to_string();
+    repo.commit(&[("README.md", b"Read me.\n")], "head");
+    let head = repo.git(&["rev-parse", "HEAD"]).trim().to_string();
+    repo.put("tests/test_f.py", b"import pytest\n\n\n@pytest.mark.skip\ndef test_one():\n    assert 1\n");
+    repo.put("uv.lock", b"version = 2\n");
+    let new: String = (4..23).map(|k| format!("new{k} = {k}\n")).collect();
+    repo.put("f.py", format!("line1 = 1\nline2 = 2\nline3 = 3\n{new}import os  # noqa: F401\n").as_bytes());
+    junit(&repo, &[("test_limit", "AssertionError: 3 != 2")]);
+    let hits: Vec<(u32, u32)> = (1..24).map(|n| (n, u32::from(n < 14))).collect();
+    let found = "f.py:2:1: F401 `os` imported but unused\n\
+                 f.py:4:7: B023 Function definition does not bind loop variable `x`\nFound 2 errors.\n";
+    repo.says("ruff", found.as_bytes());
+    let (done, [file, json]) = golden_run(&repo, &base, &coverage(&repo, &hits));
+    assert_eq!(done.status.code(), Some(1), "{}", String::from_utf8_lossy(&done.stderr));
+
+    let skipped = "`tests/test_f.py:5` warning flaky-tests not-rerun: `test_one` ";
+    let (before, rest) = file.split_once(&format!("4. {skipped}")).unwrap_or_else(|| panic!("{file}"));
+    let file = format!("{before}{}", rest.split_once('\n').unwrap().1);
+    let (findings, rest) = json.split_once("\n  ],\n  \"findings_total\": 4,").unwrap_or_else(|| panic!("{json}"));
+    let (kept, last) = findings.rsplit_once(",\n    {\n").unwrap();
+    assert!(last.contains("\"rule\": \"flaky-tests not-rerun\""), "{last}");
+    let json = format!("{kept}\n  ],\n  \"findings_total\": 3,{rest}");
+    assert_golden("gate_error", [file, json], &[(base, "<base>"), (head, "<head>")]);
 }
 
 #[test]

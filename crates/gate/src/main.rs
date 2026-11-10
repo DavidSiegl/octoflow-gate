@@ -4,13 +4,13 @@
 //! ```text
 //! gate --base REV [--config PYPROJECT] [--config GATE_TOML] [--tests JUNIT]... [--coverage XML]...
 //!      [--out FILE] [--json FILE] [--mutation-budget SECONDS] [--base-run-budget SECONDS]
-//!      [--test-contexts COVERAGE] [--rust-syntax PATH]
+//!      [--test-contexts COVERAGE] [--rust-syntax PATH] [--python PATH]
 //! ```
 //!
-//! Its flags are gate.py's. `--test-contexts` is read, but nothing uses it until mutmut's half of surviving-mutants is
-//! ported (gate-standalone/16); `--rust-syntax` names gate.py's helper, which this binary does not need. Exit status 0
-//! for GATE: OK, 1 for GATE: ERROR, 2 when it could not judge the change or the arguments are bad, and 130 for Ctrl-C;
-//! with 2 or 130 it writes no report.
+//! Its flags are gate.py's, and `--python`, which names what gate.py takes from the Python that runs it
+//! (judge::Change::python). `--rust-syntax` names gate.py's helper, which this binary does not need. Exit status 0 for
+//! GATE: OK, 1 for GATE: ERROR, 2 when it could not judge the change or the arguments are bad, and 130 for Ctrl-C; with
+//! 2 or 130 it writes no report.
 
 use std::ffi::{OsStr, OsString};
 use std::io::Write;
@@ -30,13 +30,14 @@ const EXIT_UNJUDGED: u8 = 2;
 
 const USAGE: &str = "usage: gate --base REV [--config FILE] [--coverage XML] [--tests XML] [--out FILE] [--json FILE]
             [--mutation-budget SECONDS] [--base-run-budget SECONDS] [--test-contexts COVERAGE]
-            [--rust-syntax PATH] [--help]";
+            [--rust-syntax PATH] [--python PATH] [--help]";
 
 const HELP: &str = "
-The Rust port of gate.py, which judges only what has been ported so far: pymarkdown, shellcheck, actionlint and clippy
-over the files the repository tracks, the parser checks, surviving-mutants and passes-at-base over Rust, gate.toml's
-[[test]] commands, the tests and coverage they report, files committed under mutmut's mutants/, stray line ends,
-suppressions added and edited build configuration. It writes the quality file: GATE: OK or GATE: ERROR on its first
+The Rust port of gate.py. It judges by ruff, mypy, pymarkdown, shellcheck, actionlint and clippy over the files the
+repository tracks, the checks test-integrity, cognitive-complexity, vague-names, flaky-tests, passes-at-base and
+surviving-mutants over Python and Rust, gate.toml's [[test]] commands, the tests and coverage they report, files
+committed under mutmut's mutants/, stray line ends, suppressions added and edited build configuration. It writes the
+quality file: GATE: OK or GATE: ERROR on its first
 line, then the failed conditions, the findings on lines added since --base, failing tests, coverage of new code,
 suppressions added and edited build configuration. Exit status 0 for OK, 1 for ERROR, 2 when it could not judge,
 writing nothing. --out FILE also writes quality.json, the same report as data.
@@ -56,14 +57,19 @@ options:
                           its name FILE's with the .md made .json, or with .json added
   --json FILE             write quality.json, the report as data, here; with --out, instead of beside FILE
   --mutation-budget SECONDS
-                          the seconds the surviving-mutants check may run cargo-mutants for, in place of gate.toml's
-                          budgets.mutation
+                          the seconds the surviving-mutants check may run mutmut and cargo-mutants for, in place of
+                          gate.toml's budgets.mutation
   --base-run-budget SECONDS
                           the seconds the passes-at-base check may run the changed tests at the base for, in place
                           of gate.toml's budgets.base-run
   --test-contexts COVERAGE
-                          accepted for gate.py's sake; no check uses it yet
-  --rust-syntax PATH      accepted for gate.py's sake, and ignored";
+                          a coverage.py data file of the tree's test run with a context per test, as
+                          `pytest --cov-context=test` writes it: the surviving-mutants check then has mutmut run
+                          only the tests it records reaching the changed functions
+  --rust-syntax PATH      accepted for gate.py's sake, and ignored
+  --python PATH           the Python of the judged project, in which its pytest, pytest-randomly and mutmut are
+                          installed, in place of gate.toml's python: a path, or a name without a slash for PATH to
+                          find. Without either, python3";
 
 /// The command line, parsed: what [`gate_command`] runs.
 #[derive(Debug, PartialEq, Eq)]
@@ -79,7 +85,7 @@ struct Args {
 /// What a command line asks for.
 #[derive(Debug, PartialEq, Eq)]
 enum Asked {
-    Run(Args),
+    Run(Box<Args>),
     Help,
 }
 
@@ -186,7 +192,9 @@ fn parse_args(argv: impl IntoIterator<Item = OsString>) -> Result<Asked, String>
             "--mutation-budget" => {
                 given.mutation_budget = Some(seconds(&value()?).map_err(|e| format!("argument {name}: {e}"))?);
             }
-            "--test-contexts" | "--rust-syntax" => {
+            "--python" => given.python = Some(python(value()?).map_err(|e| format!("argument {name}: {e}"))?.into()),
+            "--test-contexts" => given.test_contexts = Some(value()?.into()),
+            "--rust-syntax" => {
                 value()?;
             }
             _ => unrecognized.push(name),
@@ -208,7 +216,7 @@ fn parse_args(argv: impl IntoIterator<Item = OsString>) -> Result<Asked, String>
             return Err("--json names the file --out writes".into());
         }
     }
-    Ok(Asked::Run(Args { base, given, out, json }))
+    Ok(Asked::Run(Box::new(Args { base, given, out, json })))
 }
 
 /// `arg` as an option's name and the value it carries after `=`, as in `--name=value`; the whole of `arg` and None
@@ -228,6 +236,15 @@ fn seconds(text: &OsStr) -> Result<u64, String> {
     let shown = text::path(text);
     let n: i64 = shown.trim().parse().map_err(|_| format!("expected a whole number of seconds, not '{shown}'"))?;
     u64::try_from(n).ok().filter(|&n| n >= 1).ok_or_else(|| format!("must be at least 1, not {n}"))
+}
+
+/// `named`, the judged project's Python given on the command line; errs with why it is none when it is blank, as
+/// gate.toml's `python` may not be either (settings::Settings::python).
+fn python(named: OsString) -> Result<OsString, String> {
+    match text::py_strip(&text::path(&named)).is_empty() {
+        true => Err("must be the path or the name of a Python".into()),
+        false => Ok(named),
+    }
 }
 
 /// Whether `gate --config path` names a file of the gate's settings rather than a pyproject.toml of rules.
@@ -305,7 +322,7 @@ mod tests {
 
     fn run(args: &[&str]) -> Args {
         match parse(args) {
-            Ok(Asked::Run(args)) => args,
+            Ok(Asked::Run(args)) => *args,
             other => panic!("{other:?}"),
         }
     }
@@ -343,8 +360,13 @@ mod tests {
                    "argument --base-run-budget: expected a whole number of seconds, not '1.5'");
         assert_eq!(run(&["--base", "m", "--base-run-budget", "7"]).given.base_run_budget, Some(7));
         assert_eq!(run(&["--base", "m", "--mutation-budget", "5"]).given.mutation_budget, Some(5));
-        let ignored = ["--rust-syntax", "x", "--test-contexts", "y"];
-        assert!(parse(&[&["--base", "m"][..], &ignored].concat()).is_ok());
+        assert_eq!(run(&["--base", "m", "--python=.venv/bin/python"]).given.python, Some(".venv/bin/python".into()));
+        assert_eq!(parse(&["--base", "m", "--python", " "]).unwrap_err(),
+                   "argument --python: must be the path or the name of a Python");
+        assert_eq!(parse(&["--base", "m", "--python="]).unwrap_err(),
+                   "argument --python: must be the path or the name of a Python");
+        assert_eq!(run(&["--base", "m", "--test-contexts", ".coverage"]).given.test_contexts, Some(".coverage".into()));
+        assert!(parse(&["--base", "m", "--rust-syntax", "x"]).is_ok());
         assert_eq!(parse(&["--base", "m", "-x", "y"]).unwrap_err(), "unrecognized arguments: -x y");
         assert_eq!(parse(&["--base", "m", "x=y"]).unwrap_err(), "unrecognized arguments: x=y");
         assert_eq!(parse(&["--bogus", "--help"]), Ok(Asked::Help));

@@ -35,10 +35,10 @@ pub struct Finished {
 }
 
 impl Finished {
-    /// What a tool that went wrong, such as cargo, said about it, in a line of at most 160 characters, the last "…"
-    /// when cut: the exception of a pytest internal error, else the exception that ended it when it printed a
-    /// traceback, else the first line of its standard error, else the last line of its output; "nothing" when it
-    /// printed nothing. Only `\n` ends a line, so a path in it stays whole. gate.py's `_said`.
+    /// What a tool that went wrong, such as cargo, said about it, in a line cut as text::clip cuts one: the
+    /// exception of a pytest internal error, else the exception that ended it when it printed a traceback, else the
+    /// first line of its standard error, else the last line of its output; "nothing" when it printed nothing. Only
+    /// `\n` ends a line, so a path in it stays whole. gate.py's `_said`.
     pub fn said(&self) -> String {
         let lines = |printed: &[u8]| -> Vec<String> {
             let printed = crate::text::lossless(printed);
@@ -55,10 +55,7 @@ impl Finished {
             (None, None, _, Some(last)) => last,
             _ => "nothing",
         };
-        if said.chars().count() <= 160 {
-            return said.to_string();
-        }
-        said.chars().take(159).chain(['…']).collect()
+        crate::text::clip(said)
     }
 }
 
@@ -92,7 +89,7 @@ pub fn run(argv: &[&OsStr], cwd: &Path, timeout: Duration) -> std::io::Result<Fi
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Extras<'a> {
     /// Variables set on top of [`tool_env`], replacing any of the same name.
-    pub env: &'a [(&'a str, &'a str)],
+    pub env: &'a [(&'a str, &'a OsStr)],
     /// When given, a process that overruns its timeout is first sent SIGINT, as Ctrl-C would, and given this long to
     /// exit before it is killed; it starts with SIGINT's default disposition even where the gate ignores SIGINT, as a
     /// command a Jenkins `sh` step runs does, so that the signal reaches it. For a tool that writes what it has done
@@ -353,7 +350,7 @@ mod tests {
             .into_iter()
             .map(OsStr::new)
             .collect();
-        let extras = Extras { env: &[("GATE_TEST_EXTRA", "set")], soft_stop: Some(Duration::from_secs(5)) };
+        let extras = Extras { env: &[("GATE_TEST_EXTRA", OsStr::new("set"))], soft_stop: Some(Duration::from_secs(5)) };
         let done = run_with(&argv, Path::new("."), Duration::from_millis(300), &extras).unwrap();
         assert_eq!((done.status, done.stopped), (7, true));
         assert_eq!(done.stdout, b"set\ninterrupted\n");

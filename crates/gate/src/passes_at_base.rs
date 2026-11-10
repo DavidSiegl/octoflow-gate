@@ -1,6 +1,6 @@
-//! The passes-at-base check for Rust: the tests a change adds or edits, run with cargo-nextest against the code the
-//! change started from. A test that passes there does not test the change. gate.py's `_rust_passes_at_base`; its
-//! Python half comes with gate-standalone/16.
+//! The passes-at-base check: the tests a change adds or edits, run against the code the change started from. A test
+//! that passes there does not test the change. Python's tests run with pytest (python_at_base.rs), and Rust's, here,
+//! with cargo-nextest. gate.py's `passes_at_base`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
@@ -14,8 +14,9 @@ use model::{Lines, Unreadable};
 use crate::copies::{copy_base_with_tests, finding, in_scratch_directory, sort_by_place, Budget};
 use crate::diff::removal_points;
 use crate::junit::{junit_outcomes, Outcome};
-use crate::parser_checks::RustChange;
+use crate::parser_checks::{RustChange, Sources};
 use crate::process::{run_with, Extras};
+use crate::python_at_base::python_at_base;
 use crate::{text, Unjudged};
 
 /// The profile of the nextest configuration the runs at the base take with `--config-file`, in place of the copy's
@@ -28,11 +29,35 @@ const NEXTEST_PROFILE: &str = "gate-base";
 /// Cargo exits with it for any error, rustc's among them.
 const NEXTEST_BUILD_FAILED: i32 = 101;
 
-/// The passes-at-base check's findings on `rust`, by path and line, a finding on no path or line first; each rule is
-/// the check's own, without its name, and each severity "warning".
+/// The passes-at-base check's findings on `sources`, by path and line, a finding on no path or line first; each rule
+/// is the check's own, without its name, and each severity "warning".
+///
+/// Runs the tests the change adds or edits against the base's code and reports each one that passed there (rule
+/// `passes-at-base`): Python's as python_at_base::python_at_base says, then Rust's as [`rust_at_base`] does. Each
+/// language's runs may take `budget` seconds, Python's counted from when its copy of the base is made and Rust's
+/// from the start of the check, so that Rust's have what Python's left of them.
+pub fn passes_at_base(sources: &Sources, budget: u64) -> Vec<Finding> {
+    let budget = Budget::starting_now(budget);
+    let mut out = python_at_base(&sources.python, budget.seconds);
+    out.extend(rust_at_base(&sources.rust, &budget));
+    sort_by_place(&mut out);
+    out
+}
+
+/// The check's finding that `budget` ran out `when`, a clause such as "while it collected the changed tests",
+/// stopping `runner`, the test runner as it is named, such as "cargo nextest".
+pub fn budget_reached(budget: &Budget, runner: &str, when: &str) -> Finding {
+    let message = format!(
+        "{runner} was stopped at {} seconds (`--base-run-budget`) {when}, so none of them was judged.",
+        budget.seconds
+    );
+    finding(None, None, "budget-reached", message)
+}
+
+/// Rust's findings of the check on `rust`, in no order.
 ///
 /// When the change edits Rust code under test ([`RustChange::edits_code`]), runs the Rust tests it adds or edits
-/// ([`changed_tests`]) against the base's code with cargo-nextest, within `budget` seconds, and reports at its fn
+/// ([`changed_tests`]) against the base's code with cargo-nextest, by `budget`'s deadline, and reports at its fn
 /// each one that passed there (rule `passes-at-base`): it does not test the change. A change to the tests alone has
 /// no "without the change" to run them in.
 ///
@@ -48,8 +73,7 @@ const NEXTEST_BUILD_FAILED: i32 = 101;
 /// file that does not parse, a test whose target cannot be placed, a copy that cannot be made, submodules the copy
 /// leaves empty, and a cargo-nextest that cannot start or fails otherwise are `not-run` findings saying so; a copy
 /// that cannot be removed afterwards is a `not-removed` one.
-pub fn passes_at_base(rust: &RustChange, budget: u64) -> Vec<Finding> {
-    let budget = Budget::starting_now(budget);
+fn rust_at_base(rust: &RustChange, budget: &Budget) -> Vec<Finding> {
     if !rust.edits_code() {
         return vec![];
     }
@@ -69,10 +93,9 @@ pub fn passes_at_base(rust: &RustChange, budget: u64) -> Vec<Finding> {
     }
     if !separable.is_empty() {
         out.extend(in_scratch_directory("not-run", "to run the changed Rust tests at the base in", |dir| {
-            base_run_findings(rust, dir, &separable, &budget)
+            base_run_findings(rust, dir, &separable, budget)
         }));
     }
-    sort_by_place(&mut out);
     out
 }
 
@@ -314,13 +337,7 @@ fn default_target(package: &Path, parts: &[String]) -> Option<(Vec<String>, Vec<
 /// The findings of `tests`, all in `target`, built and run with cargo-nextest as `run` says, within `budget`; and
 /// whether the budget stopped it. A target whose tests do not compile gives nothing, as [`passes_at_base`] says.
 fn target_findings(run: &Run, target: &Target, tests: &[&ChangedTest], budget: &Budget) -> (Vec<Finding>, bool) {
-    let reached = |when: String| {
-        let message = format!(
-            "cargo nextest was stopped at {} seconds (`--base-run-budget`) {when}, so none of them was judged.",
-            budget.seconds
-        );
-        (vec![finding(None, None, "budget-reached", message)], true)
-    };
+    let reached = |when: String| (vec![budget_reached(budget, "cargo nextest", &when)], true);
     let not_run = |message: String| (vec![finding(None, None, "not-run", message)], false);
     let left = budget.deadline.saturating_duration_since(Instant::now());
     if left.is_zero() {
@@ -346,7 +363,7 @@ fn target_findings(run: &Run, target: &Target, tests: &[&ChangedTest], budget: &
     argv.extend([run.config.as_os_str(), OsStr::new("--profile"), OsStr::new(NEXTEST_PROFILE)]);
     argv.extend(target.args.iter().map(OsStr::new));
     argv.extend([OsStr::new("-E"), OsStr::new(&filter)]);
-    let extras = Extras { env: &[("CARGO_TERM_COLOR", "never")], soft_stop: None };
+    let extras = Extras { env: &[("CARGO_TERM_COLOR", OsStr::new("never"))], soft_stop: None };
     let done = match run_with(&argv, &run.tree.join(&target.package), left, &extras) {
         Ok(done) => done,
         Err(e) => {

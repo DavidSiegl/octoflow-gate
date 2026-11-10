@@ -4,17 +4,17 @@
 //! passes_at_base.
 
 use std::cell::OnceCell;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::io::Read;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
 use checks::{complexity, integrity, names, ChangedFile, Finding, Side};
-use lang_python::FIRST_LINE_BYTES;
+use lang_python::{Unit, FIRST_LINE_BYTES};
 use model::{SourceFile, Unreadable};
 
-use crate::diff::{removed_lines, ChangedLines};
+use crate::diff::{removal_points, removed_lines, ChangedLines};
 use crate::judge::Change;
 use crate::settings::Settings;
 use crate::{git, text, Unjudged};
@@ -46,6 +46,10 @@ impl<'a> Sources<'a> {
         })
     }
 }
+
+/// (path, why) for each file a check could not read or parse, the path from the tree's top level and why a clause a
+/// finding can open with, as model::Unreadable's.
+pub type UnreadFiles = Vec<(OsString, String)>;
 
 /// A change's Python: the files, and which of the change's paths are the code under test rather than its tests.
 pub struct PythonChange<'a> {
@@ -83,6 +87,39 @@ impl PythonChange<'_> {
     /// [`is_code`]: PythonChange::is_code
     pub fn edits_code(&self) -> bool {
         any_path(self.change, |path| self.is_code(path))
+    }
+
+    /// The units (lang_python::Unit) the change touched, each with its file's path, in the Python files it leaves
+    /// as regular files in the working tree, adds lines to or removes lines from, and whose paths `in_scope` accepts;
+    /// and each such file that cannot be read or does not parse.
+    /// `touched(unit, added, removal_points)` says whether the change touched a unit of a file, given the lines the
+    /// change added to the file and the points it only removed lines at (diff::removal_points). gate.py's
+    /// `_changed_python_units`.
+    pub fn changed_units(
+        &self,
+        in_scope: impl Fn(&OsStr) -> bool,
+        touched: impl Fn(&Unit, &BTreeSet<u32>, &BTreeSet<u32>) -> bool,
+    ) -> (Vec<(OsString, Unit)>, UnreadFiles) {
+        let removals = removal_points(&self.change.diff);
+        let (mut units, mut unreadable) = (vec![], vec![]);
+        for file in &self.files {
+            let Some(path) = file.after.as_ref().map(|after| &after.path) else { continue };
+            let removed = removals.get(path).cloned().unwrap_or_default();
+            if (file.added.is_empty() && removed.is_empty()) || !in_scope(path) {
+                continue;
+            }
+            let read = std::fs::read(self.change.root.join(path))
+                .map_err(|e| format!("could not be read ({e})"))
+                .and_then(|source| lang_python::units(&source).map_err(|unreadable| unreadable.why));
+            match read {
+                Ok(read) => {
+                    let touched = read.into_iter().filter(|unit| touched(unit, &file.added, &removed));
+                    units.extend(touched.map(|unit| (path.clone(), unit)));
+                }
+                Err(why) => unreadable.push((path.clone(), why)),
+            }
+        }
+        (units, unreadable)
     }
 }
 
@@ -129,7 +166,7 @@ fn any_path(change: &Change, holds: impl Fn(&OsStr) -> bool) -> bool {
 
 /// Whether `settings` place the file at `path` among the Python tests: a `.py` file `test-files.python` matches.
 /// gate.py's `GateSettings.python_test`.
-fn python_test(settings: &Settings, path: &OsStr) -> bool {
+pub(crate) fn python_test(settings: &Settings, path: &OsStr) -> bool {
     path.as_bytes().ends_with(b".py") && settings.python_tests.matches(path)
 }
 
@@ -408,6 +445,7 @@ mod tests {
             ],
             mutmut_state: vec![],
             settings: Settings::default(),
+            python: PathBuf::from("python3"),
         };
         let found: Vec<(String, String)> = changed_golden_files(&change)
             .into_iter()

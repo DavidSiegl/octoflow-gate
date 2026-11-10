@@ -1,7 +1,6 @@
 //! The fixture `cargo xtask compare` judges: a git repository whose working tree changes its branch `main` so that
-//! each part the Rust gate has ported has something to report. Its files are written here rather than committed to
-//! this repository, whose own gate would judge their findings, stray line end and `mutants/` file as this
-//! repository's.
+//! each linter and check has something to report. Its files are written here rather than committed to this
+//! repository, whose own gate would judge their findings, stray line end and `mutants/` file as this repository's.
 
 use std::path::Path;
 use std::process::Command;
@@ -10,7 +9,7 @@ use std::process::Command;
 const BASE: &[(&str, &str)] = &[
     (".gitignore", "/junit.xml\n/coverage.xml\n"),
     ("gate.toml", GATE_TOML),
-    ("pyproject.toml", "[project]\nname = \"fixture\"\nversion = \"0.1.0\"\n"),
+    ("pyproject.toml", PYPROJECT),
     ("versions.txt", "shellcheck 0.10.0\n"),
     ("run-tests.sh", "#!/bin/sh\n# No tests yet.\necho '<testsuite name=\"suite\" tests=\"0\"/>' > junit.xml\n"),
     ("README.md", "# Fixture\n\nThe change `cargo xtask compare` judges.\n"),
@@ -32,7 +31,7 @@ fn change() -> Vec<(&'static str, String)> {
         // An edit to the tree's own settings, and to two files that hold build configuration: a ruleset of the
         // gate's own, and one gate.toml names.
         ("gate.toml", format!("# The fixture's settings.\n{GATE_TOML}")),
-        ("pyproject.toml", "[project]\nname = \"fixture\"\nversion = \"0.2.0\"\n".into()),
+        ("pyproject.toml", PYPROJECT.replace("0.1.0", "0.2.0")),
         ("versions.txt", "shellcheck 0.11.0\n".into()),
         // shellcheck's SC2086 on line 2, and a suppression of it on line 3.
         ("deploy.sh", "#!/bin/sh\necho $1\n# shellcheck disable=SC2086\nrm $2\n".into()),
@@ -51,21 +50,33 @@ fn change() -> Vec<(&'static str, String)> {
         ),
         // actionlint's finding of an untrusted value expanded in a script, on line 8.
         (".github/workflows/ci.yml", format!("{WORKFLOW}      - run: echo \"${{{{ {UNTRUSTED} }}}}\"\n")),
-        // What a linter the Rust gate does not run reports, which the comparison leaves out: ruff's F401 on line 1,
-        // ahead of every ported finding in gate.py's list.
-        ("a.py", "import os\n".into()),
+        // ruff's F401 on line 1, and mypy's error of an assignment on line 3.
+        ("a.py", "import os\n\nx: int = \"a\"\n".into()),
         // What the parser checks report of Python, in a change to its code: a function over the cognitive-complexity
         // limit on lines 5-39 of calc.py, with a vague name on its line 6, which a comment for ruff follows; and in
         // its tests, a test removed, a skip added on line 12 of test_calc.py, and a constant an assertion reads
-        // changed on line 5.
+        // changed on line 5. test_sum, added on line 17, passes without the change, as passes-at-base reports.
+        // mutmut finds no test that runs `big`, and the mutants of `scale`, on line 42, surviving test_scale.py.
         ("calc.py", calc_changed()),
+        // The one test mutmut runs ([`PYPROJECT`]): it calls `scale` and does not look at what it gives.
+        ("test_scale.py", "from calc import scale\n\n\ndef test_scale():\n    scale(2, 3)\n".into()),
         (
             "test_calc.py",
             TEST_CALC
                 .replace("from calc", "import pytest\n\nfrom calc")
                 .replace("EXPECTED = 3", "EXPECTED = 4")
                 .replace("def test_zero():\n    assert add(0, 0) == 0\n\n\n", "")
-                .replace("def test_negative", "@pytest.mark.skip\ndef test_negative"),
+                .replace("def test_negative", "@pytest.mark.skip\ndef test_negative")
+                + "\n\ndef test_sum():\n    assert add(1, 2) == 3\n",
+        ),
+        // A test that fails on every second run, at line 6: flaky-tests reports its mixed results. It reports
+        // test_negative too, which every rerun skips. The run at the base is its first, which passes.
+        (
+            "test_runs.py",
+            "import os\n\nRUNS = os.path.join(os.path.dirname(__file__), 'runs')\n\n\n\
+             def test_alternates():\n    with open(RUNS, 'a') as f:\n        f.write('x')\n    \
+             with open(RUNS) as f:\n        assert len(f.read()) % 2 == 1\n"
+                .into(),
         ),
         // What the parser checks report of Rust, in a change to its code: a function over the cognitive-complexity
         // limit, with a vague name in it, on lines 5-56 of lib.rs; and in its tests, a test removed, an `#[ignore]`
@@ -83,6 +94,12 @@ fn change() -> Vec<(&'static str, String)> {
     ]
 }
 
+/// The base's pyproject.toml: mypy checks a.py, and mutmut mutates calc.py, by test_scale.py alone, for
+/// test_calc.py's tests do not all pass.
+const PYPROJECT: &str = "[project]\nname = \"fixture\"\nversion = \"0.1.0\"\n\n[tool.mypy]\nfiles = [\"a.py\"]\n\n\
+                         [tool.mutmut]\nsource_paths = [\"calc.py\"]\n\
+                         pytest_add_cli_args_test_selection = [\"test_scale.py\"]\n";
+
 const TINY_LIB: &str = "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n";
 
 /// lib.rs with `big`, a function of 16 ifs one after another, and so of cognitive complexity 16, added after `add`.
@@ -93,10 +110,12 @@ fn tiny_lib_changed() -> String {
 
 const CALC: &str = "def add(a, b):\n    return a + b\n";
 
-/// calc.py with `big`, a function of 16 ifs one after another, and so of cognitive complexity 16, added after `add`.
+/// calc.py with two functions added after `add`: `big`, of 16 ifs one after another, and so of cognitive complexity
+/// 16, and then `scale`.
 fn calc_changed() -> String {
     let ifs: String = (0..16).map(|k| format!("    if x == {k}:\n        x += {k}\n")).collect();
-    format!("{CALC}\n\ndef big(x):\n    data = x  # noqa: F841\n{ifs}    return x\n")
+    let scale = "def scale(a, b):\n    return a * b\n";
+    format!("{CALC}\n\ndef big(x):\n    data = x  # noqa: F841\n{ifs}    return x\n\n\n{scale}")
 }
 
 const TEST_CALC: &str = "from calc import add\n\nEXPECTED = 3\n\n\n\

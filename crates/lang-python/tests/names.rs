@@ -210,4 +210,15 @@ fn a_format_spec_that_starts_with_an_equals_sign_is_read_and_binds_nothing() {
     let after_hash = "\n\ndef show(title):\n    print(f\"{title:=#06x}\")\n    if (status := title):\n\
                       \x20       return {info := status}\n    return f\"{title:=^9}\"\n";
     assert_eq!(names(after_hash), pairs(&[(5, "status"), (6, "info")]));
+    // And after a spec whose quote tree-sitter first reads as a string's start, which makes no error.
+    let after_quote = "\n\ndef show(title, sep):\n    print(f\"{title:='^9}\", sep.join('}'), {info := 1}, \"it's\")\n";
+    assert_eq!(names(after_quote), pairs(&[(4, "info")]));
+    // In a set that such a `#` leaves open, so that its `{` is under an error as a field's may be, after a string.
+    let around_hash = "\n\ndef show(title):\n    sep = \", \"\n    return {info := sep, f\"{title:=#x}\"}\n";
+    assert_eq!(names(around_hash), pairs(&[(5, "info")]));
+    // In a list or a set inside a field, before a spec.
+    for field in ["{[info := title]}", "{ {info := title} }"] {
+        let added = format!("\n\ndef show(title):\n    return f\"{field} {{title:=^9}}\"\n");
+        assert_eq!(names(&added), pairs(&[(4, "info")]), "{field}");
+    }
 }

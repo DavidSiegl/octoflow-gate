@@ -500,6 +500,13 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   not-scored` and `vague-names not-read`, "does not parse as Python". gate.py's `_holds_python` reports the same two
   findings, so the port agrees with it; the defect is both gates'." Closes, in both gates together for `cargo xtask
   compare`, with a `#!` that `[` follows read as no interpreter line.
+- **A Python file is parsed once more for each format spec in it that starts with `=`.** `parse`
+  (`crates/lang-python/src/lib.rs`) takes one such `=` out a round, since after the first the tree may not be the
+  file's (review 13, F20 and F22), and `first_misread_spec_start` (`crates/lang-python/src/syntax.rs`) asks
+  `node.parent()`, which walks down from the root, of every `{` before it. Review 13 measured 10.8 s for a file of
+  800 lines `print(f"{title:=^60}")` against 12 ms with `>` for the `=` (round 4, 2026-11-10). Nothing is read
+  wrong, and a file holds a handful of such specs. Closes with tree-sitter's incremental reparse from the edit and
+  a scan that resumes at it, or with tree-sitter-python reading the spec as Python does.
 - **`the_budget_running_out_is_a_finding` fails on a loaded machine.** `crates/gate/tests/surviving_mutants.rs`: the
   test gives cargo-mutants 20 seconds, of which the stop may take 15, so the unmutated baseline, a build and a test
   run of 2 seconds, has 5. With two other runs of the gate's tests on the machine (load average 16 to 18) the

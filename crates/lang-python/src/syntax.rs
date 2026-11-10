@@ -101,17 +101,20 @@ pub fn unparenthesized(mut node: Node) -> Node {
     node
 }
 
-/// Where `root`'s tree misreads the start of a format spec: the byte offset of the `=` of each `:=` in a replacement
-/// field and in no brackets inside it, as in `f"{x:=^9}"`, in the order they are written. Python reads the `:`
-/// there as the start of the spec, `=^9`; tree-sitter-python reads an assignment expression, `x := ^9`, and what
-/// follows as its value: an error where that is no expression, a name bound where it is one, a comment from a `#`
-/// on. With any other character in place of that `=` it reads the spec.
+/// Where `root`'s tree first misreads the start of a format spec: the byte offset of the `=` of the first `:=`, in
+/// the order the file is written, that is in a replacement field and in no brackets inside it, as in `f"{x:=^9}"`;
+/// `None` when the tree holds none. Python reads the `:` there as the start of the spec, `=^9`; tree-sitter-python
+/// reads an assignment expression, `x := ^9`, and what follows as its value: an error where that is no expression,
+/// a name bound where it is one, a comment from a `#` on, a string from a quote on. With any other character in
+/// place of that `=` it reads the spec.
 ///
 /// A `{` opens a replacement field when it is an `interpolation`'s or a `format_expression`'s, and also, where
-/// tree-sitter found an error and made neither, when a string is open at it. From the tree's first error on, the
-/// tree may not be the file's, as after such a `#`, and an offset is then a guess.
-pub fn misread_spec_starts(root: Node) -> Vec<usize> {
-    let mut out = vec![];
+/// tree-sitter found an error and made neither, when a string is open at it.
+///
+/// Only the first is given, because only it is sure: after it the tree may not be the file's, with or without an
+/// error in it, since such a value's `#` or quote moves where the strings after it begin and end. The tree of the
+/// source without that `=` says where the next one is.
+pub fn first_misread_spec_start(root: Node) -> Option<usize> {
     // For each bracket open at the token at hand, the outermost first, whether it opens a replacement field; and
     // how many strings are open there.
     let mut brackets: Vec<bool> = vec![];
@@ -131,11 +134,11 @@ pub fn misread_spec_starts(root: Node) -> Vec<usize> {
             ")" | "]" | "}" => {
                 brackets.pop();
             }
-            ":=" if brackets.last() == Some(&true) => out.push(node.start_byte() + 1),
+            ":=" if brackets.last() == Some(&true) => return Some(node.start_byte() + 1),
             _ => {}
         }
     }
-    out
+    None
 }
 
 /// One token of [`tokens`].

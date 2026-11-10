@@ -57,7 +57,7 @@ fn change() -> Vec<(&'static str, String)> {
         // What the parser checks report of Python, in a change to its code: a function over the cognitive-complexity
         // limit on lines 5-39 of calc.py, with a vague name on its line 6, which a comment for ruff follows; and in
         // its tests, a test removed, a skip added on line 12 of test_calc.py, and a constant an assertion reads
-        // changed on line 5.
+        // changed on line 5. test_sum, added on line 17, passes without the change, as passes-at-base reports.
         ("calc.py", calc_changed()),
         (
             "test_calc.py",
@@ -65,10 +65,11 @@ fn change() -> Vec<(&'static str, String)> {
                 .replace("from calc", "import pytest\n\nfrom calc")
                 .replace("EXPECTED = 3", "EXPECTED = 4")
                 .replace("def test_zero():\n    assert add(0, 0) == 0\n\n\n", "")
-                .replace("def test_negative", "@pytest.mark.skip\ndef test_negative"),
+                .replace("def test_negative", "@pytest.mark.skip\ndef test_negative")
+                + "\n\ndef test_sum():\n    assert add(1, 2) == 3\n",
         ),
         // A test that fails on every second run, at line 6: flaky-tests reports its mixed results. It reports
-        // test_negative too, which every rerun skips.
+        // test_negative too, which every rerun skips. The run at the base is its first, which passes.
         (
             "test_runs.py",
             "import os\n\nRUNS = os.path.join(os.path.dirname(__file__), 'runs')\n\n\n\

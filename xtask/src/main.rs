@@ -276,39 +276,25 @@ fn ported_condition_of_python(c: &str) -> bool {
 }
 
 /// The checks the Rust gate runs whole, over each language gate.py runs them over (gate::parser_checks,
-/// gate::flaky_tests).
-const WHOLE_CHECKS: [&str; 4] = ["test-integrity", "cognitive-complexity", "vague-names", "flaky-tests"];
+/// gate::flaky_tests, gate::passes_at_base).
+const WHOLE_CHECKS: [&str; 5] =
+    ["test-integrity", "cognitive-complexity", "vague-names", "flaky-tests", "passes-at-base"];
 
-/// The checks the Rust gate runs over Rust alone (gate::mutants, gate::passes_at_base), their Python halves coming
-/// with gate-standalone/16.
-const RUST_ONLY_CHECKS: [&str; 2] = ["surviving-mutants", "passes-at-base"];
+/// The check the Rust gate runs over Rust alone (gate::mutants), its Python half coming with gate-standalone/16.
+const RUST_ONLY_CHECK: &str = "surviving-mutants";
 
 /// Whether quality.json's finding `f` is compared, given whether it is gate.py's: of gate.py's, only a ported
-/// linter's, one of the [`WHOLE_CHECKS`], and of the [`RUST_ONLY_CHECKS`] one on a .rs file, or on no file when it is
-/// of the Rust half of passes-at-base ([`rust_s_base_run`]) or of surviving-mutants ([`rust_s_mutation_run`]).
+/// linter's, one of the [`WHOLE_CHECKS`], and of the [`RUST_ONLY_CHECK`] one on a .rs file, or on no file when it is
+/// of its Rust half ([`rust_s_mutation_run`]).
 fn ported_finding(f: &Value, from_python: bool) -> bool {
     let check = f["check"].as_str().unwrap_or_default();
     let path = f["path"].as_str().unwrap_or_default();
     let message = f["message"].as_str().unwrap_or_default();
-    let rust_s_run = f["path"].is_null()
-        && match check {
-            "passes-at-base" => rust_s_base_run(message),
-            "surviving-mutants" => rust_s_mutation_run(message),
-            _ => false,
-        };
+    let of_rust = if f["path"].is_null() { rust_s_mutation_run(message) } else { path.ends_with(".rs") };
     !from_python
         || PORTED_LINTERS.contains(&check)
         || WHOLE_CHECKS.contains(&check)
-        || (RUST_ONLY_CHECKS.contains(&check) && path.ends_with(".rs"))
-        || rust_s_run
-}
-
-/// Whether `message`, of a passes-at-base finding on no file, is the Rust half's, by gate.py's words in
-/// `_rust_passes_at_base` and what it calls; the Python half's speak of pytest and "the changed tests".
-fn rust_s_base_run(message: &str) -> bool {
-    message.contains("Rust test")
-        || message.contains("cargo nextest")
-        || message.ends_with(", so its changed tests were not run there.")
+        || (check == RUST_ONLY_CHECK && of_rust)
 }
 
 /// Whether `message`, of a surviving-mutants finding on no file, is the Rust half's, by gate.py's words in

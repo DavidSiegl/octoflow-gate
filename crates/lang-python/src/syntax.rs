@@ -19,6 +19,22 @@ pub fn line(node: Node) -> u32 {
     line_of(node.start_position().row)
 }
 
+/// `written`, code of one or more lines, on one line: each line break, with the spaces around it and the backslash
+/// that continues a line, becomes one space, or nothing after an opening bracket or before a closing one. A finding
+/// quotes a piece of code by its first line (model::first_line), which is then all of it, as gate.py quotes
+/// `ast.unparse`'s one line. A line break inside a string is joined as any other.
+pub fn on_one_line(written: &str) -> String {
+    let mut out = String::new();
+    for line in written.split('\n').map(|line| line.trim().trim_end_matches('\\').trim_end()) {
+        let opened = out.ends_with(['(', '[', '{']);
+        if !(out.is_empty() || opened || line.starts_with([')', ']', '}'])) {
+            out.push(' ');
+        }
+        out.push_str(line);
+    }
+    out
+}
+
 /// The line, from 1, of tree-sitter's row `row`, from 0.
 pub fn line_of(row: usize) -> u32 {
     u32::try_from(row + 1).unwrap_or(u32::MAX)
@@ -195,4 +211,16 @@ pub fn digest(root: Node, text: Text) -> String {
         }
     });
     format!("{hash:016x}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn code_of_several_lines_is_joined_with_no_space_inside_a_bracket() {
+        let written = "self.assertEqual(\n    f(a),\n    [\n        1,\n        2\n    ],\n    'x' \\\n    'y'\n)";
+        assert_eq!(on_one_line(written), "self.assertEqual(f(a), [1, 2], 'x' 'y')");
+        assert_eq!(on_one_line("assert a"), "assert a");
+    }
 }

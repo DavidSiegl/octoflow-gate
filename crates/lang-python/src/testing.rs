@@ -10,7 +10,7 @@ use tree_sitter::Node;
 
 use crate::binds::{binds, declared, deleted, How, SCOPES};
 use crate::syntax::{
-    children, decorated, digest, end_line, fields, line, named, of_kind, tokens, undecorated,
+    children, decorated, digest, end_line, fields, line, named, of_kind, on_one_line, tokens, undecorated,
     unparenthesized, Text, Token,
 };
 
@@ -99,7 +99,7 @@ fn assertions(test: Node, spellings: &HashSet<String>, text: Text) -> Vec<Assert
             });
             Assertion {
                 line: line(node),
-                text: text.of(node).into(),
+                text: on_one_line(text.of(node)),
                 shape: shape.join(" "),
                 literals,
                 reads: reads(node, &own, spellings, text),

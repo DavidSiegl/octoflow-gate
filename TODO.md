@@ -481,3 +481,60 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   with the square of the files; `cargo_root` (`crates/gate/src/mutants.rs`) starts one `cargo locate-project` per
   changed .rs path, even for paths of one manifest (review 12, F8, 2026-11-10). Neither changes a finding. Closes
   with `is_code` answered once per path when the `RustChange` is built, and one `locate-project` per directory.
+  Since gate-standalone/15 `Stored::at_base` there also starts one `git cat-file` per base file not named `*.py`, to
+  read its `#!` line, as gate.py's `_was_python_source` does; one `git cat-file --batch` for the change would serve.
+- **A Python expression nested thousands deep can overflow the Rust gate's stack.** `flow::flow`
+  (`crates/lang-python/src/flow.rs`) calls itself at each construct that nests flow, so a chain of thousands of
+  nested conditional expressions or lambdas, which tree-sitter parses without recursing, ends the gate with a stack
+  overflow rather than a finding; plain nesting, runs of boolean operators and `elif` chains are walked with a
+  worklist. Python's own parser, which gate.py reads with, refuses to parse such a file. Found with
+  gate-standalone/15 (2026-11-10). Closes with the walk on a worklist throughout, or a depth past which the file is
+  `not-scored`.
+- **A type parameter named as a skip is read as one in Python.** `is_expression`
+  (`crates/lang-python/src/testing.rs`) does not leave out a type parameter's own name, so `def test_a[skip]():`
+  added to a test file is a `skip` finding of test-integrity, where `ast` has no `Name` there. Found with
+  gate-standalone/15 (2026-11-10). Closes with `type_parameter`'s name told from an expression.
+- **A `.rs` file whose first line is `#![...python...]` is read as Python.** As review 13 put it (F9, 2026-11-10):
+  "`crates/lang-python/src/lib.rs:70` (`is_python`). `#![cfg(feature = "python")]` starts with `#!` and holds
+  `python`. Run, `crate/src/python.rs` so begun and edited: the Rust gate exits 1 with `cognitive-complexity
+  not-scored` and `vague-names not-read`, "does not parse as Python". gate.py's `_holds_python` reports the same two
+  findings, so the port agrees with it; the defect is both gates'." Closes, in both gates together for `cargo xtask
+  compare`, with a `#!` that `[` follows read as no interpreter line.
+- **A Python file is parsed once more for each format spec in it that starts with `=`.** `parse`
+  (`crates/lang-python/src/lib.rs`) takes one such `=` out a round, since after the first the tree may not be the
+  file's (review 13, F20 and F22). Review 13 measured `read` alone, in a release build (rounds 4 and 5, 2026-11-10):
+  800 lines `print(f"{title:=^60}")`, each an error to tree-sitter, 10.1 s against 12 ms with `>` for the `=`; 800
+  lines `print(f"{title:=60}")`, which make no error, 5.9 s, 200 lines 0.40 s and 3000 lines 86 s, where one round
+  for all of them took 19 ms, 5.5 ms and 73 ms. The gate parses a changed Python file twice (`read` and
+  `comments`). Nothing is read wrong, and a file holds a handful of such specs. The round's own measurements rule
+  out two remedies: without `node.parent()` in the scan the times are the same, and tree-sitter's incremental
+  reparse (`Tree::edit`) saves a fifth at most. Closes with the entry below, whose scanner needs no second parse.
+- **A set inside a replacement field, with a nested f-string's `=` spec after its assignment expression, is read as
+  a dict or the file as unreadable.** As review 13 put it (F24, should-fix, 2026-11-10):
+  "`crates/lang-python/src/syntax.rs:114` (the doc of `first_misread_spec_start`, "Only the first is given, because
+  only it is sure") with `:131` (`parent == "ERROR" && open_strings > 0`). The tree that says where the first
+  misread `:=` is has every later one still in it. When a later spec's `#` runs on as a comment, the brackets around
+  it are under an ERROR, and a set's `{` inside a replacement field is then a `{` under an ERROR with a string open,
+  which the scan counts as a field's. The set's own assignment expression comes first in the file, so its `=` is the
+  one taken out. [...] Run, `read` on `def show(title):\n    return f"{ {info := f'{title:=#x}'} }"\n`: bindings
+  `show`, `title`, and no finding says the file was not read; `ast.parse` has one assignment expression, to `info`
+  at line 2 [...]. Run, the same with `{info := title, f'{title:=#x}'}` for the set (`ast.parse`: `info` at line
+  2): "does not parse as Python", line 2, which through the gate is `cognitive-complexity not-scored` and
+  `vague-names not-read` [...]. The review pass reports 126 of 30,000 generated files that CPython accepts read
+  differently from `ast`, [...] every one it reduced of this kind, with `=.`, `=]`, `=)` and `=lambda` in place of
+  `=#` as well [...]. It also reports that keeping one stack of open strings and brackets, a `{` a field's only when
+  a string is innermost, reads these and breaks `{b:=^{b:=#}}`". The sentence is corrected; the reading stands, and
+  gate.py reads these files as Python does (docs/port-differences.md, "What does not parse"). The cause is that
+  where a spec starts is taken from a tree that misreads it, which is a guess wherever that tree holds an error.
+  Closes with the spec starts found in the source itself, before any parse, by a scanner that follows Python's
+  strings, their prefixes, brackets and replacement fields, a `:` in a field and in no bracket inside it starting
+  the spec; or with tree-sitter-python reading the spec as Python does.
+- **`the_budget_running_out_is_a_finding` fails on a loaded machine.** `crates/gate/tests/surviving_mutants.rs`: the
+  test gives cargo-mutants 20 seconds, of which the stop may take 15, so the unmutated baseline, a build and a test
+  run of 2 seconds, has 5. With two other runs of the gate's tests on the machine (load average 16 to 18) the
+  baseline did not end in them, and the finding was "budget reached before cargo-mutants had tested the unmutated
+  baseline" where the test expects "budget reached after ". Seen twice in `cargo nextest run --workspace` on
+  2026-11-10 at `bfb184b`; alone, on the same machine and under the same load, the test passed. Seen once more that
+  day at a load average of 4 to 6, while a Jenkins build of another repository compiled. Not seen in a Jenkins build
+  of this one. Closes with a budget the baseline fits in whatever the load, or a test that does not depend on how
+  long a build takes.

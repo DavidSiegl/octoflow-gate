@@ -2,7 +2,7 @@
 //! the whole report it writes held to gate.py's golden files, and its exit statuses.
 //!
 //! Only `gate_ok` is reproduced here. `gate_error` is a failing change whose findings are ruff's and the
-//! test-integrity check's, which come with Python (gate-standalone/15, 16): until then golden_reports.rs renders it
+//! test-integrity check's, and ruff comes with gate-standalone/16: until then golden_reports.rs renders it
 //! from a report built to match, as it does the quality_report_* files.
 
 use std::ffi::OsStr;

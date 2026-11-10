@@ -448,6 +448,7 @@ impl Walk<'_> {
                     text: text.of(node).into(),
                     shape: format!("{name}! {blanked}"),
                     literals,
+                    reads: vec![],
                 };
                 self.items.fns[owner].asserts.push(assertion);
             }

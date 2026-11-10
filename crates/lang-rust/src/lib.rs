@@ -121,6 +121,7 @@ fn model(items: &Items, text: &str, among_tests: bool, n: u32) -> SourceFile {
         test_lines,
         weakenings,
         bindings: items.bindings.clone(),
+        constants: vec![],
     }
 }
 

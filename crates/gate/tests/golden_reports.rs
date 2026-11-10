@@ -127,7 +127,7 @@ fn an_error_report_over_the_limit() {
 }
 
 /// gate_error's report, which gate.py's TestGate gets from a failing change end to end: its findings come from ruff
-/// and the test-integrity check, which the Rust gate does not run yet (gate-standalone/15, 16), so it is built here
+/// and the test-integrity check, and the Rust gate does not run ruff yet (gate-standalone/16), so it is built here
 /// as gate_cli.rs cannot judge it.
 #[test]
 fn the_report_of_a_failing_change_is_gate_error_s() {

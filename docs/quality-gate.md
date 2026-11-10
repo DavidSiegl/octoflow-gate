@@ -622,9 +622,9 @@ own, with the reason, and judges none of the change's Rust: `--rust-syntax` was 
 cannot be started, it fails, outlives its time, or prints anything but one document of the schema below per file.
 For a check that fails the gate, such a finding fails it, so a gate that cannot read the Rust never passes it.
 
-The Rust port of the gate (`crates/gate`) needs no helper: it reads Rust with `crates/lang-rust`, on tree-sitter,
-into the model its checks share with every language. Where the two read a file differently, `docs/port-differences.md`
-says so.
+The Rust port of the gate (`crates/gate`) needs no helper: it reads Rust with `crates/lang-rust` and Python with
+`crates/lang-python`, both on tree-sitter, into the model its checks share with every language. Where the two gates
+read a file differently, `docs/port-differences.md` says so.
 
 **What it prints.** `gate-rust FILE...` reads each `FILE`, every argument a path, and prints one line of JSON per
 file, in the order given, then exits 0; it exits 1 when it cannot write them. A file it cannot read, that is not

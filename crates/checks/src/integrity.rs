@@ -18,7 +18,9 @@ const CHECK: &str = "test-integrity";
 ///   gone is one finding, and a file deleted, or left with no source of the language, one;
 /// - fewer-assertions: a test kept with fewer assertions than at the base;
 /// - expected-value-changed, when `code_changed`: an assertion of a kept test whose literals changed while the rest of
-///   it stayed, the assertions of the two sides aligned as Python's difflib aligns sequences;
+///   it stayed, the assertions of the two sides aligned as Python's difflib aligns sequences; and a constant of the
+///   file's base ([`model::Constant`]) that a kept test's assertions name on both sides and that the change edited or
+///   made no constant, at the first assertion now naming it;
 /// - skip, platform-only and swallowed-error: each [`model::Weakening`] on a line the change added;
 /// - unreadable: a test file, one the settings place among the tests or with test code on a side, that its front end
 ///   could not read as a whole on a side ([`model::Unreadable`] with no line, as for one that is not UTF-8), which is
@@ -58,14 +60,26 @@ pub fn weakened_tests(files: &[ChangedFile], code_changed: bool) -> Vec<Finding>
         out.extend(added_weakenings(file));
     }
     out.extend(removed_tests(files, &before, &after));
+    out.extend(kept_tests(files, &before, &after, code_changed));
+    out.sort_by(|a, b| (&a.path, a.line.unwrap_or(0)).cmp(&(&b.path, b.line.unwrap_or(0))));
+    out
+}
+
+/// The findings on the tests the change kept, those of `after`, the tests of `files` in the working tree, with a test
+/// of their key in `before`, the tests at the base: what [`kept_test`] finds of each and, when `code_changed`, what
+/// [`changed_constants`] does.
+fn kept_tests(files: &[ChangedFile], before: &[Keyed], after: &[Keyed], code_changed: bool) -> Vec<Finding> {
     let at_base: HashMap<Key, &Keyed> = before.iter().map(|t| (t.key(), t)).collect();
-    for t in &after {
-        if let Some(was) = at_base.get(&t.key()) {
-            let path = files[t.file].after.as_ref().map(|a| &a.path);
-            out.extend(kept_test(path, was.test, t.test, code_changed));
+    let mut out = vec![];
+    for t in after {
+        let Some(was) = at_base.get(&t.key()) else { continue };
+        let file = &files[t.file];
+        let path = file.after.as_ref().map(|a| &a.path);
+        out.extend(kept_test(path, was.test, t.test, code_changed));
+        if let (true, Some(base), Some(now)) = (code_changed, file.base(), file.now()) {
+            out.extend(changed_constants(path, (was.test, base), (t.test, now)));
         }
     }
-    out.sort_by(|a, b| (&a.path, a.line.unwrap_or(0)).cmp(&(&b.path, b.line.unwrap_or(0))));
     out
 }
 
@@ -230,6 +244,39 @@ fn kept_test(path: Option<&OsString>, was: &Test, now: &Test, code_changed: bool
             );
             out.push(Finding::of(CHECK, "expected-value-changed", false, path, Some(b.line), message));
         }
+    }
+    out
+}
+
+/// The expected-value-changed findings on a test the change kept in the file at `path`, for the constants its
+/// assertions name: `was` is the test and its file at the base, `now` those in the working tree. One for each constant
+/// of the base that the test's assertions read on both sides ([`Assertion::reads`]) and that is now no constant of the
+/// file, or one whose expression differs; at the first assertion now reading it.
+fn changed_constants(path: Option<&OsString>, was: (&Test, &SourceFile), now: (&Test, &SourceFile)) -> Vec<Finding> {
+    let constant = |file: &'_ SourceFile, name: &str| file.constants.iter().find(|c| c.name == name).cloned();
+    let read_at_base = |name: &String| was.0.assertions.iter().any(|a| a.reads.contains(name));
+    let mut out = vec![];
+    let mut seen: Vec<&String> = vec![];
+    for (assertion, name) in now.0.assertions.iter().flat_map(|a| a.reads.iter().map(move |name| (a, name))) {
+        if seen.contains(&name) {
+            continue;
+        }
+        seen.push(name);
+        let Some(base) = constant(was.1, name).filter(|_| read_at_base(name)) else { continue };
+        let (place, what) = match constant(now.1, name) {
+            None => {
+                let what = "is no longer a constant of the file that this check can read";
+                (format!("line {} at the base", base.line), what)
+            }
+            Some(defined) if defined.expression != base.expression => (format!("line {}", defined.line), "changed"),
+            Some(_) => continue,
+        };
+        let message = format!(
+            "`{name}` ({place}), which `{}` names in its assertions, {what}, in a change that also edits the code \
+             under test.",
+            now.0.name
+        );
+        out.push(Finding::of(CHECK, "expected-value-changed", false, path, Some(assertion.line), message));
     }
     out
 }

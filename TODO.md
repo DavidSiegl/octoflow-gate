@@ -550,9 +550,17 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   pyproject.toml for writing, and the copy holds a tracked symbolic link as a link, so surviving-mutants writes its
   `[tool.mutmut]`, with `pytest_add_cli_args` naming a scratch directory it then removes, into the link's target,
   outside the copy. Seen on 2026-11-10 with gate.py 0.5.0 on a tree whose pyproject.toml links to a file beside it.
-  Found by cross-review 14 (F1) in the Rust gate, which now replaces the link in its copy with a file
-  (`use_mutmut_table` in `crates/gate/src/python_mutants.rs`, docs/port-differences.md). Closes with gate.py doing
-  the same, a patch release, or with the cutover.
+  Found by cross-review 14 (F1) in the Rust gate, which now makes the copy's link a file of what the tree's link
+  names, before anything reads the copy (`own_pyproject` in `crates/gate/src/python_mutants.rs`,
+  docs/port-differences.md). Closes with gate.py doing the same, a patch release, or with the cutover.
+- **The Rust gate's copies still hold other linked configuration as links.** `own_pyproject` makes only mutmut's
+  copy's `pyproject.toml` a file. As cross-review 14 noted (round 4, 2026-11-10, not recorded as a finding): "the
+  other files `pytest::inifile` looks for (pytest.toml, pytest.ini, tox.ini, setup.cfg; `pytest.rs:182`) are still
+  copied as the tree's links, so one that is a relative link out of the tree is taken for no configuration in
+  mutmut's copy, as F16 was for pyproject.toml; and flaky-tests' and passes-at-base's copies still hold a linked
+  pyproject.toml as the link." And `own_pyproject` "reads what the tree's link names with `std::fs::read`, whole
+  and whatever it is (a FIFO, a device)". Not seen in a project. Closes with every copy the Python checks make
+  holding the configuration files pytest reads as regular files, read as the rules' own file is.
 - **The Rust gate's Python checks: six design nits of cross-review 14 (2026-11-10), in its words.**
   - F7, `crates/gate/src/python_mutants.rs`: "`mark_for_mutmut` reads, parses and rewrites every regular `*.py` in
     the copy, though mutmut makes mutants only under `[tool.mutmut]` source_paths, which `outside_mutmut` already

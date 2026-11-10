@@ -56,10 +56,6 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   - `crates/gate/src/main.rs`'s `parse_args` takes no abbreviation of an option (`--cov` for `--coverage`), as
     argparse does, and takes a value that starts with `-`, which argparse refuses.
   Closes at the cutover, with each kept or matched on purpose.
-- **`cargo xtask compare` tells gate.py's ported conditions by their wording.** `ported_condition_of_python` in
-  `xtask/src/main.rs` matches the start or end of each failed-condition sentence; a condition gate.py rewords drops
-  out of the comparison without a word, and the Rust gate's then shows as one gate.py lacks. Closes with the
-  cutover, which retires gate.py and the comparison.
 - **The Rust gate reads an XML report only in UTF-8, or in UTF-16 that opens with a byte-order mark.** As
   cross-review 09 put it (F21, 2026-11-07): "Without a UTF-16 byte-order mark, `report_format` takes every report as
   UTF-8: one that declares another encoding (`<?xml version='1.0' encoding='ISO-8859-1'?>` and a byte such as `E9` in
@@ -544,5 +540,38 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   that run pytest and mutmut (`crates/gate/tests/flaky_tests.rs`, `python_at_base.rs`, `python_mutants.rs`). So
   `scripts/gate` reports "the unmutated baseline of the workspace at `.` did not pass (Timeout, as cargo-mutants
   words it ...), so it tried no mutant", a warning, on every change to the workspace's Rust. Seen on 2026-11-10
-  with `scripts/gate origin/main` at `standalone-16`. Closes with a baseline the timeout does not hold, or with a
-  nextest profile for the mutants' runs that leaves the slow tests out, either a change to what the gate runs.
+  with `scripts/gate origin/main` at `standalone-16`. As cross-review 14 put it (F6, 2026-11-10):
+  "surviving-mutants judges none of `crates/gate` from this merge on, the 2,700 lines of check code added here
+  included. The diff records it in TODO.md instead of keeping the slow tests out of the mutants' runs." Left out,
+  those tests would leave every mutant of the Python checks they alone cover to survive. Closes with a baseline the
+  timeout does not hold, or with a nextest profile for the mutants' runs that leaves the slow tests out, either a
+  change to what the gate runs.
+- **gate.py overwrites the file a tracked `pyproject.toml` links to.** `_use_mutmut_table` opens the copy's
+  pyproject.toml for writing, and the copy holds a tracked symbolic link as a link, so surviving-mutants writes its
+  `[tool.mutmut]`, with `pytest_add_cli_args` naming a scratch directory it then removes, into the link's target,
+  outside the copy. Seen on 2026-11-10 with gate.py 0.5.0 on a tree whose pyproject.toml links to a file beside it.
+  Found by cross-review 14 (F1) in the Rust gate, which now replaces the link in its copy with a file
+  (`use_mutmut_table` in `crates/gate/src/python_mutants.rs`, docs/port-differences.md). Closes with gate.py doing
+  the same, a patch release, or with the cutover.
+- **The Rust gate's Python checks: six design nits of cross-review 14 (2026-11-10), in its words.**
+  - F7, `crates/gate/src/python_mutants.rs`: "`mark_for_mutmut` reads, parses and rewrites every regular `*.py` in
+    the copy, though mutmut makes mutants only under `[tool.mutmut]` source_paths, which `outside_mutmut` already
+    tells." gate.py's `_mark_for_mutmut` does the same. Closes with only the files mutmut mutates marked.
+  - F8, `crates/gate/src/parser_checks.rs`: "`changed_units` reads and parses each changed Python file again after
+    `Sources::read` did, and is reached three times a run (flaky_tests, python_at_base, python_mutants); its
+    "could not be read" branch is all but dead." Closes with the three checks given the units read once.
+  - F9, `crates/gate/src/python_at_base.rs`, `mutants.rs`: "The Python halves and the Rust halves' modules import
+    each other (`passes_at_base` <-> `python_at_base` for `budget_reached`; `mutants` <-> `python_mutants` for
+    `KILL_WAIT`, `STOP_GRACE`, `SURVIVOR_EXAMPLES`), consts widened to `pub(crate)` to cross the cycle." Closes
+    with what both halves of a check share in a module neither half is.
+  - F10, `crates/gate/src/python_mutants.rs`, `on_copy`: "The set-up closure returns `Result<Option<Table>,
+    String>` and also pushes into the captured `out`, which the `Ok(None)` arm then discards; correct only because
+    nothing is pushed on that path. `seconds` goes u64 -> Duration -> f64 -> Duration between `mutants.rs` and
+    here." Closes with the set-up returning its findings, and the budget one type from the settings to the run.
+  - F11, `crates/gate/src/python_mutants.rs`: "`narrowed_table` reads a `pytest --collect-only` listing itself (and
+    words "printed no node id the gate could read") beside `pytest.rs`, which owns that reading, with a
+    different filter." Closes with one reader of a listing in `pytest.rs`.
+  - F12, `crates/gate/src/glob.rs`: "`fnmatch` arrives as an `across_slashes` flag through `translate_name` and
+    `bracket` with two added match arms, the bolted-on flag the user's CLAUDE.md design rule names; it also
+    compiles a Regex on each call." Closes with fnmatch's translation a function of its own, compiled once a
+    pattern.

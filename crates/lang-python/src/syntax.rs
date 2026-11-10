@@ -1,6 +1,8 @@
 //! What the readers of a Python file's tree-sitter tree share: a node's text and lines, its children without the
 //! comments tree-sitter leaves among them, and its tokens, which say what code does whatever its layout.
 
+use std::ops::Range;
+
 use tree_sitter::Node;
 
 /// The text a tree was parsed from.
@@ -99,6 +101,13 @@ pub fn unparenthesized(mut node: Node) -> Node {
     node
 }
 
+/// Whether `node` is a replacement field's name and its format spec, where the spec starts with `=`, as the `x:=^9`
+/// of `f"{x:=^9}"`. tree-sitter-python reads it as an assignment expression, `x := ^9`, with an error in it where
+/// the rest of the spec is no expression; Python reads a `:=` not in brackets of its own as the start of a spec.
+pub fn is_name_and_format_spec(node: Node) -> bool {
+    node.kind() == "named_expression" && node.parent().is_some_and(|p| p.kind() == "interpolation")
+}
+
 /// One token of [`tokens`].
 pub enum Token<'t> {
     /// A named node that holds others opens: its kind. Python's indentation is no token, so the kinds carry the
@@ -112,7 +121,9 @@ pub enum Token<'t> {
     /// without `u`, a quote, and its contents as written, whatever its quotes, adjacent strings of one prefix as one.
     /// Such a string with replacement fields, an f-string, is a node of the kind `string` instead: a literal of its
     /// prefix letters, a quote and its text up to the first field, then each field's tokens and each run of text
-    /// after one as a literal, so that where its text is split into adjacent strings does not show either.
+    /// after one as a literal, so that where its text is split into adjacent strings does not show either. A field's
+    /// format spec is a node of the kind `format_specifier`: each run of its text as a literal, from the colon on,
+    /// and the tokens of each field in it.
     Literal(String),
 }
 
@@ -122,8 +133,9 @@ enum Item<'t> {
     Token(Token<'t>),
 }
 
-/// Gives `emit` the tokens of `root`'s code in the order they are written, comments left out. Two pieces of code
-/// with the same tokens are the same code, but for what Python reads alike and writes differently other than quotes:
+/// Gives `emit` the tokens of `root`'s code in the order they are written, comments left out, and the comma that
+/// ends a bracket's or a statement's list unless it makes an index a tuple, as in `x[1,]`. Two pieces of code with
+/// the same tokens are the same code, but for what Python reads alike and writes differently other than quotes:
 /// escapes in strings, the spelling of a number, redundant parentheses.
 pub fn tokens<'t>(root: Node<'t>, text: Text<'t>, emit: &mut dyn FnMut(Token<'t>)) {
     // A stack rather than recursion: a sum of a few thousand terms is that deep.
@@ -148,6 +160,17 @@ pub fn tokens<'t>(root: Node<'t>, text: Text<'t>, emit: &mut dyn FnMut(Token<'t>
             "string" | "concatenated_string" if of_one_prefix(&strings, text) => {
                 todo.extend(string_items(&strings, text).into_iter().rev());
             }
+            "format_specifier" => {
+                todo.extend(format_spec_items(node.byte_range(), named(node), text).into_iter().rev());
+            }
+            "named_expression" if is_name_and_format_spec(node) => {
+                // The name, where tree-sitter found one, and the spec as written: its fields are not told apart.
+                let name = node.child_by_field_name("name");
+                let spec = name.map_or(node.start_byte(), |n| n.end_byte())..node.end_byte();
+                todo.extend(format_spec_items(spec, vec![], text).into_iter().rev());
+                todo.extend(name.map(Item::Node));
+            }
+            "," if ends_a_list(node) => {}
             _ if node.child_count() == 0 => {
                 if !node.byte_range().is_empty() {
                     emit(Token::Word(text.of(node)));
@@ -162,6 +185,37 @@ pub fn tokens<'t>(root: Node<'t>, text: Text<'t>, emit: &mut dyn FnMut(Token<'t>
             }
         }
     }
+}
+
+/// Whether `comma`, a `,`, only ends the list it is in: nothing but comments follows it in its brackets or its
+/// statement, and it is not what makes one index a tuple, as in `x[1,]`. A tuple of one element is told from the
+/// element by its node's kind, with or without the comma.
+fn ends_a_list(comma: Node) -> bool {
+    let mut next = comma.next_sibling();
+    while let Some(trivia) = next.filter(|n| is_trivia(*n)) {
+        next = trivia.next_sibling();
+    }
+    let one_index = comma.parent().is_some_and(|p| p.kind() == "subscript" && fields(p, "subscript").len() == 1);
+    next.is_none_or(|n| matches!(n.kind(), ")" | "]" | "}")) && !one_index
+}
+
+/// The tokens of a replacement field's format spec, the source's text at `spec`, from its colon on, with the
+/// replacement fields `fields` in it, in order ([`Token::Literal`]).
+fn format_spec_items<'t>(spec: Range<usize>, fields: Vec<Node<'t>>, text: Text) -> Vec<Item<'t>> {
+    let literal = |written: Range<usize>| {
+        let written = text.0.get(written).filter(|w| !w.is_empty())?;
+        Some(Item::Token(Token::Literal(written.to_string())))
+    };
+    let mut out = vec![Item::Token(Token::Open("format_specifier"))];
+    let mut at = spec.start;
+    for field in fields {
+        out.extend(literal(at..field.start_byte()));
+        out.push(Item::Node(field));
+        at = field.end_byte();
+    }
+    out.extend(literal(at..spec.end));
+    out.push(Item::Token(Token::Close));
+    out
 }
 
 /// Whether `strings` is one string literal or adjacent ones that read as one: `string` nodes, at least one, all of

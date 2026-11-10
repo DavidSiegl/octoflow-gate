@@ -15,7 +15,7 @@ mod syntax;
 mod testing;
 
 use binds::{binds, type_parameters, How};
-use syntax::{children, decorated, digest, end_line, fields, line, line_of, named, Text};
+use syntax::{children, decorated, digest, end_line, fields, is_name_and_format_spec, line, line_of, named, Text};
 
 /// The Python source `source`, the file at `path` from the tree's top level, as the model has it. `among_tests` says
 /// whether the project places the file among its tests (gate.toml's `test-files.python`), which makes the whole of
@@ -113,7 +113,10 @@ fn first_error(root: Node) -> Option<Node> {
         if at.is_error() || at.is_missing() {
             return Some(at);
         }
-        at = children(at).into_iter().find(|c| c.has_error() || c.is_missing())?;
+        // What tree-sitter makes of a format spec it misreads is no error of the file's, in the replacement field
+        // that holds the spec.
+        let misread = |c: &Node| c.kind() == "interpolation" && children(*c).into_iter().any(is_name_and_format_spec);
+        at = children(at).into_iter().find(|c| (c.has_error() || c.is_missing()) && !misread(c))?;
     }
 }
 

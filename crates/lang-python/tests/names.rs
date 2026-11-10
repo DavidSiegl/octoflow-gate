@@ -176,3 +176,16 @@ fn every_file_s_findings_are_listed_by_path_then_line_an_unparsable_one_as_not_r
     );
     assert_eq!(found[1].message, "does not parse as Python, so its names were not read.");
 }
+
+#[test]
+fn a_parenthesized_with_item_binds_its_name() {
+    let added = "\n\ndef load(path):\n    with (open(path) as info):\n\
+                 \x20       with (open(path)) as data, (open(path) as status):\n            pass\n";
+    assert_eq!(names(added), pairs(&[(4, "info"), (5, "data"), (5, "status")]));
+}
+
+#[test]
+fn a_format_spec_that_starts_with_an_equals_sign_is_read_and_binds_nothing() {
+    assert_eq!(names("\n\ndef show(title):\n    print(f\"{info:=10}\")\n    return f\"{title:=^40}\"\n"), []);
+    assert_eq!(names("\n\ndef show(title):\n    return f\"{title:=+.3f} {title:=08.2f} {title:=<{title}d}\"\n"), []);
+}

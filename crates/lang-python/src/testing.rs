@@ -165,7 +165,9 @@ fn is_expression(identifier: Node) -> bool {
         "keyword_argument" | "default_parameter" | "typed_default_parameter" | "function_definition"
         | "class_definition" => !field("name"),
         "parameters" | "lambda_parameters" | "dotted_name" | "aliased_import" | "global_statement"
-        | "nonlocal_statement" | "as_pattern" | "splat_pattern" | "keyword_pattern" => false,
+        | "nonlocal_statement" | "splat_pattern" | "keyword_pattern" => false,
+        // The name a match pattern captures comes last; what a with or an except reads comes first.
+        "as_pattern" => parent.child(0) == Some(identifier),
         "typed_parameter" => named(parent).first() != Some(&identifier),
         "list_splat_pattern" | "dictionary_splat_pattern" => !parent.parent().is_some_and(in_parameters),
         "as_pattern_target" => {

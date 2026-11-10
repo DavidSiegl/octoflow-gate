@@ -4,7 +4,7 @@
 
 use tree_sitter::{Node, Point};
 
-use crate::syntax::{children, fields, named, of_kind, Text};
+use crate::syntax::{children, fields, is_name_and_format_spec, named, of_kind, unparenthesized, Text};
 
 /// How a name is bound, which decides who counts the binding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,7 +61,8 @@ pub fn binds<'t>(node: Node, text: Text<'t>) -> Vec<Bound<'t>> {
             out.extend(fields(node, "left").into_iter().flat_map(|left| targets(left, text)));
         }
         "with_item" => {
-            let renamed = node.child_by_field_name("value").filter(|v| v.kind() == "as_pattern");
+            // `with (open(p) as f):` holds its one item in parentheses.
+            let renamed = node.child_by_field_name("value").map(unparenthesized).filter(|v| v.kind() == "as_pattern");
             let alias = renamed.and_then(|v| v.child_by_field_name("alias"));
             out.extend(alias.into_iter().flat_map(|alias| targets(alias, text)));
         }
@@ -70,7 +71,7 @@ pub fn binds<'t>(node: Node, text: Text<'t>) -> Vec<Bound<'t>> {
             let name = alias.and_then(|a| named(a).into_iter().find(|n| n.kind() == "identifier"));
             out.extend(name.map(|name| name_at(name, node, How::Name)));
         }
-        "named_expression" => {
+        "named_expression" if !is_name_and_format_spec(node) => {
             let name = node.child_by_field_name("name").filter(|n| n.kind() == "identifier");
             out.extend(name.map(|name| name_at(name, name, How::Walrus)));
         }

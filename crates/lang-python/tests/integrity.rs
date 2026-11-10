@@ -171,6 +171,16 @@ fn a_skip_is_a_name_python_reads_not_one_it_binds_or_passes_by_keyword() {
 }
 
 #[test]
+fn a_skip_caught_or_entered_under_an_alias_is_found() {
+    let other = format!(
+        "{OTHER_TESTS}\n\ndef test_c():\n    try:\n        run()\n    except SkipTest as exc:\n        raise\n\
+         \x20   with skip as how:\n        pass\n"
+    );
+    let (place, _) = found(&[edited(OTHER_PATH, OTHER_TESTS, &other)]);
+    assert_eq!(place, [at(OTHER_PATH, 12, "skip"), at(OTHER_PATH, 14, "skip")]);
+}
+
+#[test]
 fn skips_already_at_the_base_are_not_found() {
     let base = "import pytest\n\n\n@pytest.mark.skipif(True, reason='x')\ndef test_x():\n    assert 1\n";
     assert_eq!(found(&[edited("tests/test_skipped.py", base, &base.replace("assert 1", "assert 2"))]).0, []);
@@ -495,4 +505,26 @@ fn a_decorated_or_async_test_and_one_under_a_statement_are_read_as_python_s_runn
     let source = lang_python::read(base.as_bytes(), std::path::Path::new("tests/test_x.py"), true).unwrap();
     let tests: Vec<_> = source.tests.iter().map(|t| (t.name.as_str(), t.line, t.lines.first, t.lines.last)).collect();
     assert_eq!(tests, [("test_a", 5, 4, 6)]);
+}
+
+#[test]
+fn a_trailing_comma_is_layout_but_for_the_one_that_makes_an_index_a_tuple() {
+    let wrapped = "assert add(\n            10,\n            20,\n        ) == 31";
+    let (place, _) = found(&[code_edit(), calc_tests_with("assert add(10, 20) == 30", wrapped)]);
+    assert_eq!(place, [at(CALC_PATH, 12, "expected-value-changed")]);
+    let listed = GOLDEN_TESTS.replace("GOLDEN = \"a\"", "GOLDEN = [\"a\", T[1, 2], T[1]]");
+    let golden_became = |new: &str| found_after_golden_edit(&listed, "GOLDEN = [\"a\", T[1, 2], T[1]]", new).0;
+    assert_eq!(golden_became("GOLDEN = [\n    \"a\",\n    T[1, 2,],\n    T[1],\n]"), []);
+    assert_eq!(golden_became("GOLDEN = [\"a\", T[1, 2], T[1,]]"), changed_at_10());
+}
+
+#[test]
+fn a_format_spec_is_part_of_an_f_string_s_text_also_one_that_starts_with_an_equals_sign() {
+    let base = "def test_s():\n    assert name() == f'{x:>10} {y!r:{w}.3f} {z:=^40}'\n";
+    let path = "tests/test_s.py";
+    assert_eq!(found(&[code_edit(), edited(path, base, &base.replace('\'', "\""))]).0, []);
+    for (old, new) in [(":>10", ":>20"), (".3f", ".4f"), (":=^40", ":=^20"), (":=^40", ":^40")] {
+        let (place, _) = found(&[code_edit(), edited(path, base, &base.replace(old, new))]);
+        assert_eq!(place, [at(path, 2, "expected-value-changed")], "{old} to {new}");
+    }
 }

@@ -58,8 +58,9 @@ not the Markdown. [The report as a contract](docs/quality-gate.md#the-report-as-
 A project runs a release, pinned by its version and its sha256. Each
 [release](https://github.com/DavidSiegl/octoflow-gate/releases) `v<version>` has two assets:
 `octoflow-gate-<version>.tar.gz`, which holds `gate.py`, the gate-rust helper built for Linux x86_64 as
-`gate-rust-linux-x86_64`, the JSON Schema in `schema/`, golden quality files in both formats in `golden/`, and this
-README; and `octoflow-gate-<version>.tar.gz.sha256`, its sha256. `gate.py` is one file and imports only the standard
+`gate-rust-linux-x86_64`, the JSON Schema in `schema/`, golden quality files in both formats in `golden/`, this
+README, and, from 0.6.0, the Rust gate as `gate-linux-x86_64` with `shadow-run.sh` (below, "The Rust gate's shadow
+run"); and `octoflow-gate-<version>.tar.gz.sha256`, its sha256. `gate.py` is one file and imports only the standard
 library, so it runs in the project's working tree with the project's own Python:
 
 ```bash
@@ -96,6 +97,22 @@ A linter that is missing is a failed condition naming it, and for clippy that is
 fails, as it does where rustup's `clippy` component is not installed; a check that cannot run is one of its own
 findings. The rules come from the project's `pyproject.toml`, or the one `--config` names, as [whose rules judge a
 change](docs/quality-gate.md#whose-rules-judge-a-change) says.
+
+### The Rust gate's shadow run
+
+The gate is being ported to Rust, as one binary that needs no helper. Until it judges alone, a release ships it as
+`gate-linux-x86_64`, built for Linux x86_64 as the helper is, and `gate.py` stays the judge. A project's CI can have
+it judge each change a second time and keep how the two reports differ, which decides nothing:
+
+```bash
+uv run "$gate/shadow-run.sh" . --base main --tests test-results.xml --coverage coverage.xml --python python
+```
+
+after `gate.py --out quality.md` with the same arguments, in the same working tree. It writes `quality-rust.md`,
+`quality-rust.json` and `quality-diff.txt` beside `quality.md`; the last is empty when the reports agree, and the
+script's header says the rest. `--python` names the Python that has the project's pytest, pytest-randomly and mutmut,
+which for `gate.py` is the one that runs it. The differences that are meant are listed in
+[docs/port-differences.md](docs/port-differences.md); any other is a bug worth an issue.
 
 ## Settings: `gate.toml`
 

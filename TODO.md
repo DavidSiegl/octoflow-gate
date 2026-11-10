@@ -308,8 +308,8 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   Rust change, which needs a Jenkins build on the branch. Found by ticket 06 (2026-10-30). Closes, if the run metrics
   show either language starved, with the budget split by each language's changed functions, one copy for both tools,
   and a target directory that lasts between gate runs (the same as passes-at-base's above).
-  Moved from octoflow-ai on 2026-11-05. The Rust gate's port (`crates/gate/src/mutants.rs`) builds anew the same way;
-  it runs no mutmut yet, so it gives cargo-mutants the whole budget until gate-standalone/16.
+  Moved from octoflow-ai on 2026-11-05. The Rust gate's port (`crates/gate/src/mutants.rs`) splits the budget and
+  builds anew the same way.
 - **cargo-mutants is pinned by the sha256 of its archive as downloaded, not as published.** Its releases publish no
   checksums file (`ci/install-tools.sh`), so the pin of v27.1.0 holds the archive the gate's author downloaded on
   2026-10-30, trusted on first use. Closes with a release that publishes checksums, or the asset digest GitHub shows on

@@ -33,10 +33,11 @@ const USAGE: &str = "usage: gate --base REV [--config FILE] [--coverage XML] [--
             [--rust-syntax PATH] [--python PATH] [--help]";
 
 const HELP: &str = "
-The Rust port of gate.py, which judges only what has been ported so far: pymarkdown, shellcheck, actionlint and clippy
-over the files the repository tracks, the parser checks, surviving-mutants and passes-at-base over Rust, gate.toml's
-[[test]] commands, the tests and coverage they report, files committed under mutmut's mutants/, stray line ends,
-suppressions added and edited build configuration. It writes the quality file: GATE: OK or GATE: ERROR on its first
+The Rust port of gate.py. It judges by ruff, mypy, pymarkdown, shellcheck, actionlint and clippy over the files the
+repository tracks, the checks test-integrity, cognitive-complexity, vague-names, flaky-tests, passes-at-base and
+surviving-mutants over Python and Rust, gate.toml's [[test]] commands, the tests and coverage they report, files
+committed under mutmut's mutants/, stray line ends, suppressions added and edited build configuration. It writes the
+quality file: GATE: OK or GATE: ERROR on its first
 line, then the failed conditions, the findings on lines added since --base, failing tests, coverage of new code,
 suppressions added and edited build configuration. Exit status 0 for OK, 1 for ERROR, 2 when it could not judge,
 writing nothing. --out FILE also writes quality.json, the same report as data.

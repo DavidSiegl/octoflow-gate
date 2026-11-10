@@ -1,7 +1,7 @@
 # Where the Rust gate differs from gate.py
 
 The Rust gate (`crates/gate`) judges beside `gate.py` until the cutover (gate-standalone/18), and `cargo xtask
-compare` holds the two to the same reports over the parts ported so far. This file lists each difference that is
+compare` holds the two to the same reports, whole. This file lists each difference that is
 deliberate, or that comes of reading a language with another parser, with its reason, so that a difference `compare`
 shows is either listed here or a bug. Differences still to be decided are open issues in `TODO.md` instead.
 
@@ -136,8 +136,6 @@ runs the checks of `crates/checks` over it.
 
 ### passes-at-base
 
-- **Only Rust's half runs**, with the whole `--base-run-budget`. gate.py runs Python's changed tests first and gives
-  Rust's what is left of the budget; the Rust gate runs no Python tests yet (gate-standalone/16).
 - **A scratch directory whose path is not UTF-8** gives "could not copy the base to run the changed Rust tests in:
   PATH is not UTF-8", since nextest's configuration cannot name it. gate.py writes the path with its bytes escaped,
   naming a store nextest then makes elsewhere.
@@ -146,8 +144,6 @@ runs the checks of `crates/checks` over it.
 
 ### surviving-mutants
 
-- **Only Rust's half runs**, with the whole `--mutation-budget`. gate.py gives mutmut half the budget when the change
-  edits Python too, and cargo-mutants what is left; the Rust gate runs no mutmut yet (gate-standalone/16).
 - **A mutant's outcome the gate cannot read is worded by the Rust gate**: the finding names what the mutant lacks, as
   "no `span` with a start line", where gate.py quotes Python's exception, as `KeyError('file')`. The Rust gate also
   needs every tried mutant's name, where gate.py reads only those of the first few survivors of a function.
@@ -164,3 +160,46 @@ runs the checks of `crates/checks` over it.
   without a slash is found on `PATH`; a path is read from the current directory when `--python` gives it and from the
   tree's top level when `gate.toml` does. gate.py knows neither the flag nor the key, and refuses a `gate.toml` that
   holds the key as it does any key it does not know.
+
+### What the tools and the system say
+
+- **A system error is worded by Rust**: a finding that quotes one ends "No such file or directory (os error 2)" where
+  gate.py's ends "[Errno 2] No such file or directory: 'PATH'". So are TOML and JSON errors: the toml crate's
+  one-line message and serde_json's, where gate.py quotes `tomllib`'s and `json`'s.
+- **A scratch directory is named `gate-<pid>-<n>`** in a finding that quotes a path inside one, where gate.py's is
+  `tempfile`'s `gate-<random>`.
+- **A pattern over bytes takes `\s` and `\d` as ASCII.** gate.py matches the same patterns over text, where they
+  take in Unicode's spaces and digits: a no-break space before a pragma, or a digit of another script in a line
+  number a tool printed.
+
+### passes-at-base over Python
+
+- **A path that is not UTF-8 in a report of the imports** makes the report one the gate cannot read, and the check a
+  `not-run` finding: the plugin writes such a path as lone surrogates, which serde_json refuses. gate.py reads it.
+
+### surviving-mutants over Python
+
+- **`[tool.mutmut]` is written back as TOML's own inline values**, for the copy mutmut runs in, where gate.py writes
+  each value as JSON and says of one JSON cannot hold that it cannot write it. So a date, an inline table, `inf` and
+  a string with a character beyond the Basic Multilingual Plane reach mutmut, where gate.py reports the table as one
+  it cannot narrow.
+- **A `match` statement holds a block**, in the reading of which lines of a function are a block's first; gate.py's
+  list of block statements leaves it out.
+- **Why a function has a `# pragma: no mutate` is read from the file's own syntax tree**, where gate.py parses the
+  function's text again, dedented.
+- **Unchanged functions are marked `do_not_mutate` in the file's bytes.** A file whose coding cookie names an
+  encoding other than UTF-8, ASCII or Latin-1 is left unmarked, so mutmut mutates all of it; gate.py decodes and
+  encodes with any codec Python knows.
+- **`do_not_mutate_patterns` are read by Rust's regex crate**, to say why mutmut made no mutant of a function. It
+  has no lookaround or backreference: with a pattern that uses one, the finding names every cause there can be
+  rather than the patterns, as it does for a pattern that is no regex at all.
+- **A directory in the tree that cannot be read stops the copy**, and the check is a `not-run` finding; gate.py's
+  `os.walk` skips it.
+- **A `.meta` of mutmut's is cut off when serde_json cannot read it**: one holding `NaN` or `Infinity`, or bytes that
+  are not UTF-8, counts as a save the stop cut off, where Python's `json` reads it.
+- **The budget in a finding is written as Rust writes a float**, `30` or `0.5`, where gate.py's `%g` writes a large
+  or small one with an exponent.
+- **A rules file or `TMPDIR` whose path is not UTF-8** is a "could not start mutmut" finding, since a
+  `[tool.mutmut]` setting cannot name it; gate.py writes the path with its bytes escaped.
+- **`--test-contexts`: a node id that is not UTF-8** makes what coverage.py's reader printed something the gate
+  cannot read, and mutmut runs unnarrowed, with the finding that says so; gate.py reads the lone surrogates.

@@ -1,5 +1,5 @@
 //! The gate's judgement of one change: what it reads of the change, and the report it gives on it, as gate.py's
-//! judge_change does for the parts ported so far: the checks beside the linters all run, over Python and Rust.
+//! judge_change does: the linters, and the checks beside them, over Python and Rust.
 
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};

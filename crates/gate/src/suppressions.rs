@@ -14,15 +14,17 @@ use crate::linters::Linter;
 use crate::Unjudged;
 
 /// How one kind of file silences something the gate runs, a linter or a coverage or mutation tool, which the quality
-/// file lists for the reviewer. Ported so far: shell scripts and workflows, whose run scripts actionlint has
-/// shellcheck read, Markdown and Rust; Python's (gate-standalone/15) follows, ahead of the rest, since a script whose
-/// `#!` names python is Python whatever its name.
+/// file lists for the reviewer: shell scripts and workflows, whose run scripts actionlint has shellcheck read,
+/// Markdown and Rust. Python is told and read its own way ([`python_suppressions`]), ahead of these.
 struct Syntax {
     /// Whether the file at `path`, from the tree's top level, is of this kind.
     holds: fn(path: &[u8]) -> bool,
     /// Matches, anywhere in a line, a line that silences something.
     pattern: &'static str,
 }
+
+/// Matches a Python comment that silences ruff, mypy, coverage.py or mutmut.
+const PYTHON_SUPPRESSION: &str = r"#.*\b(?:noqa|type:\s*ignore|pragma:\s*no\s*(?:cover|branch|mutate))\b";
 
 /// The kinds of file, the first that holds a file deciding; a file of none holds no suppression the gate knows.
 static SYNTAXES: [Syntax; 3] = [
@@ -52,21 +54,45 @@ static SYNTAXES: [Syntax; 3] = [
 
 /// The (path, line, text) of each added line, in the working tree at `root`, that silences something the gate runs,
 /// in path and line order, the text stripped and cut to 160 characters. `changed` is the lines the change added, as
-/// diff::changed_lines gives them. Errs when a file the change adds lines to cannot be read.
+/// diff::changed_lines gives them. A file's suppressions are those of its kind: Python's
+/// ([`python_suppressions`]) for a `.py` file or a script whose `#!` line names python, whatever else its name says,
+/// and otherwise those of the first of [`SYNTAXES`] that holds it. Errs when a file the change adds lines to cannot
+/// be read.
 pub fn added_suppressions(root: &Path, changed: &ChangedLines) -> Result<Vec<(OsString, u32, String)>, Unjudged> {
     static PATTERNS: LazyLock<Vec<Regex>> =
         LazyLock::new(|| SYNTAXES.iter().map(|s| Regex::new(s.pattern).expect("a valid regex")).collect());
     let mut out = vec![];
     for (path, added, lines) in files_with_added_lines(root, changed)? {
-        let Some(k) = SYNTAXES.iter().position(|s| (s.holds)(path.as_bytes())) else { continue };
-        for &n in added {
-            let line = lines.get(n as usize - 1).map(|l| String::from_utf8_lossy(l)).unwrap_or_default();
-            if PATTERNS[k].is_match(&line) {
-                out.push((path.clone(), n, crate::text::py_strip(&line).chars().take(160).collect()));
-            }
+        let text = |n: u32| lines.get(n as usize - 1).map(|l| String::from_utf8_lossy(l)).unwrap_or_default();
+        let suppressing: Vec<u32> = if lang_python::is_python(path.as_bytes(), || lines[0].clone()) {
+            python_suppressions(&lines).into_iter().filter(|n| added.contains(n)).collect()
+        } else if let Some(k) = SYNTAXES.iter().position(|s| (s.holds)(path.as_bytes())) {
+            added.iter().copied().filter(|&n| PATTERNS[k].is_match(&text(n))).collect()
+        } else {
+            continue;
+        };
+        for n in suppressing {
+            out.push((path.clone(), n, crate::text::py_strip(&text(n)).chars().take(160).collect()));
         }
     }
     Ok(out)
+}
+
+/// The numbers, from 1 and in order, of the lines of a Python file that silence something: those where a comment
+/// that [`PYTHON_SUPPRESSION`] matches starts, so that the same words in a string are none. `lines` is the file's
+/// lines as [`files_with_added_lines`] splits them. In a file that crates/lang-python cannot read, each line the
+/// pattern matches, so that a suppression in a file ruff reports as broken is still listed.
+fn python_suppressions(lines: &[Vec<u8>]) -> Vec<u32> {
+    static PATTERN: LazyLock<Regex> = LazyLock::new(|| Regex::new(PYTHON_SUPPRESSION).expect("a valid regex"));
+    let numbered = |texts: Vec<(u32, String)>| -> Vec<u32> {
+        let mut out: Vec<u32> = texts.into_iter().filter(|(_, text)| PATTERN.is_match(text)).map(|(n, _)| n).collect();
+        out.dedup();
+        out
+    };
+    match lang_python::comments(&lines.join(&b'\n')) {
+        Some(comments) => numbered(comments),
+        None => numbered((1..).zip(lines.iter().map(|l| String::from_utf8_lossy(l).into_owned())).collect()),
+    }
 }
 
 /// (path, line, the character) for each file in `changed` that a linter of `reads` reads and whose working tree at
@@ -189,6 +215,41 @@ mod tests {
             [
                 ("a.sh".into(), 1, "x # shellcheck disable=SC2086".into()),
                 ("b.md".into(), 1, "<!-- pyml disable-next-line md013-->".into())
+            ]
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn in_python_only_a_comment_is_a_suppression_whatever_the_file_s_name() {
+        let root = tree(&[
+            ("f.py", b"hint = \"add # noqa: F401\"\ndoc = \"\"\"\n# type: ignore\n\"\"\"\nimport os  # noqa: F401\n"),
+            ("bin/tool", b"#!/usr/bin/env python3\nprint('# noqa')  # pragma: no cover\n"),
+            ("run.sh", b"#!/usr/bin/python3\n# shellcheck disable=SC1\nx = 1  # type: ignore\n"),
+            ("form.py", b"a = 1\x0c\nimport os  # noqa: F401\n"),
+        ]);
+        let all = [1, 2, 3, 4, 5];
+        let added = lines(&[("f.py", &all), ("bin/tool", &all[..2]), ("run.sh", &all[..3]), ("form.py", &[2])]);
+        assert_eq!(
+            added_suppressions(&root, &added).unwrap(),
+            [
+                ("bin/tool".into(), 2, "print('# noqa')  # pragma: no cover".into()),
+                ("f.py".into(), 5, "import os  # noqa: F401".into()),
+                ("form.py".into(), 2, "import os  # noqa: F401".into()),
+                ("run.sh".into(), 3, "x = 1  # type: ignore".into()),
+            ]
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn in_python_that_cannot_be_read_each_line_the_pattern_matches_is_a_suppression() {
+        let root = tree(&[("f.py", b"import os  # noqa: F401\ns = \"\"\"unterminated # noqa\n")]);
+        assert_eq!(
+            added_suppressions(&root, &lines(&[("f.py", &[1, 2])])).unwrap(),
+            [
+                ("f.py".into(), 1, "import os  # noqa: F401".into()),
+                ("f.py".into(), 2, "s = \"\"\"unterminated # noqa".into())
             ]
         );
         std::fs::remove_dir_all(root).unwrap();

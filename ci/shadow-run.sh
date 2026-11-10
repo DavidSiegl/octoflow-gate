@@ -22,18 +22,27 @@
 #                                        the JSON, gate.py's first; or, when the Rust gate could not judge or was
 #                                        stopped, a line saying so and what it printed on standard error
 #
-# The Rust gate has GATE_MINUTES to judge and is then stopped, so that it cannot hold up a build whose verdict
-# gate.py has given; what it had started may outlive it by the time those take to end. Its standard error comes
-# through as it is printed.
+# The Rust gate has GATE_MINUTES to judge and is then stopped, and this script ends within a minute of that, so that
+# it cannot hold up a build whose verdict gate.py has given. A gate that is stopped stops nothing it had started: a
+# tool or a test command of its own may run on after this script. The limit is fixed, so a project whose budgets
+# (--mutation-budget, --base-run-budget, gate.toml's [budgets]) or whose own test commands take the gate past it
+# gets no comparison. The gate's standard error comes through as it is printed. SIGINT is, for the gate, what it
+# was for this script: ignored when a Jenkins step runs it, else Ctrl-C, on which the gate stops what it started.
 #
 # The differences that are meant are listed in docs/port-differences.md of the gate's repository,
 # https://github.com/DavidSiegl/octoflow-gate/blob/main/docs/port-differences.md. Exits 0 once quality-diff.txt is
 # written, whatever it holds, and 2, saying why on standard error, when the arguments are wrong, <dir> lacks gate.py's
-# reports or a file cannot be written. Needs diff, tee and timeout.
+# reports or a file cannot be written. Needs /proc and GNU coreutils' env and timeout.
 set -u
 
-# How long the Rust gate may take, in minutes: above what its checks' budgets add up to, below a build's own limit.
+# How long the Rust gate may take, in minutes: a fixed bound below a build's own limit, which the gate's budgets are
+# not held to (the header says whom it cuts off).
 GATE_MINUTES=20
+# Seconds a stopped gate has to end before it is killed.
+KILL_AFTER=30
+# Seconds this script waits, once the gate has ended, for the rest of what it and its tools printed, as the gate
+# waits on a tool's (KILL_WAIT in crates/gate/src/process.rs).
+SAID_WAIT=5
 
 [ $# -ge 1 ] || { echo "usage: shadow-run.sh <dir> GATE_ARGS..." >&2; exit 2; }
 dir=$1
@@ -45,23 +54,41 @@ for name in quality.md quality.json; do
 done
 rm -f "$dir/quality-rust.md" "$dir/quality-rust.json" "$dir/quality-diff.txt" ||
     { echo "shadow-run.sh: cannot remove an earlier run's files from $dir" >&2; exit 2; }
-# Holds `said`, what the Rust gate printed on standard error, and `status`, its exit status.
+# Holds `said`, what the Rust gate printed on standard error, and `err`, the pipe it prints that into.
 work=$(mktemp -d) || { echo "shadow-run.sh: cannot make a temporary directory" >&2; exit 2; }
 trap 'rm -rf "$work"' EXIT
 # A shell that is told to stop runs no EXIT trap unless it exits by its own hand.
 trap 'exit 143' HUP TERM
+trap 'exit 130' INT
 
-# --out and --json come last, so that they win over any among GATE_ARGS. The gate's standard error goes to this
-# script's as it comes and into `said`; its standard output goes round the pipe, through descriptor 3; and its exit
-# status goes through a file, a pipeline having only its last command's.
-{
-    {
-        timeout --kill-after=30 "${GATE_MINUTES}m" "$gate" "$@" \
-            --out "$dir/quality-rust.md" --json "$dir/quality-rust.json" 2>&1 >&3 3>&-
-        echo $? >"$work/status"
-    } | tee "$work/said" >&2
-} 3>&1 || { echo "shadow-run.sh: cannot keep what the Rust gate printed" >&2; exit 2; }
-status=$(cat "$work/status") || { echo "shadow-run.sh: cannot read the Rust gate's exit status" >&2; exit 2; }
+# --out and --json come last, so that they win over any among GATE_ARGS.
+set -- "$gate" "$@" --out "$dir/quality-rust.md" --json "$dir/quality-rust.json"
+# timeout starts its command with SIGINT at its default, also when it was itself started with SIGINT ignored. The
+# last hexadecimal digit of SigIgn in proc(5)'s status holds signals 1 to 4, SIGINT being 2.
+ignored=$(awk '/^SigIgn:/ { print substr($2, length($2)) }' "/proc/$$/status") ||
+    { echo "shadow-run.sh: cannot read /proc/$$/status for the signals this script ignores" >&2; exit 2; }
+case $ignored in
+[2367abef]) set -- env --ignore-signal=INT "$@" ;;
+esac
+
+# The gate's standard error goes to this script's as it comes, and into `said`. tee is not the gate's pipeline, as
+# it reads until everything that holds the gate's standard error has ended, which a tool of a stopped gate may not
+# for long: it has SAID_WAIT after the gate.
+mkfifo "$work/err" || { echo "shadow-run.sh: cannot make a pipe for what the Rust gate prints" >&2; exit 2; }
+tee "$work/said" <"$work/err" >&2 &
+said_pid=$!
+# --foreground leaves the gate in this script's process group, so that Ctrl-C reaches it.
+timeout --foreground --kill-after="$KILL_AFTER" "${GATE_MINUTES}m" "$@" 2>"$work/err"
+status=$?
+(sleep "$SAID_WAIT" && kill "$said_pid") >/dev/null 2>&1 &
+cutter=$!
+# The shell would else report a tee that was cut off as "Terminated".
+wait "$said_pid" 2>/dev/null
+said_status=$?
+kill "$cutter" 2>/dev/null
+# 143 is tee cut off after SAID_WAIT, having kept what the gate itself printed.
+[ "$said_status" -eq 0 ] || [ "$said_status" -eq 143 ] ||
+    { echo "shadow-run.sh: cannot keep what the Rust gate printed" >&2; exit 2; }
 
 {
     case $status in
@@ -72,8 +99,9 @@ status=$(cat "$work/status") || { echo "shadow-run.sh: cannot read the Rust gate
             [ $? -le 1 ] || echo "shadow-run.sh: diff could not compare quality.$format with quality-rust.$format"
         done
         ;;
-    124 | 137)
-        # timeout's exit statuses for a program it stopped, and for one it had to kill.
+    124)
+        # timeout's exit status for a program it stopped. One it had to kill gives 137, as does a gate that anything
+        # else killed, so that is told as the exit status it is, below.
         echo "The Rust gate was stopped after $GATE_MINUTES minutes without a verdict. It said:"
         cat "$work/said"
         ;;

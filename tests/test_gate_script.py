@@ -125,13 +125,14 @@ class TestShadowRun(RepositoryTest):
         self.commit({"ci/gate.pin": f"0.6.0 {'0' * 64}\n", "pyproject.toml": "", "gate.toml": TWO_TEST_COMMANDS},
                     "a judge that pins a release")
 
-    def gate(self, gate_exit=0, condition="", shadow_exit=0):
+    def gate(self, gate_exit=0, condition="", detail="", shadow_exit=0):
         """Run scripts/gate with the stub tools first on PATH, the release's gate.py exiting gate_exit with condition
-        as its report's failed condition and its shadow-run.sh exiting shadow_exit; returns (exit status, standard
-        error)."""
+        as its report's failed condition and detail as what its failing test said, and its shadow-run.sh exiting
+        shadow_exit; returns (exit status, standard error)."""
         env = {k: v for k, v in os.environ.items() if k not in ("WORKSPACE", "WORKSPACE_TMP", "CHANGE_TARGET")}
         env |= {"PATH": self.bin + os.pathsep + env["PATH"], "FAKE_GATE_EXIT": str(gate_exit),
-                "FAKE_CONDITION": condition, "FAKE_SHADOW_EXIT": str(shadow_exit), "SHADOW_LOG": self.log}
+                "FAKE_CONDITION": condition, "FAKE_DETAIL": detail, "FAKE_SHADOW_EXIT": str(shadow_exit),
+                "SHADOW_LOG": self.log}
         run = subprocess.run(["bash", "scripts/gate"], cwd=self.repo, env=env,  # noqa: S607
                              capture_output=True, text=True, check=False)
         return run.returncode, run.stderr
@@ -175,6 +176,14 @@ class TestShadowRun(RepositoryTest):
         self.assertIn("gate: no shadow run of the Rust gate: gate.py could not judge a test command\n", stderr)
         self.assertIsNone(self.shadow_args())
 
+    def test_a_failing_test_that_quotes_such_a_condition_does_not_leave_the_rust_gate_out(self):
+        self.pin({"gate.py": RELEASED_GATE_PY + JUDGING_GATE_PY, "shadow-run.sh": SHADOW_STUB})
+        status, stderr = self.gate(gate_exit=1, condition="1 tests fail; each is listed below.",
+                                   detail='assert conditions == ["The test command `a` exited 5"]')
+        self.assertEqual(status, 1)
+        self.assertNotIn("no shadow run", stderr)
+        self.assertIsNotNone(self.shadow_args())
+
     def test_a_release_without_the_rust_gate_is_judged_by_gate_py_alone(self):
         self.pin({"gate.py": RELEASED_GATE_PY + JUDGING_GATE_PY})
         status, stderr = self.gate()
@@ -205,7 +214,8 @@ junit = ["b.xml"]
 """
 
 # What makes RELEASED_GATE_PY a gate.py that judges: it writes the file after --out, GATE: ERROR when it exits 1, and
-# quality.json beside it with FAKE_CONDITION as the failed condition, and exits FAKE_GATE_EXIT.
+# quality.json beside it with FAKE_CONDITION as the failed condition and FAKE_DETAIL as what a failing test said, and
+# exits FAKE_GATE_EXIT.
 JUDGING_GATE_PY = """
 if __name__ == "__main__":
     import json, os, sys
@@ -214,7 +224,8 @@ if __name__ == "__main__":
     with open(out, "w") as f:
         f.write("GATE: ERROR\\n" if status == 1 else "GATE: OK\\n")
     with open(out.removesuffix(".md") + ".json", "w") as f:
-        json.dump({"failed_conditions": [c for c in [os.environ["FAKE_CONDITION"]] if c]}, f)
+        json.dump({"failed_conditions": [c for c in [os.environ["FAKE_CONDITION"]] if c],
+                   "failing_tests": [{"detail": d} for d in [os.environ["FAKE_DETAIL"]] if d]}, f)
     sys.exit(status)
 """
 

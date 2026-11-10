@@ -201,22 +201,28 @@ uv sync --frozen
 # gate, given the reports alone, would not reach, so no shadow run is made then. `python` is
 # the environment's, in which gate.py ran.
 shadow_run() {
-	local listed reports=()
-	# As gate.py's run_test_commands words the condition, in quality.json's failed_conditions.
-	if grep -q '"The test command `' quality.json; then
-		echo "gate: no shadow run of the Rust gate: gate.py could not judge a test command" >&2
-		return 0
-	fi
+	local listed reports=() read_status=0
+	# Prints the flags that name the reports of gate.toml's test commands, a flag or a path a
+	# line; exits 3, printing nothing, when quality.json's failed conditions hold the one
+	# gate.py's run_test_commands words for a command it could not judge.
 	listed=$(
-		uv run --frozen python -I - "$judge_dir/gate.toml" <<-'EOF'
-		import sys, tomllib
+		uv run --frozen python -I - "$judge_dir/gate.toml" quality.json <<-'EOF'
+		import json, sys, tomllib
+		with open(sys.argv[2]) as f:
+		    if any(c.startswith("The test command `") for c in json.load(f)["failed_conditions"]):
+		        sys.exit(3)
 		with open(sys.argv[1], "rb") as f:
 		    for command in tomllib.load(f).get("test", []):
 		        for flag, key in (("--tests", "junit"), ("--coverage", "coverage")):
 		            for report in command.get(key, []):
 		                print(flag, report, sep="\n")
 		EOF
-	) || return
+	) || read_status=$?
+	if [[ $read_status -eq 3 ]]; then
+		echo "gate: no shadow run of the Rust gate: gate.py could not judge a test command" >&2
+		return 0
+	fi
+	[[ $read_status -eq 0 ]] || return
 	[[ -z $listed ]] || mapfile -t reports <<<"$listed"
 	uv run --frozen "$judge_dir/release/shadow-run.sh" . "${gate_args[@]}" --python python "${reports[@]}"
 }

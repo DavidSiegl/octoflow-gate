@@ -5,11 +5,14 @@ A stub stands in for the Rust gate: it records its arguments and writes the repo
 
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
+import time
 import unittest
 
 import conftest
+import pytest
 
 # conftest.REPO, not this file's directory: under mutmut the tests run from mutants/, which has no ci/.
 SCRIPT = os.path.join(conftest.REPO, "ci", "shadow-run.sh")
@@ -40,15 +43,27 @@ class TestShadowRun(unittest.TestCase):
         self.release = os.path.join(self.tmp.name, "release")
         os.mkdir(self.release)
         self.script = shutil.copy(SCRIPT, os.path.join(self.release, "shadow-run.sh"))
-        gate = os.path.join(self.release, "gate-linux-x86_64")
-        with open(gate, "w") as f:
-            f.write(GATE_STUB)
-        os.chmod(gate, 0o755)  # noqa: S103
+        self.put_gate(GATE_STUB)
         self.dir = os.path.join(self.tmp.name, "reports")
         os.mkdir(self.dir)
         self.log = os.path.join(self.tmp.name, "gate.log")
         self.write("quality.md", "GATE: OK\n")
         self.write("quality.json", '{\n  "gate": "OK"\n}\n')
+
+    def put_gate(self, text):
+        """Make the shell script text the release's Rust gate."""
+        gate = os.path.join(self.release, "gate-linux-x86_64")
+        with open(gate, "w") as f:
+            f.write(text)
+        os.chmod(gate, 0o755)  # noqa: S103
+
+    def shorten_limit(self, minutes):
+        """Give the release's shadow-run.sh a time limit of minutes in place of its own."""
+        with open(self.script) as f:
+            text = f.read()
+        self.assertIn("\nGATE_MINUTES=20\n", text)
+        with open(self.script, "w") as f:
+            f.write(text.replace("\nGATE_MINUTES=20\n", f"\nGATE_MINUTES={minutes}\n"))
 
     def write(self, name, text):
         """Write text to the file name in the reports' directory."""
@@ -60,12 +75,15 @@ class TestShadowRun(unittest.TestCase):
         with open(os.path.join(self.dir, name)) as f:
             return f.read()
 
-    def shadow(self, *args, gate_exit=0, md="GATE: OK\n", json='{\n  "gate": "OK"\n}\n', said="", path=None):
+    def shadow(self, *args, gate_exit=0, md="GATE: OK\n", json='{\n  "gate": "OK"\n}\n', said="", path=None,
+               sigint=signal.SIG_DFL):
         """Run shadow-run.sh on the reports' directory with args, the stub gate exiting gate_exit after writing md and
-        json and printing said, with path as PATH when given; returns (exit status, standard error)."""
+        json and printing said, with path as PATH when given and sigint as what SIGINT does to the script (the tests
+        themselves may run with it ignored, as in a Jenkins build); returns (exit status, standard error)."""
         env = {**os.environ, "GATE_LOG": self.log, "FAKE_STATUS": str(gate_exit), "FAKE_MD": md, "FAKE_JSON": json,
                "FAKE_SAID": said, "PATH": path or os.environ["PATH"]}
         run = subprocess.run([self.script, self.dir, *args], env=env,  # noqa: S603
+                             preexec_fn=lambda: signal.signal(signal.SIGINT, sigint),
                              capture_output=True, text=True, check=False)
         return run.returncode, run.stderr
 
@@ -118,6 +136,48 @@ class TestShadowRun(unittest.TestCase):
         self.assertEqual(self.read("quality-diff.txt"),
                          "The Rust gate was stopped after 20 minutes without a verdict. It said:\n"
                          "gate: running mutmut\n")
+
+    def test_a_gate_past_its_time_limit_is_stopped_though_what_it_started_runs_on(self):
+        # What the gate started is in a session of its own, as the Rust gate's tools are, and holds its standard error.
+        self.shorten_limit("0.02")
+        self.put_gate("#!/bin/sh\necho 'gate: running the tests' >&2\nsetsid sleep 20 >&2 &\nexec sleep 20\n")
+        started = time.monotonic()
+        shadow_exit, stderr = self.shadow()
+        self.assertLess(time.monotonic() - started, 15)
+        self.assertEqual((shadow_exit, stderr), (0, "gate: running the tests\n"))
+        self.assertEqual(self.read("quality-diff.txt"),
+                         "The Rust gate was stopped after 0.02 minutes without a verdict. It said:\n"
+                         "gate: running the tests\n")
+
+    def test_a_gate_that_was_killed_is_not_said_to_have_been_stopped_at_the_limit(self):
+        self.put_gate("#!/bin/sh\nkill -KILL $$\n")
+        self.assertEqual(self.shadow()[0], 0)
+        self.assertIn("The Rust gate could not judge the change (exit status 137). It said:\n",
+                      self.read("quality-diff.txt"))
+
+    def test_the_gate_has_sigint_ignored_only_when_the_script_was_started_so(self):
+        # The second bit of the last hexadecimal digit of SigIgn is SIGINT's.
+        self.put_gate("#!/bin/sh\nawk '/^SigIgn:/ { print substr($2, length($2)) }' /proc/$$/status >&2\nexit 2\n")
+        _, as_a_jenkins_step = self.shadow(sigint=signal.SIG_IGN)
+        _, at_a_terminal = self.shadow()
+        self.assertEqual((int(as_a_jenkins_step, 16) & 2, int(at_a_terminal, 16) & 2), (2, 0))
+
+    @pytest.mark.real_sleep
+    def test_ctrl_c_reaches_the_gate_and_ends_the_script(self):
+        # Ctrl-C goes to the terminal's foreground process group, which the script's session stands in for.
+        self.put_gate("#!/bin/sh\ntrap 'trap \"\" INT; echo interrupted >> \"$GATE_LOG\"; exit 130' INT\n"
+                      "echo started >> \"$GATE_LOG\"\nsleep 20 &\nwait\n")
+        run = subprocess.Popen([self.script, self.dir], env={**os.environ, "GATE_LOG": self.log},  # noqa: S603
+                               preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL),  # noqa: PLW1509
+                               start_new_session=True, stderr=subprocess.DEVNULL)
+        self.addCleanup(run.kill)
+        while not os.path.exists(self.log):
+            self.assertIsNone(run.poll())
+            time.sleep(0.05)
+        os.killpg(run.pid, signal.SIGINT)
+        self.assertEqual(run.wait(timeout=15), 130)
+        with open(self.log) as f:
+            self.assertEqual(f.read(), "started\ninterrupted\n")
 
     def test_a_gate_that_cannot_be_started_is_said_too(self):
         os.remove(os.path.join(self.release, "gate-linux-x86_64"))

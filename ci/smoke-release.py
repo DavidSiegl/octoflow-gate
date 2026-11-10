@@ -11,7 +11,7 @@ Unpacked into an empty directory, the release must:
   command's JUnit report; and write a quality.json that the release's schema/quality-v1.json accepts;
 - answer `gate-linux-x86_64 --help` with exit status 0;
 - judge that change a second time with the Rust gate, as a project's shadow run does, `shadow-run.sh` with gate.py's
-  arguments, and find no difference between the two gates' reports.
+  arguments and the report its test command wrote, and find no difference between the two gates' reports.
 
 The helper's output is checked only as gate.py reads it; its structure field by field is gate-rust/tests/schema.rs's,
 run on the same source by the build's Gate stage. Exits 0 when all hold; otherwise names the first that does not on
@@ -139,9 +139,11 @@ def check_fixture_project(release: Path, project: Path) -> None:
 
 def check_shadow_run(release: Path, project: Path, gate_args: list[str]) -> None:
     """Fail unless the release's shadow-run.sh, given gate_args, the arguments gate.py judged project's change with
-    into quality.md there, finds the Rust gate's reports the same as gate.py's."""
+    into quality.md there, and the JUnit report make_fixture_project's test command wrote for it, finds the Rust
+    gate's reports the same as gate.py's."""
     try:
-        proc = run([str(release / "shadow-run.sh"), ".", *gate_args, "--python", sys.executable], project)
+        proc = run([str(release / "shadow-run.sh"), ".", *gate_args, "--python", sys.executable,
+                    "--tests", "junit.xml"], project)
     except OSError as e:
         raise SmokeFailure(f"cannot start the release's shadow-run.sh: {e}") from e
     if proc.returncode != 0:

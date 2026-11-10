@@ -60,11 +60,11 @@ class TestShadowRun(unittest.TestCase):
         with open(os.path.join(self.dir, name)) as f:
             return f.read()
 
-    def shadow(self, *args, gate_exit=0, md="GATE: OK\n", json='{\n  "gate": "OK"\n}\n', said=""):
+    def shadow(self, *args, gate_exit=0, md="GATE: OK\n", json='{\n  "gate": "OK"\n}\n', said="", path=None):
         """Run shadow-run.sh on the reports' directory with args, the stub gate exiting gate_exit after writing md and
-        json and printing said; returns (exit status, standard error)."""
+        json and printing said, with path as PATH when given; returns (exit status, standard error)."""
         env = {**os.environ, "GATE_LOG": self.log, "FAKE_STATUS": str(gate_exit), "FAKE_MD": md, "FAKE_JSON": json,
-               "FAKE_SAID": said}
+               "FAKE_SAID": said, "PATH": path or os.environ["PATH"]}
         run = subprocess.run([self.script, self.dir, *args], env=env,  # noqa: S603
                              capture_output=True, text=True, check=False)
         return run.returncode, run.stderr
@@ -79,7 +79,15 @@ class TestShadowRun(unittest.TestCase):
         self.shadow("--base", "main", "--tests", "a report.xml")
         with open(self.log) as f:
             self.assertEqual(f.read().splitlines(),
-                             ["--base", "main", "--tests", "a report.xml", "--out", f"{self.dir}/quality-rust.md"])
+                             ["--base", "main", "--tests", "a report.xml", "--out", f"{self.dir}/quality-rust.md",
+                              "--json", f"{self.dir}/quality-rust.json"])
+
+    def test_an_out_or_json_among_the_arguments_gives_way_so_gate_py_s_reports_stay(self):
+        # The Rust gate takes the last of each; a forwarded --json would else name gate.py's own quality.json.
+        self.shadow("--out", f"{self.dir}/quality.md", "--json", f"{self.dir}/quality.json")
+        with open(self.log) as f:
+            self.assertEqual(f.read().splitlines()[-4:], ["--out", f"{self.dir}/quality-rust.md",
+                                                          "--json", f"{self.dir}/quality-rust.json"])
 
     def test_a_verdict_that_differs_is_shown_in_both_reports_and_fails_nothing(self):
         shadow_exit, _ = self.shadow(gate_exit=1, md="GATE: ERROR\n", json='{\n  "gate": "ERROR"\n}\n')
@@ -96,6 +104,20 @@ class TestShadowRun(unittest.TestCase):
                          "The Rust gate could not judge the change (exit status 2). It said:\n"
                          "gate: main names no commit\n")
         self.assertFalse(os.path.exists(os.path.join(self.dir, "quality-rust.md")))
+
+    def test_a_gate_stopped_at_its_time_limit_is_said_with_what_it_had_printed(self):
+        # A timeout that prints for the gate and reports it stopped, in place of waiting out the limit.
+        bin_dir = os.path.join(self.tmp.name, "bin")
+        os.mkdir(bin_dir)
+        stopper = os.path.join(bin_dir, "timeout")
+        with open(stopper, "w") as f:
+            f.write("#!/bin/sh\necho 'gate: running mutmut' >&2\nexit 124\n")
+        os.chmod(stopper, 0o755)  # noqa: S103
+        shadow_exit, stderr = self.shadow(path=bin_dir + os.pathsep + os.environ["PATH"])
+        self.assertEqual((shadow_exit, stderr), (0, "gate: running mutmut\n"))
+        self.assertEqual(self.read("quality-diff.txt"),
+                         "The Rust gate was stopped after 20 minutes without a verdict. It said:\n"
+                         "gate: running mutmut\n")
 
     def test_a_gate_that_cannot_be_started_is_said_too(self):
         os.remove(os.path.join(self.release, "gate-linux-x86_64"))

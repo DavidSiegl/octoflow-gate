@@ -108,9 +108,11 @@ it judge each change a second time and keep how the two reports differ, which de
 uv run "$gate/shadow-run.sh" . --base main --tests test-results.xml --coverage coverage.xml --python python
 ```
 
-after `gate.py --out quality.md` with the same arguments, in the same working tree. It writes `quality-rust.md`,
-`quality-rust.json` and `quality-diff.txt` beside `quality.md`; the last is empty when the reports agree, and the
-script's header says the rest. `--python` names the Python that has the project's pytest, pytest-randomly and mutmut,
+after `gate.py --out quality.md` has judged, in the same working tree, with the arguments `gate.py` had. Where
+`gate.py` ran the `[[test]]` commands of `gate.toml` itself, give the reports they wrote as `--tests` and `--coverage`,
+as here: without them the Rust gate runs the commands again. It writes `quality-rust.md`, `quality-rust.json` and
+`quality-diff.txt` beside `quality.md`; the last is empty when the reports agree, and the script's header says the
+rest. `--python` names the Python that has the project's pytest, pytest-randomly and mutmut,
 which for `gate.py` is the one that runs it. The differences that are meant are listed in
 [docs/port-differences.md](docs/port-differences.md); any other is a bug worth an issue.
 

@@ -268,7 +268,7 @@ fn changed_constants(path: Option<&OsString>, was: (&Test, &SourceFile), now: (&
                 let what = "is no longer a constant of the file that this check can read";
                 (format!("line {} at the base", base.line), what)
             }
-            Some(defined) if defined.value != base.value => (format!("line {}", defined.line), "changed"),
+            Some(defined) if defined.expression != base.expression => (format!("line {}", defined.line), "changed"),
             Some(_) => continue,
         };
         let message = format!(

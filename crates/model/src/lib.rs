@@ -150,7 +150,7 @@ pub struct Constant {
     pub line: u32,
     /// The expression assigned to it, without its comments or its layout: equal for two expressions that are the same
     /// code.
-    pub value: String,
+    pub expression: String,
 }
 
 /// An item that can hold tests ([`SourceFile::test_groups`]).

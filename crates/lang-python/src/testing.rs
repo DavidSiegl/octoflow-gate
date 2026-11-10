@@ -301,7 +301,7 @@ pub fn constants(root: Node, text: Text) -> Vec<Constant> {
             continue;
         }
         if bindings.get(text.of(left)) == Some(&1) && !holds_call(right) {
-            out.push(Constant { name: text.of(left).into(), line: line(statement), value: digest(right, text) });
+            out.push(Constant { name: text.of(left).into(), line: line(statement), expression: digest(right, text) });
         }
     }
     out

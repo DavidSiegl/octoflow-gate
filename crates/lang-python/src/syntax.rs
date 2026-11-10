@@ -101,11 +101,46 @@ pub fn unparenthesized(mut node: Node) -> Node {
     node
 }
 
-/// Whether `node` is a replacement field's name and its format spec, where the spec starts with `=`, as the `x:=^9`
-/// of `f"{x:=^9}"`. tree-sitter-python reads it as an assignment expression, `x := ^9`, with an error in it where
-/// the rest of the spec is no expression; Python reads a `:=` not in brackets of its own as the start of a spec.
-pub fn is_name_and_format_spec(node: Node) -> bool {
-    node.kind() == "named_expression" && node.parent().is_some_and(|p| p.kind() == "interpolation")
+/// Where `root`'s tree misreads the start of a format spec: the byte offset of the `=` of each `:=` that follows the
+/// bare name a replacement field opens with, as in `f"{x:=^9}"`. Python reads the `:` there as the start of the
+/// spec, `=^9`; tree-sitter-python reads an assignment expression, `x := ^9`, and what follows as its value: an
+/// error where that is no expression, a name bound where it is one, a comment from a `#` on. With any other
+/// character in place of that `=` it reads the spec.
+///
+/// A `{` opens a replacement field when it is an `interpolation`'s or a `format_expression`'s, and also, where
+/// tree-sitter found an error and made neither, when a string is open at it.
+pub fn misread_spec_starts(root: Node) -> Vec<usize> {
+    let mut out = vec![];
+    // The kinds of the two tokens before the one at hand, the nearer last, with whether a `{` opens a field; and how
+    // many strings are open.
+    let mut before = [("", false); 2];
+    let mut open_strings = 0usize;
+    let mut todo = vec![root];
+    while let Some(node) = todo.pop() {
+        if node.child_count() > 0 {
+            todo.extend(children(node).into_iter().rev());
+            continue;
+        }
+        let parent = node.parent().map(|p| p.kind()).unwrap_or_default();
+        let opens_field = match node.kind() {
+            "string_start" => {
+                open_strings += 1;
+                false
+            }
+            "string_end" => {
+                open_strings = open_strings.saturating_sub(1);
+                false
+            }
+            "{" => matches!(parent, "interpolation" | "format_expression") || (parent == "ERROR" && open_strings > 0),
+            ":=" if before == [("{", true), ("identifier", false)] => {
+                out.push(node.start_byte() + 1);
+                false
+            }
+            _ => false,
+        };
+        before = [before[1], (node.kind(), opens_field)];
+    }
+    out
 }
 
 /// One token of [`tokens`].
@@ -134,7 +169,7 @@ enum Item<'t> {
 }
 
 /// Gives `emit` the tokens of `root`'s code in the order they are written, comments left out, and the comma that
-/// ends a bracket's or a statement's list unless it makes an index a tuple, as in `x[1,]`. Two pieces of code with
+/// only ends a bracket's or a statement's list ([`ends_a_list`]). Two pieces of code with
 /// the same tokens are the same code, but for what Python reads alike and writes differently other than quotes:
 /// escapes in strings, the spelling of a number, redundant parentheses.
 pub fn tokens<'t>(root: Node<'t>, text: Text<'t>, emit: &mut dyn FnMut(Token<'t>)) {
@@ -163,13 +198,6 @@ pub fn tokens<'t>(root: Node<'t>, text: Text<'t>, emit: &mut dyn FnMut(Token<'t>
             "format_specifier" => {
                 todo.extend(format_spec_items(node.byte_range(), named(node), text).into_iter().rev());
             }
-            "named_expression" if is_name_and_format_spec(node) => {
-                // The name, where tree-sitter found one, and the spec as written: its fields are not told apart.
-                let name = node.child_by_field_name("name");
-                let spec = name.map_or(node.start_byte(), |n| n.end_byte())..node.end_byte();
-                todo.extend(format_spec_items(spec, vec![], text).into_iter().rev());
-                todo.extend(name.map(Item::Node));
-            }
             "," if ends_a_list(node) => {}
             _ if node.child_count() == 0 => {
                 if !node.byte_range().is_empty() {
@@ -188,15 +216,20 @@ pub fn tokens<'t>(root: Node<'t>, text: Text<'t>, emit: &mut dyn FnMut(Token<'t>
 }
 
 /// Whether `comma`, a `,`, only ends the list it is in: nothing but comments follows it in its brackets or its
-/// statement, and it is not what makes one index a tuple, as in `x[1,]`. A tuple of one element is told from the
-/// element by its node's kind, with or without the comma.
+/// statement, and it is not what makes one element a tuple where the node's kind does not say so. The kind says so
+/// of an expression, a `tuple` with or without the comma, and not of one index, as in `x[1,]`, nor of one target in
+/// parentheses, as in `(x,) = y`, a `tuple_pattern` as `(x) = y` is.
 fn ends_a_list(comma: Node) -> bool {
     let mut next = comma.next_sibling();
     while let Some(trivia) = next.filter(|n| is_trivia(*n)) {
         next = trivia.next_sibling();
     }
-    let one_index = comma.parent().is_some_and(|p| p.kind() == "subscript" && fields(p, "subscript").len() == 1);
-    next.is_none_or(|n| matches!(n.kind(), ")" | "]" | "}")) && !one_index
+    let makes_a_tuple = comma.parent().is_some_and(|p| match p.kind() {
+        "subscript" => fields(p, "subscript").len() == 1,
+        "tuple_pattern" => named(p).len() == 1,
+        _ => false,
+    });
+    next.is_none_or(|n| matches!(n.kind(), ")" | "]" | "}")) && !makes_a_tuple
 }
 
 /// The tokens of a replacement field's format spec, the source's text at `spec`, from its colon on, with the

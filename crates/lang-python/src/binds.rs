@@ -4,7 +4,7 @@
 
 use tree_sitter::{Node, Point};
 
-use crate::syntax::{children, fields, is_name_and_format_spec, named, of_kind, unparenthesized, Text};
+use crate::syntax::{children, fields, named, of_kind, unparenthesized, Text};
 
 /// How a name is bound, which decides who counts the binding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,17 +61,21 @@ pub fn binds<'t>(node: Node, text: Text<'t>) -> Vec<Bound<'t>> {
             out.extend(fields(node, "left").into_iter().flat_map(|left| targets(left, text)));
         }
         "with_item" => {
-            // `with (open(p) as f):` holds its one item in parentheses.
-            let renamed = node.child_by_field_name("value").map(unparenthesized).filter(|v| v.kind() == "as_pattern");
-            let alias = renamed.and_then(|v| v.child_by_field_name("alias"));
-            out.extend(alias.into_iter().flat_map(|alias| targets(alias, text)));
+            // `with (open(p) as f):` holds its one item in parentheses, and `with (open(p) as f,):` in a tuple.
+            let items = match node.child_by_field_name("value").map(unparenthesized) {
+                Some(tuple) if tuple.kind() == "tuple" => named(tuple),
+                value => value.into_iter().collect(),
+            };
+            let aliases = items.into_iter().filter(|v| v.kind() == "as_pattern");
+            let aliases = aliases.filter_map(|v| v.child_by_field_name("alias"));
+            out.extend(aliases.flat_map(|alias| targets(alias, text)));
         }
         "except_clause" | "except_group_clause" => {
             let alias = of_kind(node, "as_pattern").first().and_then(|v| v.child_by_field_name("alias"));
             let name = alias.and_then(|a| named(a).into_iter().find(|n| n.kind() == "identifier"));
             out.extend(name.map(|name| name_at(name, node, How::Name)));
         }
-        "named_expression" if !is_name_and_format_spec(node) => {
+        "named_expression" => {
             let name = node.child_by_field_name("name").filter(|n| n.kind() == "identifier");
             out.extend(name.map(|name| name_at(name, name, How::Walrus)));
         }

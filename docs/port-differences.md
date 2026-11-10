@@ -68,9 +68,7 @@ runs the checks of `crates/checks` over it.
   The Rust gate takes no table of codecs (spec decision 7).
 - **What does not parse.** A file tree-sitter cannot parse "does not parse as Python", at the line of the first token
   it could not place; gate.py quotes `ast`'s `SyntaxError`, on the whole file. tree-sitter-python also reads Python 2,
-  so `print x` parses, and it does not yet read a type parameter's default (PEP 696), which Python 3.13 does. It reads
-  an f-string's format spec that starts with `=`, as `f"{x:=^9}"`, as an assignment expression; the Rust gate reads
-  such a field as its name and the spec's text, but a spec that holds a `#`, as `f"{x:=#x}"`, still does not parse.
+  so `print x` parses, and it does not yet read a type parameter's default (PEP 696), which Python 3.13 does.
 - **A test file is decoded as any other Python**, by its mark or cookie; gate.py's test-integrity reads both sides of
   a test file as UTF-8 alone and calls any other `unreadable`.
 - **A base file is read only where git holds a regular file.** gate.py reads a base symlink's target, the text git

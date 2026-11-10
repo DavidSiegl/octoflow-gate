@@ -182,10 +182,21 @@ fn a_parenthesized_with_item_binds_its_name() {
     let added = "\n\ndef load(path):\n    with (open(path) as info):\n\
                  \x20       with (open(path)) as data, (open(path) as status):\n            pass\n";
     assert_eq!(names(added), pairs(&[(4, "info"), (5, "data"), (5, "status")]));
+    // One item and a comma: tree-sitter reads a tuple.
+    assert_eq!(names("\n\ndef load(path):\n    with (open(path) as data,):\n        pass\n"), pairs(&[(4, "data")]));
 }
 
 #[test]
 fn a_format_spec_that_starts_with_an_equals_sign_is_read_and_binds_nothing() {
     assert_eq!(names("\n\ndef show(title):\n    print(f\"{info:=10}\")\n    return f\"{title:=^40}\"\n"), []);
     assert_eq!(names("\n\ndef show(title):\n    return f\"{title:=+.3f} {title:=08.2f} {title:=<{title}d}\"\n"), []);
+    // A comma, a sign and a comma, a `#`, a spec inside a spec, spaces, and a second line of the string.
+    for field in ["{info:=10,}", "{info:=+10,.2f}", "{info:=#x}", "{title:{info:=^9}}", "{info := 9}"] {
+        assert_eq!(names(&format!("\n\ndef show(title):\n    return f\"{field} {field}\"\n")), [], "{field}");
+    }
+    assert_eq!(names("\n\ndef show(title):\n    return f\"\"\"{title}\n{info:=#x}\"\"\"\n"), []);
+    // An assignment expression still binds: in brackets of its own, and outside a string.
+    let walrus = "\n\ndef show(title):\n    print(f\"{(info := title):=^9} {title[(data := 1):]}\")\n\
+                  \x20   return {status := title}\n";
+    assert_eq!(names(walrus), pairs(&[(4, "info"), (4, "data"), (5, "status")]));
 }

@@ -535,4 +535,8 @@ fn a_format_spec_is_part_of_an_f_string_s_text_also_one_that_starts_with_an_equa
         let (place, _) = found(&[code_edit(), edited(path, base, &base.replace(old, new))]);
         assert_eq!(place, [at(path, 2, "expected-value-changed")], "{old} to {new}");
     }
+    // The letters of a spec are no names the assertion reads.
+    let spec = "def test_s():\n    assert name() == f'{n:=+5d} {n:>5d}'\n";
+    let source = lang_python::read(spec.as_bytes(), std::path::Path::new(path), true).unwrap();
+    assert_eq!(source.tests[0].assertions[0].reads, ["name", "n"]);
 }

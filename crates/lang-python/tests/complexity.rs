@@ -555,6 +555,13 @@ fn a_body_differs_with_its_structure_and_its_literals() {
         body("def f():\n    def g(*, a, b=1):\n        pass\n")
     );
     assert_ne!(body("def f():\n    return 'x'\n"), body("def f():\n    return b'x'\n"));
+    // One name unpacked from a sequence, and the sequence itself: tree-sitter gives both targets one kind.
+    assert_ne!(body("def f(y):\n    (x,) = y()\n    return x\n"), body("def f(y):\n    (x) = y()\n    return x\n"));
+    assert_ne!(
+        body("def f(rows):\n    for (name,) in rows:\n        print(name)\n"),
+        body("def f(rows):\n    for (name) in rows:\n        print(name)\n")
+    );
+    assert_eq!(body("def f(y):\n    (x, z,) = y()\n"), body("def f(y):\n    (x, z) = y()\n"));
     assert_ne!(body("def f():\n    return 'x'\n"), body("def f():\n    return x\n"));
     let huge = format!("def f():\n    return 0x{}\n", "f".repeat(4000));
     assert_ne!(body(&huge), body(&huge.replacen("0xf", "0xe", 1)));

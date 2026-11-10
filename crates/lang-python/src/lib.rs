@@ -2,6 +2,7 @@
 //! judge (crates/model). It replaces gate.py's own reading of Python with `ast`; docs/port-differences.md lists where
 //! the two read a file differently.
 
+use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
@@ -15,7 +16,7 @@ mod syntax;
 mod testing;
 
 use binds::{binds, type_parameters, How};
-use syntax::{children, decorated, digest, end_line, fields, is_name_and_format_spec, line, line_of, named, Text};
+use syntax::{children, decorated, digest, end_line, fields, line, line_of, named, Text};
 
 /// The Python source `source`, the file at `path` from the tree's top level, as the model has it. `among_tests` says
 /// whether the project places the file among its tests (gate.toml's `test-files.python`), which makes the whole of
@@ -87,13 +88,25 @@ pub fn comments(source: &[u8]) -> Option<Vec<(u32, String)>> {
     Some(out)
 }
 
-/// The tree of the Python source `text`. Errs when it does not parse, as [`read`] says.
+/// The tree of the Python source `text`, each node at the bytes of `text` it was read from. Errs when it does not
+/// parse, as [`read`] says.
 fn parse(text: &str) -> Result<Tree, Unreadable> {
+    let no_tree = || Unreadable { line: None, why: "could not be parsed: tree-sitter gave no tree".into() };
     let mut parser = Parser::new();
-    let language = parser.set_language(&tree_sitter_python::LANGUAGE.into());
-    let parsed = language.ok().and_then(|()| parser.parse(text.as_bytes(), None));
-    let Some(tree) = parsed else {
-        return Err(Unreadable { line: None, why: "could not be parsed: tree-sitter gave no tree".into() });
+    parser.set_language(&tree_sitter_python::LANGUAGE.into()).map_err(|_| no_tree())?;
+    // What tree-sitter parses: `text`, but for a space in place of the `=` that starts a format spec it would
+    // misread ([`syntax::misread_spec_starts`]). A spec's text is anything, so the tree is that of `text` as Python
+    // reads it, and what a spec says is read from `text`. Each round takes one `:=` or more out, so the loop ends.
+    let mut parsed = Cow::Borrowed(text.as_bytes());
+    let tree = loop {
+        let tree = parser.parse(&*parsed, None).ok_or_else(no_tree)?;
+        let misread = syntax::misread_spec_starts(tree.root_node());
+        if misread.is_empty() {
+            break tree;
+        }
+        for at in misread {
+            parsed.to_mut()[at] = b' ';
+        }
     };
     match first_error(tree.root_node()) {
         Some(error) => {
@@ -114,10 +127,7 @@ fn first_error(root: Node) -> Option<Node> {
         if at.is_error() || at.is_missing() {
             return Some(at);
         }
-        // What tree-sitter makes of a format spec it misreads is no error of the file's, in the replacement field
-        // that holds the spec.
-        let misread = |c: &Node| c.kind() == "interpolation" && children(*c).into_iter().any(is_name_and_format_spec);
-        at = children(at).into_iter().find(|c| (c.has_error() || c.is_missing()) && !misread(c))?;
+        at = children(at).into_iter().find(|c| c.has_error() || c.is_missing())?;
     }
 }
 
@@ -256,11 +266,19 @@ mod tests {
         assert_eq!(comments(source), Some(vec![(1, "# one".to_string()), (4, "# two".to_string())]));
         assert_eq!(comments(b"def broken(:\n    pass  # noqa\n"), None);
         assert_eq!(comments(b"x = '\xff'  # noqa\n"), None);
+        // The `#` of a format spec starts no comment.
+        assert_eq!(comments(b"x = f'{y:=#x}'  # one\n"), Some(vec![(1, "# one".to_string())]));
     }
 
     #[test]
     fn a_file_that_does_not_parse_is_unreadable_at_its_first_error() {
         let e = read(b"x = 1\n\ndef broken(:\n    pass\n", Path::new("a.py"), false).unwrap_err();
         assert_eq!((e.line, e.why.as_str()), (Some(3), "does not parse as Python"));
+        // A format spec that starts with `=`, which tree-sitter misreads, hides no error after it.
+        for spec in ["=^9", "=#x", "=+10,.2f"] {
+            let source = format!("def f(x):\n    return f\"{{x:{spec}}}\"\n\n\ndef broken(:\n    pass\n");
+            let e = read(source.as_bytes(), Path::new("a.py"), false).unwrap_err();
+            assert_eq!((e.line, e.why.as_str()), (Some(5), "does not parse as Python"), "{spec}");
+        }
     }
 }

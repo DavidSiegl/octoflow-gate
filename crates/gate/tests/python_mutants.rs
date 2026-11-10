@@ -57,7 +57,7 @@ fn patterns() -> String {
 }
 
 /// A repository whose base holds [`BASE`] as calc.py, [`TESTS`], and a pyproject.toml whose `[tool.mutmut]` mutates
-/// calc.py by the tests under tests/, with the workspace's [`patterns`].
+/// calc.py by the tests under tests/, with the workspace's [`patterns`]; it runs neither ruff nor mypy.
 fn calc() -> Repo {
     let rules = format!(
         "[tool.mutmut]\nsource_paths = [\"calc.py\"]\npytest_add_cli_args_test_selection = [\"tests/\"]\n\
@@ -65,6 +65,7 @@ fn calc() -> Repo {
         patterns()
     );
     Repo::with(&[
+        common::NO_PYTHON_LINTERS,
         ("pyproject.toml", rules.as_bytes()),
         ("calc.py", BASE.as_bytes()),
         ("tests/test_calc.py", TESTS.as_bytes()),

@@ -33,9 +33,11 @@ const TEST_TWO: &str = "from calc import mul\n\n\ndef test_two():\n    assert mu
 /// the flaky-tests check's reruns: the run at the base loads the gate's plugin.
 const AT_BASE: &str = "'_octoflow_gate_base_imports' in sys.modules";
 
-/// A repository whose base holds [`CALC`], [`TESTS`] and a pytest.ini that puts the top on pytest's path.
+/// A repository whose base holds [`CALC`], [`TESTS`] and a pytest.ini that puts the top on pytest's path, and runs
+/// neither ruff nor mypy.
 fn calc() -> Repo {
     Repo::with(&[
+        common::NO_PYTHON_LINTERS,
         ("pyproject.toml", b"[tool.ruff]\n"),
         ("calc.py", CALC.as_bytes()),
         ("tests/test_calc.py", TESTS.as_bytes()),

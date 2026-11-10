@@ -60,9 +60,10 @@ fn alternating_test(name_and_parameters: &str, above: &str) -> String {
     )
 }
 
-/// A repository whose base holds [`BASE`] and a module of code.
+/// A repository whose base holds [`BASE`] and a module of code, and runs neither ruff nor mypy.
 fn repo() -> Repo {
     Repo::with(&[
+        common::NO_PYTHON_LINTERS,
         ("pyproject.toml", b"[tool.ruff]\n"),
         (STATE, BASE.as_bytes()),
         ("calc.py", b"def add(a, b):\n    return a + b\n"),
@@ -660,7 +661,8 @@ fn the_reruns_leave_the_build_s_reports_alone() {
         names.sort();
         names
     };
-    assert_eq!(listed(&repo.repo), [".git", "calc.py", "coverage.xml", "pyproject.toml", "pytest.ini", "tests"]);
+    let top = [".git", "calc.py", "coverage.xml", "gate.toml", "pyproject.toml", "pytest.ini", "tests"];
+    assert_eq!(listed(&repo.repo), top);
     assert_eq!(listed(&repo.repo.join("tests")), ["test_state.py"]);
 }
 

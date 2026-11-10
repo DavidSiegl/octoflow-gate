@@ -109,7 +109,43 @@ impl Repo {
         std::fs::set_permissions(bin.join(name), std::fs::Permissions::from_mode(0o755)).unwrap();
         bin
     }
+
+    /// Puts stubs of ruff, mypy and pymarkdown outside the repository, as TestGate's setUp gives gate.py, and gives
+    /// back a PATH that finds them ahead of the real ones. Each writes its arguments, a line each, where
+    /// [`Repo::argv`] reads them, then prints what [`Repo::says`] gave it and exits 1, or, given nothing, prints
+    /// nothing and exits 0.
+    pub fn stub_linters(&self) -> String {
+        let stubs = self.outside.join("stubs");
+        std::fs::create_dir_all(&stubs).unwrap();
+        let mut bin = PathBuf::new();
+        for linter in ["ruff", "mypy", "pymarkdown"] {
+            let script = format!(
+                "d='{}'\nprintf '%s\\n' \"$@\" > \"$d.argv\"\n[ -f \"$d.out\" ] || exit 0\ncat \"$d.out\"\nexit 1",
+                stubs.join(linter).display()
+            );
+            bin = self.stub(linter, &script);
+        }
+        format!("{}:{}", bin.display(), std::env::var("PATH").unwrap())
+    }
+
+    /// Has the stub of `linter` ([`Repo::stub_linters`]) print `printed` and exit 1 from now on, whether the stubs
+    /// are made yet or not.
+    pub fn says(&self, linter: &str, printed: &[u8]) {
+        let stubs = self.outside.join("stubs");
+        std::fs::create_dir_all(&stubs).unwrap();
+        std::fs::write(stubs.join(format!("{linter}.out")), printed).unwrap();
+    }
+
+    /// The arguments the stub of `linter` ([`Repo::stub_linters`]) last ran with; panics when it has not run.
+    pub fn argv(&self, linter: &str) -> Vec<String> {
+        let written = std::fs::read_to_string(self.outside.join("stubs").join(format!("{linter}.argv"))).unwrap();
+        written.lines().map(String::from).collect()
+    }
 }
+
+/// A gate.toml, as [`Repo::with`] takes a file, that turns ruff and mypy off, for a repository of Python whose tests
+/// are of something else: a pyproject.toml without mypy's `files` has mypy fail, and with it the gate.
+pub const NO_PYTHON_LINTERS: (&str, &[u8]) = ("gate.toml", b"[linters]\nruff = []\nmypy = []\n");
 
 /// The Python of the workspace's own environment, which has the pytest, pytest-randomly, pytest-cov and mutmut that
 /// the checks run with a judged project's Python. uv names it, and makes the environment first where the tree has

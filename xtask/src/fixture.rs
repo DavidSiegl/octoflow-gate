@@ -67,6 +67,15 @@ fn change() -> Vec<(&'static str, String)> {
                 .replace("def test_zero():\n    assert add(0, 0) == 0\n\n\n", "")
                 .replace("def test_negative", "@pytest.mark.skip\ndef test_negative"),
         ),
+        // A test that fails on every second run, at line 6: flaky-tests reports its mixed results. It reports
+        // test_negative too, which every rerun skips.
+        (
+            "test_runs.py",
+            "import os\n\nRUNS = os.path.join(os.path.dirname(__file__), 'runs')\n\n\n\
+             def test_alternates():\n    with open(RUNS, 'a') as f:\n        f.write('x')\n    \
+             with open(RUNS) as f:\n        assert len(f.read()) % 2 == 1\n"
+                .into(),
+        ),
         // What the parser checks report of Rust, in a change to its code: a function over the cognitive-complexity
         // limit, with a vague name in it, on lines 5-56 of lib.rs; and in its tests, a test removed, an `#[ignore]`
         // added on line 4 of it.rs, an expected value changed on line 6, and a golden file changed. No test calls

@@ -11,7 +11,8 @@
 //! [`ported_markdown`]). It exits 0 when they agree, 1 when they differ, printing each part that does, and 2 when
 //! either gate could not judge the change or the arguments are bad. Both run in this workspace's Python environment,
 //! with its dev tools on PATH: gate.py as `uv run --project <workspace> python <workspace>/gate.py`, reading Rust with
-//! the gate-rust helper built from the workspace's gate-rust/, and `gate` as `uv run --project <workspace> cargo run`.
+//! the gate-rust helper built from the workspace's gate-rust/, and `gate` as `uv run --project <workspace> cargo run`,
+//! with that environment's Python as the judged project's (`--python python`), as it is gate.py's.
 //! Each gate runs the tree's `[[test]]` commands unless GATE_ARGS gives `--tests` or `--coverage`. A change between
 //! two commits is compared with the later one checked out.
 //!
@@ -124,6 +125,9 @@ fn judge_twice(
     python.arg(workspace.join("gate.py")).arg("--rust-syntax").arg(gate_rust(workspace, &cargo)?);
     let mut rust = in_uv(&cargo);
     rust.args(["run", "--quiet", "--package", "gate", "--manifest-path"]).arg(workspace.join("Cargo.toml")).arg("--");
+    // The Python that runs gate.py, which reruns a tree's tests with its own interpreter, whatever the tree's
+    // gate.toml names.
+    rust.args(["--python", "python"]);
     let mut reports = vec![];
     for (name, mut command) in [("gate.py", python), ("gate", rust)] {
         let md = out.join(format!("{name}.md"));
@@ -271,16 +275,17 @@ fn ported_condition_of_python(c: &str) -> bool {
         || c.contains(", which a linter that reads the file ends a line at and git does not.")
 }
 
-/// The checks the Rust gate runs over each language gate.py reads (gate::parser_checks).
-const PARSER_CHECKS: [&str; 3] = ["test-integrity", "cognitive-complexity", "vague-names"];
+/// The checks the Rust gate runs whole, over each language gate.py runs them over (gate::parser_checks,
+/// gate::flaky_tests).
+const WHOLE_CHECKS: [&str; 4] = ["test-integrity", "cognitive-complexity", "vague-names", "flaky-tests"];
 
 /// The checks the Rust gate runs over Rust alone (gate::mutants, gate::passes_at_base), their Python halves coming
-/// with gate-standalone/16. gate.py's findings of a check in neither list, as flaky-tests, are not compared.
+/// with gate-standalone/16.
 const RUST_ONLY_CHECKS: [&str; 2] = ["surviving-mutants", "passes-at-base"];
 
 /// Whether quality.json's finding `f` is compared, given whether it is gate.py's: of gate.py's, only a ported
-/// linter's, a parser check's, and of the [`RUST_ONLY_CHECKS`] one on a .rs file, or on no file when it is of the
-/// Rust half of passes-at-base ([`rust_s_base_run`]) or of surviving-mutants ([`rust_s_mutation_run`]).
+/// linter's, one of the [`WHOLE_CHECKS`], and of the [`RUST_ONLY_CHECKS`] one on a .rs file, or on no file when it is
+/// of the Rust half of passes-at-base ([`rust_s_base_run`]) or of surviving-mutants ([`rust_s_mutation_run`]).
 fn ported_finding(f: &Value, from_python: bool) -> bool {
     let check = f["check"].as_str().unwrap_or_default();
     let path = f["path"].as_str().unwrap_or_default();
@@ -293,7 +298,7 @@ fn ported_finding(f: &Value, from_python: bool) -> bool {
         };
     !from_python
         || PORTED_LINTERS.contains(&check)
-        || PARSER_CHECKS.contains(&check)
+        || WHOLE_CHECKS.contains(&check)
         || (RUST_ONLY_CHECKS.contains(&check) && path.ends_with(".rs"))
         || rust_s_run
 }

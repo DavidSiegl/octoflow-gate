@@ -500,3 +500,11 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   not-scored` and `vague-names not-read`, "does not parse as Python". gate.py's `_holds_python` reports the same two
   findings, so the port agrees with it; the defect is both gates'." Closes, in both gates together for `cargo xtask
   compare`, with a `#!` that `[` follows read as no interpreter line.
+- **`the_budget_running_out_is_a_finding` fails on a loaded machine.** `crates/gate/tests/surviving_mutants.rs`: the
+  test gives cargo-mutants 20 seconds, of which the stop may take 15, so the unmutated baseline, a build and a test
+  run of 2 seconds, has 5. With two other runs of the gate's tests on the machine (load average 16 to 18) the
+  baseline did not end in them, and the finding was "budget reached before cargo-mutants had tested the unmutated
+  baseline" where the test expects "budget reached after ". Seen twice in `cargo nextest run --workspace` on
+  2026-11-10 at `bfb184b`; alone, on the same machine and under the same load, the test passed. Not seen in a
+  Jenkins build. Closes with a budget the baseline fits in whatever the load, or a test that does not depend on how
+  long a build takes.

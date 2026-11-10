@@ -1,0 +1,17 @@
+[package]
+name = "lang-python"
+version = "0.0.0"
+description = "The gate's Python front end: a Python source file, read with tree-sitter, as the model the checks judge"
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+model = { path = "../model" }
+tree-sitter = "0.27.1"
+tree-sitter-python = "0.25.0"
+
+[dev-dependencies]
+checks = { path = "../checks" }

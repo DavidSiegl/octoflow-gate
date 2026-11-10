@@ -4,7 +4,7 @@
 # compare`. gate-rust, the helper gate.py reads Rust with, is a crate of its own, built and released alone
 # (ci/package.sh), so it stays out of this workspace.
 [workspace]
-members = ["crates/gate", "crates/model", "crates/checks", "crates/lang-rust", "xtask"]
+members = ["crates/gate", "crates/model", "crates/checks", "crates/lang-python", "crates/lang-rust", "xtask"]
 exclude = ["gate-rust"]
 resolver = "2"
 

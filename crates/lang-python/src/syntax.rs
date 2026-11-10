@@ -1,0 +1,198 @@
+//! What the readers of a Python file's tree-sitter tree share: a node's text and lines, its children without the
+//! comments tree-sitter leaves among them, and its tokens, which say what code does whatever its layout.
+
+use tree_sitter::Node;
+
+/// The text a tree was parsed from.
+#[derive(Clone, Copy)]
+pub struct Text<'t>(pub &'t str);
+
+impl<'t> Text<'t> {
+    /// `node`'s source text, as written.
+    pub fn of(&self, node: Node) -> &'t str {
+        self.0.get(node.byte_range()).unwrap_or_default()
+    }
+}
+
+/// The line, from 1, `node` starts on.
+pub fn line(node: Node) -> u32 {
+    line_of(node.start_position().row)
+}
+
+/// The line, from 1, of tree-sitter's row `row`, from 0.
+pub fn line_of(row: usize) -> u32 {
+    u32::try_from(row + 1).unwrap_or(u32::MAX)
+}
+
+/// The line, from 1, that `node`'s code ends on: its last token's, not that of a comment after it, which tree-sitter
+/// puts inside a block where Python's ast ends the block before it.
+pub fn end_line(node: Node) -> u32 {
+    let mut at = node;
+    while let Some(last) = children(at).into_iter().rev().find(|c| !is_trivia(*c)) {
+        at = last;
+    }
+    line_of(at.end_position().row)
+}
+
+/// Whether `node` is no code: a comment, or the backslash that continues a line.
+pub fn is_trivia(node: Node) -> bool {
+    matches!(node.kind(), "comment" | "line_continuation")
+}
+
+/// `node`'s children, punctuation and keywords too, in source order.
+pub fn children(node: Node) -> Vec<Node> {
+    node.children(&mut node.walk()).collect()
+}
+
+/// `node`'s named children that are code ([`is_trivia`]), in source order.
+pub fn named(node: Node) -> Vec<Node> {
+    node.named_children(&mut node.walk()).filter(|c| !is_trivia(*c)).collect()
+}
+
+/// `node`'s children in its field `field`, in source order.
+pub fn fields<'a>(node: Node<'a>, field: &str) -> Vec<Node<'a>> {
+    node.children_by_field_name(field, &mut node.walk()).collect()
+}
+
+/// `node`'s children of the kind `kind`, in source order.
+pub fn of_kind<'a>(node: Node<'a>, kind: &str) -> Vec<Node<'a>> {
+    children(node).into_iter().filter(|c| c.kind() == kind).collect()
+}
+
+/// The definition `node` is or decorates: itself unless it is a `decorated_definition`.
+pub fn undecorated(node: Node) -> Node {
+    match node.kind() {
+        "decorated_definition" => node.child_by_field_name("definition").unwrap_or(node),
+        _ => node,
+    }
+}
+
+/// `definition` with its decorators: the `decorated_definition` holding it, else itself.
+pub fn decorated(definition: Node) -> Node {
+    definition.parent().filter(|p| p.kind() == "decorated_definition").unwrap_or(definition)
+}
+
+/// `node` without the parentheses around it.
+pub fn unparenthesized(mut node: Node) -> Node {
+    while node.kind() == "parenthesized_expression" {
+        match named(node).as_slice() {
+            [inner] => node = *inner,
+            _ => break,
+        }
+    }
+    node
+}
+
+/// One token of [`tokens`].
+pub enum Token<'t> {
+    /// A named node that holds others opens: its kind. Python's indentation is no token, so the kinds carry the
+    /// structure that braces would.
+    Open(&'t str),
+    /// The node last opened and not yet closed ends.
+    Close,
+    /// A keyword, a name, an operator or punctuation, as written.
+    Word(&'t str),
+    /// A literal: a number, `True`, `False`, `None` or `...` as written; a string as its prefix letters, lower-case and
+    /// without `u`, a quote, and its contents as written, whatever its quotes, adjacent strings of one prefix as one;
+    /// each piece of text of an f-string likewise.
+    Literal(String),
+}
+
+/// Gives `emit` the tokens of `root`'s code in the order they are written, comments left out. Two pieces of code
+/// with the same tokens are the same code, but for what Python reads alike and writes differently other than quotes:
+/// escapes in strings, the spelling of a number, redundant parentheses.
+pub fn tokens<'t>(root: Node<'t>, text: Text<'t>, emit: &mut dyn FnMut(Token<'t>)) {
+    enum Item<'a> {
+        Node(Node<'a>),
+        Close,
+    }
+    // A stack rather than recursion: a sum of a few thousand terms is that deep.
+    let mut todo = vec![Item::Node(root)];
+    while let Some(item) = todo.pop() {
+        let node = match item {
+            Item::Close => {
+                emit(Token::Close);
+                continue;
+            }
+            Item::Node(node) => node,
+        };
+        match node.kind() {
+            "comment" | "line_continuation" => {}
+            "integer" | "float" | "true" | "false" | "none" | "ellipsis" => emit(Token::Literal(text.of(node).into())),
+            "string_content" => emit(Token::Literal(text.of(node).into())),
+            "string" if !interpolated(node) => emit(Token::Literal(string_literal(&[node], text))),
+            "concatenated_string" if one_literal(node, text) => {
+                emit(Token::Literal(string_literal(&named(node), text)))
+            }
+            _ if node.child_count() == 0 => {
+                if !node.byte_range().is_empty() {
+                    emit(Token::Word(text.of(node)));
+                }
+            }
+            kind => {
+                if node.is_named() {
+                    emit(Token::Open(kind));
+                    todo.push(Item::Close);
+                }
+                todo.extend(children(node).into_iter().rev().map(Item::Node));
+            }
+        }
+    }
+}
+
+/// Whether `string`, a `string` node, is an f-string or t-string with a replacement field.
+fn interpolated(string: Node) -> bool {
+    children(string).iter().any(|c| c.kind() == "interpolation")
+}
+
+/// Whether `concatenated`, adjacent string literals, is one literal: none of them interpolated, all of one prefix.
+fn one_literal(concatenated: Node, text: Text) -> bool {
+    let strings = named(concatenated);
+    let prefix = |s: &Node| prefix(*s, text);
+    strings.iter().all(|s| s.kind() == "string" && !interpolated(*s))
+        && strings.windows(2).all(|pair| prefix(&pair[0]) == prefix(&pair[1]))
+}
+
+/// The prefix letters of `string`, a `string` node, lower-case, without the `u` that changes nothing.
+fn prefix(string: Node, text: Text) -> String {
+    let start = string.child(0).map(|s| text.of(s)).unwrap_or_default();
+    start.chars().filter(|c| c.is_ascii_alphabetic()).map(|c| c.to_ascii_lowercase()).filter(|&c| c != 'u').collect()
+}
+
+/// `strings`, `string` nodes of one prefix without replacement fields, as [`Token::Literal`] writes them.
+fn string_literal(strings: &[Node], text: Text) -> String {
+    let mut out = strings.first().map(|s| prefix(*s, text)).unwrap_or_default();
+    out.push('"');
+    for string in strings {
+        for content in of_kind(*string, "string_content") {
+            out.push_str(text.of(content));
+        }
+    }
+    out
+}
+
+/// What `root`'s code does, without its comments or its layout, as 16 hexadecimal digits: equal for two pieces of
+/// code with the same [`tokens`]. 64-bit FNV-1a (<http://www.isthe.com/chongo/tech/comp/fnv/>), as lang-rust's.
+pub fn digest(root: Node, text: Text) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut add = |bytes: &[u8]| {
+        // Each token ends with a byte no token holds, so that no two runs of tokens hash as one.
+        for byte in bytes.iter().chain(&[0]) {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    };
+    tokens(root, text, &mut |token| match token {
+        Token::Open(kind) => {
+            add(b"(");
+            add(kind.as_bytes());
+        }
+        Token::Close => add(b")"),
+        Token::Word(word) => add(word.as_bytes()),
+        Token::Literal(literal) => {
+            add(b"$");
+            add(literal.as_bytes());
+        }
+    });
+    format!("{hash:016x}")
+}

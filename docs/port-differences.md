@@ -60,7 +60,7 @@ runs the checks of `crates/checks` over it.
 `gate.py` reads Python with the standard library: `ast`, `tokenize` and the codecs. The Rust gate reads it with
 `crates/lang-python`, on tree-sitter-python, into the same model and checks as Rust.
 
-### Reading a file
+### Reading a Python file
 
 - **Encodings.** A file is decoded as its byte order mark or coding cookie says when that is UTF-8, ASCII or Latin-1;
   a cookie that names any other encoding makes the file one that "could not be read (cannot be decoded as its coding
@@ -76,12 +76,12 @@ runs the checks of `crates/checks` over it.
 - **A working-tree file that cannot be read stops the gate** (exit 2), as for Rust above; gate.py lists it as a
   finding of each check.
 
-### cognitive-complexity
+### cognitive-complexity over Python
 
 - **A function takes its base only from Python.** gate.py pairs a function over the limit with a base function of
   its name in its file's base whatever the language, which shows only when a change renames `a.py` to `a.rs` or back.
 
-### test-integrity
+### test-integrity over Python
 
 - **Quoted code is quoted as written.** An assertion appears in a message as the file writes it, its lines joined into
   one, and an expected value and a skip's decorator by their first line; gate.py prints `ast.unparse` of them:

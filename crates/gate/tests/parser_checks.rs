@@ -461,3 +461,30 @@ fn golden_files_then_python_s_findings_then_rust_s_are_listed_and_the_other_chec
         ("zed/calc.py".into(), "vague-names vague-name".into()),
     ]);
 }
+
+/// A Python file of six tests of two assertions each, `test_0` to `test_5`.
+fn six_tests() -> String {
+    let test = |k: u32| format!("def test_{k}():\n    assert add({k}, 0) == {k}\n    assert add(0, {k}) == {k}\n\n\n");
+    (0..6).map(test).collect()
+}
+
+#[test]
+fn a_python_file_renamed_into_or_out_of_the_tests_has_its_tests_read_on_both_sides() {
+    // Into the tests, with a test and an assertion removed on the way: the test is gone from the base's path.
+    let repo = python_project(&[("checks/calc_checks.py", &six_tests())]);
+    repo.git(&["mv", "checks/calc_checks.py", "tests/test_more.py"]);
+    let fewer = six_tests().replace("def test_0():\n    assert add(0, 0) == 0\n    assert add(0, 0) == 0\n\n\n", "");
+    repo.put("tests/test_more.py", fewer.replace("    assert add(0, 5) == 5\n", "").as_bytes());
+    assert_eq!(
+        found_at(&repo),
+        [
+            ("checks/calc_checks.py".into(), Some(1), "test-integrity removed-test".into()),
+            ("tests/test_more.py".into(), Some(21), "test-integrity fewer-assertions".into()),
+        ]
+    );
+    // Out of them unchanged: no test is gone.
+    let repo = python_project(&[("tests/test_more.py", &six_tests())]);
+    std::fs::create_dir(repo.repo.join("checks")).unwrap();
+    repo.git(&["mv", "tests/test_more.py", "checks/calc_checks.py"]);
+    assert_eq!(found_at(&repo), []);
+}

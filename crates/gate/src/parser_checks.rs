@@ -48,8 +48,8 @@ impl<'a> Sources<'a> {
 pub struct PythonChange<'a> {
     pub change: &'a Change,
     /// Each file of the change that holds Python on a side, a `.py` file or a script whose `#!` line names python
-    /// (lang_python::is_python), in the change's order, read with crates/lang-python as [`Sources`] says. A `.py`
-    /// file gate.toml's `test-files.python` matches is read as test code whole.
+    /// (lang_python::is_python), in the change's order, read with crates/lang-python as [`Sources`] says. A file
+    /// with a `.py` path on a side that gate.toml's `test-files.python` matches is read as test code whole on both.
     pub files: Vec<ChangedFile>,
 }
 
@@ -165,21 +165,24 @@ struct Language {
     /// first [`HEAD_BYTES`] bytes, none for a file that cannot be read, and is called only when the name does not
     /// decide.
     holds: fn(path: &[u8], head: &dyn Fn() -> Vec<u8>) -> bool,
-    /// Whether `settings` place the file at `path`, one of the language's, among its tests.
-    among_tests: fn(settings: &Settings, path: &OsStr) -> bool,
+    /// Whether `settings` place among the language's tests the side at `path` of one of the language's files, whose
+    /// other side, where the change gives it one, is at `other`.
+    among_tests: fn(settings: &Settings, path: &OsStr, other: Option<&OsStr>) -> bool,
     /// The front end's reading of `source`, the file at `path`.
     read: fn(source: &[u8], path: &OsStr, among_tests: bool) -> Result<SourceFile, Unreadable>,
 }
 
 const PYTHON: Language = Language {
     holds: |path, head| lang_python::is_python(path, head),
-    among_tests: python_test,
+    // A file is a test file by either of its paths, so that a rename into or out of the tests loses none of them
+    // unseen: gate.py's `weakened_tests`.
+    among_tests: |settings, path, other| python_test(settings, path) || other.is_some_and(|o| python_test(settings, o)),
     read: |source, path, among_tests| lang_python::read(source, Path::new(path), among_tests),
 };
 
 const RUST: Language = Language {
     holds: |path, _| path.ends_with(b".rs"),
-    among_tests: |settings, path| settings.rust_tests.matches(path),
+    among_tests: |settings, path, _| settings.rust_tests.matches(path),
     read: |source, _, among_tests| lang_rust::read(source, among_tests),
 };
 
@@ -210,18 +213,18 @@ impl<'a> Stored<'a> {
     /// Errs when git cannot show such a file at the base, or one cannot be read in the working tree.
     fn files(&self, language: &Language) -> Result<Vec<ChangedFile>, Unjudged> {
         let change = self.change;
-        let side = |path: &OsString, source: &[u8]| {
-            let among_tests = (language.among_tests)(&change.settings, path);
+        let side = |path: &OsString, other: &Option<OsString>, source: &[u8]| {
+            let among_tests = (language.among_tests)(&change.settings, path, other.as_deref());
             Side { source: (language.read)(source, path, among_tests), path: path.clone(), among_tests }
         };
         let mut out = vec![];
         for file in &change.files {
             let before = match file.before.as_ref().filter(|path| self.regular_at_base.contains(*path)) {
-                Some(path) => self.at_base(path, language)?.map(|blob| side(path, &blob)),
+                Some(path) => self.at_base(path, language)?.map(|blob| side(path, &file.after, &blob)),
                 None => None,
             };
             let after = match file.after.as_ref().filter(|path| regular_file(&change.root.join(path))) {
-                Some(path) => self.in_working_tree(path, language)?.map(|bytes| side(path, &bytes)),
+                Some(path) => self.in_working_tree(path, language)?.map(|bytes| side(path, &file.before, &bytes)),
                 None => None,
             };
             if before.is_none() && after.is_none() {

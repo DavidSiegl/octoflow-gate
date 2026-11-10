@@ -505,6 +505,7 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   run of 2 seconds, has 5. With two other runs of the gate's tests on the machine (load average 16 to 18) the
   baseline did not end in them, and the finding was "budget reached before cargo-mutants had tested the unmutated
   baseline" where the test expects "budget reached after ". Seen twice in `cargo nextest run --workspace` on
-  2026-11-10 at `bfb184b`; alone, on the same machine and under the same load, the test passed. Not seen in a
-  Jenkins build. Closes with a budget the baseline fits in whatever the load, or a test that does not depend on how
+  2026-11-10 at `bfb184b`; alone, on the same machine and under the same load, the test passed. Seen once more that
+  day at a load average of 4 to 6, while a Jenkins build of another repository compiled. Not seen in a Jenkins build
+  of this one. Closes with a budget the baseline fits in whatever the load, or a test that does not depend on how
   long a build takes.

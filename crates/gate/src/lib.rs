@@ -18,6 +18,7 @@ pub mod parser_checks;
 pub mod passes_at_base;
 pub mod paths;
 pub mod process;
+pub mod pytest;
 pub mod report;
 pub mod settings;
 pub mod suppressions;

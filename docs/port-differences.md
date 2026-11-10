@@ -199,6 +199,12 @@ runs the checks of `crates/checks` over it.
   are not UTF-8, counts as a save the stop cut off, where Python's `json` reads it.
 - **The budget in a finding is written as Rust writes a float**, `30` or `0.5`, where gate.py's `%g` writes a large
   or small one with an exponent.
+- **A `pyproject.toml` that is a tracked symbolic link is replaced in the copy by a file** that holds what it
+  links to with the rules' `[tool.mutmut]`; gate.py writes through the link, into the file it names, which may lie
+  outside the copy (TODO.md).
+- **A Python that cannot be started is named**: "could not start pytest with the Python `PATH`, ..." and "could not
+  start mutmut with the Python `PATH`: ...", where gate.py, which runs both with the Python that runs it, has
+  "could not start pytest, ..." and "could not start mutmut: ...". A blank `--python` is refused as a bad argument.
 - **A rules file or `TMPDIR` whose path is not UTF-8** is a "could not start mutmut" finding, since a
   `[tool.mutmut]` setting cannot name it; gate.py writes the path with its bytes escaped.
 - **`--test-contexts`: a node id that is not UTF-8** makes what coverage.py's reader printed something the gate

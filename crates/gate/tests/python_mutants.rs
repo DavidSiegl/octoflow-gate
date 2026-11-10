@@ -409,6 +409,20 @@ fn a_pytest_configuration_above_the_copy_is_not_read() {
 }
 
 #[test]
+fn a_pyproject_that_is_a_link_out_of_the_tree_is_read_and_not_written_through() {
+    // The copy holds a tracked link as a link, and mutmut's table goes into the copy's pyproject.toml.
+    let repo = calc();
+    let (own, shared) = (repo.repo.join("pyproject.toml"), repo.outside.join("shared.toml"));
+    std::fs::rename(&own, &shared).unwrap();
+    std::os::unix::fs::symlink(&shared, &own).unwrap();
+    repo.commit(&[], "rules elsewhere");
+    let before = std::fs::read(&shared).unwrap();
+    change_the_functions(&repo, &[]);
+    assert_eq!(places(&findings(&repo, Gate::default())), at(&WEAKLY_TESTED));
+    assert_eq!(String::from_utf8(std::fs::read(&shared).unwrap()), String::from_utf8(before));
+}
+
+#[test]
 fn the_project_s_own_pytest_configuration_still_applies() {
     let repo = calc();
     change_the_functions(&repo, &[]);
@@ -511,6 +525,25 @@ fn calc_and_more(header_comment: &str) -> Repo {
     repo.put("more.py", format!("def g(a):{header_comment}\n    return a + 2\n").as_bytes());
     change_the_functions(&repo, &["checked"]);
     repo
+}
+
+#[test]
+fn a_run_whose_output_outlives_it_ends_within_the_stated_bound() {
+    // mutmut ignores SIGINT here, so it is killed after the grace, and a helper in a session of its own keeps its
+    // output open after that: the gate waits for neither longer than it says (TreeCopy::mutmut in python_mutants.rs).
+    let repo = calc();
+    change_the_functions(&repo, &[]);
+    let helper_pid = repo.outside.join("helper.pid");
+    let helper = format!("setsid sh -c 'echo $$ > \"$0\"; exec sleep 60' {} &", quoted(helper_pid.to_str().unwrap()));
+    let python = fake_mutmut(&repo, &format!("trap '' INT; {helper} exec sleep 60"), Listing::Prints(""), &[]);
+    let started = std::time::Instant::now();
+    let found = findings(&repo, Gate { budget: Some(1), ..Gate::with_python(python) });
+    let took = started.elapsed();
+    let pid = std::fs::read_to_string(&helper_pid).unwrap();
+    assert!(Command::new("kill").args(["-KILL", pid.trim()]).status().unwrap().success());
+    assert_eq!(places(&found), [whole("budget-reached")]);
+    // The budget of 1 second, a grace of 10 and a wait of 5 for the output, and the gate's other checks.
+    assert!(took < std::time::Duration::from_secs(40), "{took:?}");
 }
 
 /// [`Gate`] with a budget of a second, rules that mutate calc.py and more.py, and a fake mutmut that runs the sh
@@ -956,12 +989,16 @@ fn a_function_s_first_three_survivors_are_its_examples() {
 fn a_mutmut_that_cannot_start_is_a_finding() {
     let repo = calc();
     change_the_functions(&repo, &[]);
-    let found = findings(&repo, Gate::with_python(repo.outside.join("no-python")));
+    let python = repo.outside.join("no-python");
+    let found = findings(&repo, Gate::with_python(python.clone()));
     assert_eq!(places(&found), [whole("not-run")]);
     assert_eq!(
         found[0].3,
-        "could not start mutmut: No such file or directory (os error 2); the change's functions were not \
-         mutation-tested."
+        format!(
+            "could not start mutmut with the Python `{}`: No such file or directory (os error 2); the change's \
+             functions were not mutation-tested.",
+            python.display()
+        )
     );
 }
 

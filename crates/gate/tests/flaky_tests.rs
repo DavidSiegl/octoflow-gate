@@ -625,11 +625,15 @@ fn whole_not_rerun(found: Vec<Found>) -> String {
 fn a_rerun_that_cannot_start_is_a_finding() {
     let repo = repo();
     change_the_tests(&repo);
-    let message = whole_not_rerun(findings_with(&repo, &repo.outside.join("no-python"), &[]));
+    let python = repo.outside.join("no-python");
+    let message = whole_not_rerun(findings_with(&repo, &python, &[]));
     assert_eq!(
         message,
-        "could not start pytest, collecting the changed tests: No such file or directory (os error 2); the changed \
-         tests were not rerun."
+        format!(
+            "could not start pytest with the Python `{}`, collecting the changed tests: No such file or directory \
+             (os error 2); the changed tests were not rerun.",
+            python.display()
+        )
     );
 }
 

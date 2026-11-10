@@ -4,7 +4,8 @@
 //! that is a shell script or a virtual environment's, a TMPDIR, or a stub `tar` ahead of PATH; whether pytest ran at
 //! the base is read from what a `--python` that logs its arguments was asked. The gate runs its flaky-tests check on
 //! the same change with the same Python, so a test that must behave differently at the base asks [`AT_BASE`]. An
-//! empty pytest configuration that cannot be written has no such route, and is pytest.rs's own test.
+//! empty pytest configuration that cannot be written has no such route: pytest.rs's own test holds the error, and
+//! none holds the finding this check or flaky-tests makes of it.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -693,8 +694,10 @@ fn a_pytest_that_stops_before_it_collects_is_a_finding() {
 fn a_run_that_cannot_start_is_a_finding() {
     let repo = calc();
     fix_add(&repo, "");
-    let message = whole_not_run(findings(&repo, Gate::with_python(repo.outside.join("no-python"))));
-    assert!(message.starts_with("could not start pytest, collecting the changed tests at the base: "), "{message}");
+    let python = repo.outside.join("no-python");
+    let message = whole_not_run(findings(&repo, Gate::with_python(python.clone())));
+    let named = format!("could not start pytest with the Python `{}`, ", python.display());
+    assert!(message.starts_with(&format!("{named}collecting the changed tests at the base: ")), "{message}");
 }
 
 /// Commits, as the base, a submodule at vendor/lib whose helper.py defines ONE, on pytest's path; then fixes add, and

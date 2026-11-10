@@ -407,6 +407,11 @@ impl TreeCopy<'_> {
         run_with(&argv, self.tree, timeout, &extras)
     }
 
+    /// The program that runs Python, as a finding names it when it cannot be started.
+    fn python_named(&self) -> String {
+        text::path(self.python.as_os_str())
+    }
+
     /// mutmut's state in the copy: its copy of the code with the mutants, and each module's results in
     /// `<path>.meta` beside it.
     fn state(&self) -> PathBuf {
@@ -484,7 +489,7 @@ fn on_copy(
     let ran = set_up.and_then(|table| match table {
         Some(table) => match copy.mutmut(&["run"], Duration::from_secs_f64(seconds)) {
             Ok(run) => Ok(Some((table, run))),
-            Err(e) => Err(format!("could not start mutmut: {e}")),
+            Err(e) => Err(format!("could not start mutmut with the Python `{}`: {e}", copy.python_named())),
         },
         None => Ok(None),
     });
@@ -605,8 +610,9 @@ fn marked(source: &[u8], ends: &[u32]) -> Vec<u8> {
 }
 
 /// Puts `table` in place of the `[tool.mutmut]` of `tree`'s pyproject.toml, leaving the rest of the file, the tests'
-/// own settings among it, as the tree has it. Errs with the problem, a clause, when the file cannot be read or
-/// written, or the result does not read back as `table` ([`with_table`]).
+/// own settings among it, as the tree has it. A pyproject.toml that is a symbolic link, as a copy holds one the
+/// tree tracks, becomes a file of its own: what it links to is read, and left as it is. Errs with the problem, a
+/// clause, when the file cannot be read or written, or the result does not read back as `table` ([`with_table`]).
 fn use_mutmut_table(tree: &Path, table: &Table) -> Result<(), String> {
     let path = tree.join("pyproject.toml");
     let start = |e: std::io::Error| format!("could not start mutmut: {e}");
@@ -615,7 +621,12 @@ fn use_mutmut_table(tree: &Path, table: &Table) -> Result<(), String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(e) => return Err(start(e)),
     };
-    std::fs::write(&path, with_table(&own, table)?).map_err(start)
+    let replaced = with_table(&own, table)?;
+    // Written through, a link would change the file it names, which may lie outside the copy.
+    if path.is_symlink() {
+        std::fs::remove_file(&path).map_err(start)?;
+    }
+    std::fs::write(&path, replaced).map_err(start)
 }
 
 /// `own`, a pyproject.toml's text, with `table` as its `[tool.mutmut]`: the lines under each `[tool.mutmut]`
@@ -803,7 +814,9 @@ type Statuses = Vec<(String, String)>;
 fn mutant_statuses(copy: &TreeCopy, deadline: Instant) -> Result<Statuses, String> {
     let listed = copy
         .mutmut(&["results", "--all", "true"], time_left(deadline).unwrap_or_default())
-        .map_err(|e| format!("could not start mutmut to list its results: {e}"))?;
+        .map_err(|e| {
+            format!("could not start mutmut with the Python `{}` to list its results: {e}", copy.python_named())
+        })?;
     if listed.stopped {
         return Err(format!("mutmut did not list its results within {REPORT_TIMEOUT} seconds"));
     }
@@ -1019,6 +1032,27 @@ mod tests {
     /// The first function of `source`, in the file `path`.
     fn function(path: &str, source: &str) -> Function {
         Function { path: path.into(), unit: units(source).remove(0) }
+    }
+
+    #[test]
+    fn a_listing_that_hangs_ends_by_the_deadline_with_its_stop_counted_in() {
+        // gate.py's test_the_report_ends_within_its_time_whatever_mutmut_does. The Python ignores SIGINT, so it is
+        // killed STOP_GRACE after its time is up; given all the time to the deadline, it would end that long past it.
+        use std::os::unix::fs::PermissionsExt;
+        let tree = std::env::temp_dir().join(format!("gate-python-mutants-{}-listing", std::process::id()));
+        std::fs::create_dir_all(&tree).unwrap();
+        let python = tree.join("python");
+        std::fs::write(&python, "#!/bin/sh\ntrap '' INT\nexec sleep 60\n").unwrap();
+        std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let copy = TreeCopy { python: &python, tree: &tree };
+        let deadline = Instant::now() + STOP_GRACE + KILL_WAIT + Duration::from_secs(2);
+        let listed = mutant_statuses(&copy, deadline);
+        let late = Instant::now().checked_duration_since(deadline);
+        assert_eq!(listed, Err(format!("mutmut did not list its results within {REPORT_TIMEOUT} seconds")));
+        assert_eq!(late, None, "the listing ended after its deadline");
+        // With no time left for a listing and its stop, none is started.
+        assert_eq!(time_left(Instant::now() + STOP_GRACE + KILL_WAIT), None);
+        std::fs::remove_dir_all(&tree).unwrap();
     }
 
     /// The `[tool.mutmut]` whose settings `settings` holds, as TOML.

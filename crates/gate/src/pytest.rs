@@ -265,7 +265,11 @@ pub fn run(
     let extras = Extras { env: &all_env, soft_stop: None };
     let finished = match run_with(&argv, &setup.top, timeout, &extras) {
         Ok(finished) => finished,
-        Err(e) => return Err(Problem { clause: format!("could not start pytest, {doing}: {e}"), stopped: None }),
+        Err(e) => {
+            let python = text::path(setup.python.as_os_str());
+            let clause = format!("could not start pytest with the Python `{python}`, {doing}: {e}");
+            return Err(Problem { clause, stopped: None });
+        }
     };
     if finished.stopped {
         let clause = format!("pytest, {doing}, did not finish within {} seconds", timeout.as_secs_f64());
@@ -451,7 +455,31 @@ mod tests {
         let python = dir.join("none");
         let setup = Setup { python, root: dir.clone(), inifile: dir.join("pytest.ini"), top: dir.clone() };
         let missing = run(&setup, "collecting", &[], Duration::from_secs(10), &[0], &[]).unwrap_err();
-        assert_eq!(missing.clause, "could not start pytest, collecting: No such file or directory (os error 2)");
+        let named = format!("could not start pytest with the Python `{}`, collecting: ", dir.join("none").display());
+        assert_eq!(missing.clause, format!("{named}No such file or directory (os error 2)"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_empty_configuration_that_cannot_be_written_is_an_error() {
+        // gate.py's test_an_empty_configuration_that_cannot_be_written_is_a_finding, as far as the error: the checks
+        // make a finding of it, and no run of the gate can be made to fail writing into the directory it has made.
+        let dir = scratch("empty-ini");
+        let (tree, tmp) = (dir.join("tree"), dir.join("tmp"));
+        write(&tree, "test_top.py", "");
+        let paths: BTreeSet<OsString> = [OsString::from("test_top.py")].into();
+        let kind = |written: std::io::Result<PathBuf>| written.map_err(|e| e.kind());
+        // No directory to write it in.
+        assert_eq!(groups(Path::new("py"), &tree, &tmp, &paths).unwrap_err().kind(), std::io::ErrorKind::NotFound);
+        assert_eq!(kind(config(&tree, &tmp)), Err(std::io::ErrorKind::NotFound));
+        // One is there already, which may be another's.
+        write(&tmp, "pytest.ini", "[pytest]\n");
+        assert_eq!(groups(Path::new("py"), &tree, &tmp, &paths).unwrap_err().kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(kind(config(&tree, &tmp)), Err(std::io::ErrorKind::AlreadyExists));
+        // A tree with a configuration of its own needs none written.
+        write(&tree, "pytest.ini", "");
+        assert_eq!(kind(config(&tree, &tmp)), Ok(tree.join("pytest.ini")));
+        assert_eq!(groups(Path::new("py"), &tree, &tmp, &paths).unwrap().len(), 1);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

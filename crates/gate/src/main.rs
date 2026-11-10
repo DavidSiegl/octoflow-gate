@@ -192,7 +192,14 @@ fn parse_args(argv: impl IntoIterator<Item = OsString>) -> Result<Asked, String>
             "--mutation-budget" => {
                 given.mutation_budget = Some(seconds(&value()?).map_err(|e| format!("argument {name}: {e}"))?);
             }
-            "--python" => given.python = Some(value()?.into()),
+            "--python" => {
+                let python = value()?;
+                // As gate.toml's `python` (settings::Settings::python).
+                if text::py_strip(&text::path(&python)).is_empty() {
+                    return Err(format!("argument {name}: must be the path or the name of a Python"));
+                }
+                given.python = Some(python.into());
+            }
             "--test-contexts" => given.test_contexts = Some(value()?.into()),
             "--rust-syntax" => {
                 value()?;
@@ -352,6 +359,10 @@ mod tests {
         assert_eq!(run(&["--base", "m", "--base-run-budget", "7"]).given.base_run_budget, Some(7));
         assert_eq!(run(&["--base", "m", "--mutation-budget", "5"]).given.mutation_budget, Some(5));
         assert_eq!(run(&["--base", "m", "--python=.venv/bin/python"]).given.python, Some(".venv/bin/python".into()));
+        assert_eq!(parse(&["--base", "m", "--python", " "]).unwrap_err(),
+                   "argument --python: must be the path or the name of a Python");
+        assert_eq!(parse(&["--base", "m", "--python="]).unwrap_err(),
+                   "argument --python: must be the path or the name of a Python");
         assert_eq!(run(&["--base", "m", "--test-contexts", ".coverage"]).given.test_contexts, Some(".coverage".into()));
         assert!(parse(&["--base", "m", "--rust-syntax", "x"]).is_ok());
         assert_eq!(parse(&["--base", "m", "-x", "y"]).unwrap_err(), "unrecognized arguments: -x y");

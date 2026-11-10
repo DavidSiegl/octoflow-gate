@@ -538,3 +538,11 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   day at a load average of 4 to 6, while a Jenkins build of another repository compiled. Not seen in a Jenkins build
   of this one. Closes with a budget the baseline fits in whatever the load, or a test that does not depend on how
   long a build takes.
+- **This repo's own Rust is not mutation-tested: the workspace's tests outlast cargo-mutants' `--timeout`.** The
+  gate gives cargo-mutants `--timeout 60` (`CARGO_MUTANTS_TEST_TIMEOUT`), which holds the unmutated baseline's test
+  run too, and `cargo nextest run --workspace` takes about 165 seconds since gate-standalone/16 added the tests
+  that run pytest and mutmut (`crates/gate/tests/flaky_tests.rs`, `python_at_base.rs`, `python_mutants.rs`). So
+  `scripts/gate` reports "the unmutated baseline of the workspace at `.` did not pass (Timeout, as cargo-mutants
+  words it ...), so it tried no mutant", a warning, on every change to the workspace's Rust. Seen on 2026-11-10
+  with `scripts/gate origin/main` at `standalone-16`. Closes with a baseline the timeout does not hold, or with a
+  nextest profile for the mutants' runs that leaves the slow tests out, either a change to what the gate runs.

@@ -38,7 +38,8 @@
 # quality-rust.md, quality-rust.json and quality-diff.txt at the repo root say what it found
 # and how that differs from gate.py's report (the release's shadow-run.sh says what each
 # holds). Jenkins archives them for a person to read. It never changes the exit status: when
-# gate.py gave no verdict it does not run, and when it fails that is a line on standard error.
+# gate.py gave no verdict, or could not judge a test command, it does not run; when it fails
+# that is a line on standard error; and shadow-run.sh stops a Rust gate that takes too long.
 #
 # In a Jenkins build (WORKSPACE set), crates are fetched into the workspace (CARGO_HOME), so
 # no build compiles sources an earlier one left, and temporary files go under WORKSPACE_TMP
@@ -194,11 +195,18 @@ done
 uv sync --frozen
 
 # Judge the change once more with the Rust gate of the pinned release, as the header says. The
-# reports of the judge's test commands stand in for the commands, which gate.py has run: one
-# that a command did not write is one the Rust gate cannot read, and quality-diff.txt then
-# says that it could not judge. `python` is the environment's, in which gate.py ran.
+# reports of the judge's test commands stand in for the commands, which gate.py has run. That
+# holds only while gate.py judged every command: one it could not judge (a report not written,
+# an exit status no failing test explains) is a failed condition of its report that the Rust
+# gate, given the reports alone, would not reach, so no shadow run is made then. `python` is
+# the environment's, in which gate.py ran.
 shadow_run() {
 	local listed reports=()
+	# As gate.py's run_test_commands words the condition, in quality.json's failed_conditions.
+	if grep -q '"The test command `' quality.json; then
+		echo "gate: no shadow run of the Rust gate: gate.py could not judge a test command" >&2
+		return 0
+	fi
 	listed=$(
 		uv run --frozen python -I - "$judge_dir/gate.toml" <<-'EOF'
 		import sys, tomllib

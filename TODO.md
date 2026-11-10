@@ -561,6 +561,12 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   pyproject.toml as the link." And `own_pyproject` "reads what the tree's link names with `std::fs::read`, whole
   and whatever it is (a FIFO, a device)". Not seen in a project. Closes with every copy the Python checks make
   holding the configuration files pytest reads as regular files, read as the rules' own file is.
+- **`scripts/gate`'s shadow run reads gate.toml with a reader of its own.** As cross-review 15 put it (finding 8,
+  2026-11-10): "A second inline Python program reads gate.toml with `tomllib` and its own knowledge of `test`,
+  `junit` and `coverage`, where [the check of the change's gate.toml] already load[s] the release's gate.py and
+  call[s] `GateSettings.read`: the `[[test]]` format now has a third reader, beside gate.py and
+  `crates/gate/src/settings.rs`." Left: the released gate.py has no public reader, and its `GateSettings` fields
+  are no contract. Closes with the cutover (gate-standalone/18), which removes `shadow_run`.
 - **The Rust gate's Python checks: six design nits of cross-review 14 (2026-11-10), in its words.**
   - F7, `crates/gate/src/python_mutants.rs`: "`mark_for_mutmut` reads, parses and rewrites every regular `*.py` in
     the copy, though mutmut makes mutants only under `[tool.mutmut]` source_paths, which `outside_mutmut` already

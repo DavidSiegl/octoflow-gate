@@ -95,8 +95,9 @@ fn parse(text: &str) -> Result<Tree, Unreadable> {
     let mut parser = Parser::new();
     parser.set_language(&tree_sitter_python::LANGUAGE.into()).map_err(|_| no_tree())?;
     // What tree-sitter parses: `text`, but for a space in place of the `=` that starts a format spec it would
-    // misread ([`syntax::misread_spec_starts`]). A spec's text is anything, so the tree is that of `text` as Python
-    // reads it, and what a spec says is read from `text`. Each round takes one `:=` or more out, so the loop ends.
+    // misread ([`syntax::misread_spec_starts`]). A spec's text is anything, so the tree is that of `text` with those
+    // specs read as Python reads them, and what a spec says is read from `text`. Each round takes one `:=` or more
+    // out, so the loop ends.
     let mut parsed = Cow::Borrowed(text.as_bytes());
     let tree = loop {
         let tree = parser.parse(&*parsed, None).ok_or_else(no_tree)?;
@@ -104,7 +105,11 @@ fn parse(text: &str) -> Result<Tree, Unreadable> {
         if misread.is_empty() {
             break tree;
         }
-        for at in misread {
+        // Those before the tree's first error are sure. With none, the first is taken alone: it may be what made
+        // the error, and the next round's tree says what the others are.
+        let first_error = first_error(tree.root_node()).map_or(usize::MAX, |error| error.start_byte());
+        let sure = misread.iter().take_while(|&&at| at < first_error).count();
+        for &at in &misread[..sure.max(1)] {
             parsed.to_mut()[at] = b' ';
         }
     };

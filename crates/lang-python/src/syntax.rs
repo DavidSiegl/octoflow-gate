@@ -101,44 +101,39 @@ pub fn unparenthesized(mut node: Node) -> Node {
     node
 }
 
-/// Where `root`'s tree misreads the start of a format spec: the byte offset of the `=` of each `:=` that follows the
-/// bare name a replacement field opens with, as in `f"{x:=^9}"`. Python reads the `:` there as the start of the
-/// spec, `=^9`; tree-sitter-python reads an assignment expression, `x := ^9`, and what follows as its value: an
-/// error where that is no expression, a name bound where it is one, a comment from a `#` on. With any other
-/// character in place of that `=` it reads the spec.
+/// Where `root`'s tree misreads the start of a format spec: the byte offset of the `=` of each `:=` in a replacement
+/// field and in no brackets inside it, as in `f"{x:=^9}"`, in the order they are written. Python reads the `:`
+/// there as the start of the spec, `=^9`; tree-sitter-python reads an assignment expression, `x := ^9`, and what
+/// follows as its value: an error where that is no expression, a name bound where it is one, a comment from a `#`
+/// on. With any other character in place of that `=` it reads the spec.
 ///
 /// A `{` opens a replacement field when it is an `interpolation`'s or a `format_expression`'s, and also, where
-/// tree-sitter found an error and made neither, when a string is open at it.
+/// tree-sitter found an error and made neither, when a string is open at it. From the tree's first error on, the
+/// tree may not be the file's, as after such a `#`, and an offset is then a guess.
 pub fn misread_spec_starts(root: Node) -> Vec<usize> {
     let mut out = vec![];
-    // The kinds of the two tokens before the one at hand, the nearer last, with whether a `{` opens a field; and how
-    // many strings are open.
-    let mut before = [("", false); 2];
+    // For each bracket open at the token at hand, the outermost first, whether it opens a replacement field; and
+    // how many strings are open there.
+    let mut brackets: Vec<bool> = vec![];
     let mut open_strings = 0usize;
     let mut todo = vec![root];
     while let Some(node) = todo.pop() {
-        if node.child_count() > 0 {
-            todo.extend(children(node).into_iter().rev());
-            continue;
+        match node.kind() {
+            _ if node.child_count() > 0 => todo.extend(children(node).into_iter().rev()),
+            "string_start" => open_strings += 1,
+            "string_end" => open_strings = open_strings.saturating_sub(1),
+            "{" => {
+                let parent = node.parent().map(|p| p.kind()).unwrap_or_default();
+                let made_a_field = matches!(parent, "interpolation" | "format_expression");
+                brackets.push(made_a_field || (parent == "ERROR" && open_strings > 0));
+            }
+            "(" | "[" => brackets.push(false),
+            ")" | "]" | "}" => {
+                brackets.pop();
+            }
+            ":=" if brackets.last() == Some(&true) => out.push(node.start_byte() + 1),
+            _ => {}
         }
-        let parent = node.parent().map(|p| p.kind()).unwrap_or_default();
-        let opens_field = match node.kind() {
-            "string_start" => {
-                open_strings += 1;
-                false
-            }
-            "string_end" => {
-                open_strings = open_strings.saturating_sub(1);
-                false
-            }
-            "{" => matches!(parent, "interpolation" | "format_expression") || (parent == "ERROR" && open_strings > 0),
-            ":=" if before == [("{", true), ("identifier", false)] => {
-                out.push(node.start_byte() + 1);
-                false
-            }
-            _ => false,
-        };
-        before = [before[1], (node.kind(), opens_field)];
     }
     out
 }

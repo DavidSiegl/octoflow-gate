@@ -194,9 +194,20 @@ fn a_format_spec_that_starts_with_an_equals_sign_is_read_and_binds_nothing() {
     for field in ["{info:=10,}", "{info:=+10,.2f}", "{info:=#x}", "{title:{info:=^9}}", "{info := 9}"] {
         assert_eq!(names(&format!("\n\ndef show(title):\n    return f\"{field} {field}\"\n")), [], "{field}");
     }
+    // The spec follows any expression, and a comment or a continued line may come before it.
+    let after_more = ["{title or info:=10}", "{title and info:=^9}", "{not info:=^9}", "{title if title else info:=9}"];
+    for field in after_more {
+        assert_eq!(names(&format!("\n\ndef show(title):\n    return f\"{field} {field}\"\n")), [], "{field}");
+    }
+    assert_eq!(names("\n\ndef show(title):\n    return f\"\"\"{info  # why\n:=^9}\"\"\"\n"), []);
+    assert_eq!(names("\n\ndef show(title):\n    return f\"{info\\\n:=^9}\"\n"), []);
     assert_eq!(names("\n\ndef show(title):\n    return f\"\"\"{title}\n{info:=#x}\"\"\"\n"), []);
     // An assignment expression still binds: in brackets of its own, and outside a string.
     let walrus = "\n\ndef show(title):\n    print(f\"{(info := title):=^9} {title[(data := 1):]}\")\n\
                   \x20   return {status := title}\n";
     assert_eq!(names(walrus), pairs(&[(4, "info"), (4, "data"), (5, "status")]));
+    // Also in a set after a spec whose `#` tree-sitter first reads as a comment's, to the end of the line.
+    let after_hash = "\n\ndef show(title):\n    print(f\"{title:=#06x}\")\n    if (status := title):\n\
+                      \x20       return {info := status}\n    return f\"{title:=^9}\"\n";
+    assert_eq!(names(after_hash), pairs(&[(5, "status"), (6, "info")]));
 }

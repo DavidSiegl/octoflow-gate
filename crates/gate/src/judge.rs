@@ -1,7 +1,5 @@
 //! The gate's judgement of one change: what it reads of the change, and the report it gives on it, as gate.py's
-//! judge_change does for the parts ported so far. Of the checks beside the linters, the parser checks run
-//! (parser_checks) over Python and Rust, and surviving-mutants (mutants) and passes-at-base (passes_at_base) over
-//! Rust; those two over Python, and flaky-tests, come with gate-standalone/16.
+//! judge_change does for the parts ported so far: the checks beside the linters all run, over Python and Rust.
 
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
@@ -16,6 +14,7 @@ use crate::mutants::surviving_mutants;
 use crate::parser_checks::{too_complex, vague_names, weakened_tests, Sources};
 use crate::passes_at_base::passes_at_base;
 use crate::process::tool_env;
+use crate::python_mutants::Mutmut;
 use crate::report::{Finding, QualityReport};
 use crate::settings::{tree_s_own, Settings};
 use crate::suppressions::{added_suppressions, stray_line_end_condition, stray_line_ends};
@@ -49,6 +48,9 @@ pub struct Given {
     /// The judged project's Python, in place of gate.toml's `python`: a path, absolute or relative to the current
     /// directory, or a name without a slash, which PATH finds.
     pub python: Option<PathBuf>,
+    /// A coverage.py data file of the tree's test run with a context per test, by which the surviving-mutants check
+    /// narrows mutmut's tests (python_mutants::Mutmut::test_contexts): absolute or relative to the current directory.
+    pub test_contexts: Option<PathBuf>,
 }
 
 /// The change the gate judges, as [`Change::from_tree`] reads it, and as each check is given it.
@@ -190,7 +192,9 @@ pub fn judge_change(cwd: &Path, base: &str, given: &Given) -> Result<QualityRepo
         given.mutation_budget.unwrap_or(change.settings.mutation_budget),
         given.base_run_budget.unwrap_or(change.settings.base_run_budget),
     );
-    let to_weigh = judge_checks(&change, budgets, &mut conditions, &mut issues)?;
+    let test_contexts = given.test_contexts.as_deref().map(crate::paths::abs_path);
+    let mutmut = Mutmut { rules: &rules, test_contexts: test_contexts.as_deref() };
+    let to_weigh = judge_checks(&change, &mutmut, budgets, &mut conditions, &mut issues)?;
 
     conditions.extend(tests.problems);
     if let Some(failing) = tests.failing.as_ref().filter(|failing| !failing.is_empty()) {
@@ -224,11 +228,13 @@ pub fn judge_change(cwd: &Path, base: &str, given: &Given) -> Result<QualityRepo
 
 /// Runs the checks beside the linters on `change`, in the order gate.py's `gate_checks` runs them: test-integrity,
 /// cognitive-complexity, flaky-tests, surviving-mutants and passes-at-base, the last two's runs within the seconds
-/// `budgets` gives, (mutation, base run), and vague-names. Appends to `conditions` a failed condition for each check
-/// with findings of severity "error", in that order, and to `issues` those findings; returns the others, to weigh.
+/// `budgets` gives, (mutation, base run), mutmut set up as `mutmut` says, and vague-names. Appends to `conditions`
+/// a failed condition for each check with findings of severity "error", in that order, and to `issues` those
+/// findings; returns the others, to weigh.
 /// Errs as [`Sources::read`] does, having appended nothing.
 fn judge_checks(
     change: &Change,
+    mutmut: &Mutmut,
     (mutation_budget, base_run_budget): (u64, u64),
     conditions: &mut Vec<String>,
     issues: &mut Vec<Finding>,
@@ -238,7 +244,7 @@ fn judge_checks(
         weakened_tests(&sources),
         too_complex(&sources),
         named("flaky-tests", flaky_tests(&sources.python)),
-        named("surviving-mutants", surviving_mutants(&sources.rust, mutation_budget)),
+        named("surviving-mutants", surviving_mutants(&sources, mutmut, mutation_budget)),
         named("passes-at-base", passes_at_base(&sources, base_run_budget)),
         vague_names(&sources),
     ];

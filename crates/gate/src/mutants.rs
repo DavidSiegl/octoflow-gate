@@ -1,6 +1,6 @@
-//! The surviving-mutants check for Rust: cargo-mutants mutates what the change adds to Rust code under test, and a
-//! function whose mutants its tests do not notice is a finding. gate.py's `surviving_mutants`, its Rust half; the
-//! Python half, which runs mutmut, comes with gate-standalone/16.
+//! The surviving-mutants check: a function the change touches whose mutants its tests do not notice is a finding.
+//! gate.py's `surviving_mutants`. Here is the check and its Rust half, in which cargo-mutants mutates what the change
+//! adds to Rust code under test; the Python half, which runs mutmut, is python_mutants.rs.
 
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
@@ -13,8 +13,9 @@ use serde_json::Value;
 
 use crate::clippy::workspaces;
 use crate::copies::{copy_tracked, finding, in_scratch_directory, sort_by_place, Budget};
-use crate::parser_checks::RustChange;
+use crate::parser_checks::{RustChange, Sources};
 use crate::process::{run_with, Extras, Finished};
+use crate::python_mutants::{python_mutants, Mutmut};
 use crate::text;
 
 /// How each outcome cargo-mutants 27 writes in mutants.out/outcomes.json (a scenario's "summary") counts: a missed
@@ -27,37 +28,48 @@ const TRIED: [&str; 3] = ["MissedMutant", "CaughtMutant", "Timeout"];
 const TEST_TIMEOUT: u64 = 60;
 
 /// How long cargo-mutants has, after the SIGINT that stops a run at the deadline, to write what it found and exit
-/// before it is killed; gate.py's MUTMUT_STOP_GRACE.
-const STOP_GRACE: Duration = Duration::from_secs(10);
+/// before it is killed, and mutmut as long; gate.py's MUTMUT_STOP_GRACE.
+pub(crate) const STOP_GRACE: Duration = Duration::from_secs(10);
 
 /// What a run is given beyond [`STOP_GRACE`] after the deadline: the most process::run_with waits for what a killed
 /// process printed (its KILL_WAIT); gate.py's TOOL_KILL_WAIT.
-const KILL_WAIT: Duration = Duration::from_secs(5);
+pub(crate) const KILL_WAIT: Duration = Duration::from_secs(5);
 
-/// How many of a function's surviving mutants its finding shows, in the order cargo-mutants tried them.
-const SURVIVOR_EXAMPLES: usize = 3;
+/// How many of a function's surviving mutants its finding shows, in the order the mutation tool made them.
+pub(crate) const SURVIVOR_EXAMPLES: usize = 3;
 
-/// The surviving-mutants check's findings on `rust`, by path and line, a finding on no path or line first; each rule
-/// is the check's own, without its name, and each severity "warning".
+/// The surviving-mutants check's findings on `sources`, by path and line, a finding on no path or line first; each
+/// rule is the check's own, without its name, and each severity "warning".
 ///
-/// Runs cargo-mutants within `budget` seconds on each Cargo workspace that holds a Rust file the change adds lines to
-/// outside the tests ([`changed_code`]), in a copy of the files git tracks, as [`on_copy`] says. Each function with
-/// mutants that survived is a `survived` finding at the line its fn starts, with how many of the mutants tried of it
-/// they were and the first [`SURVIVOR_EXAMPLES`] of them. A change whose added lines hold nothing to mutate, such as
-/// a use or a const, gives nothing. The budget running out is a `budget-reached` finding; a file in no workspace
-/// cargo can tell is a `not-mutated` one on it; a run that cannot be made or read is a `not-run` finding saying why,
-/// and a copy that cannot be removed afterwards a `not-removed` one.
-pub fn surviving_mutants(rust: &RustChange, budget: u64) -> Vec<Finding> {
+/// Mutation-tests the Python functions the change touches with mutmut, set up as `mutmut` says
+/// (python_mutants::python_mutants), then, with what is left of `budget` seconds, the Rust the change adds lines to
+/// with cargo-mutants ([`rust_mutants`]); mutmut has half the budget when there is Rust to mutate too.
+pub fn surviving_mutants(sources: &Sources, mutmut: &Mutmut, budget: u64) -> Vec<Finding> {
     let budget = Budget::starting_now(budget);
-    let paths = changed_code(rust);
+    let rust = changed_code(&sources.rust);
+    let seconds = Duration::from_secs(budget.seconds).as_secs_f64();
+    let mut out = python_mutants(&sources.python, mutmut, if rust.is_empty() { seconds } else { seconds / 2.0 });
+    out.extend(rust_mutants(&sources.rust, &rust, &budget));
+    sort_by_place(&mut out);
+    out
+}
+
+/// Rust's findings of the surviving-mutants check on `paths`, [`changed_code`]'s of `rust`, in no order.
+///
+/// Runs cargo-mutants, until `budget` runs out, on each Cargo workspace that holds one of `paths`, in a copy of the
+/// files git tracks, as [`on_copy`] says. Each function with mutants that survived is a `survived` finding at the
+/// line its fn starts, with how many of the mutants tried of it they were and the first [`SURVIVOR_EXAMPLES`] of
+/// them. A change whose added lines hold nothing to mutate, such as a use or a const, gives nothing. The budget
+/// running out is a `budget-reached` finding; a file in no workspace cargo can tell is a `not-mutated` one on it; a
+/// run that cannot be made or read is a `not-run` finding saying why, and a copy that cannot be removed afterwards a
+/// `not-removed` one.
+fn rust_mutants(rust: &RustChange, paths: &[OsString], budget: &Budget) -> Vec<Finding> {
     if paths.is_empty() {
         return vec![];
     }
-    let mut out = in_scratch_directory("not-run", "to run cargo-mutants on a copy of the tree in", |dir| {
-        on_copy(rust, dir, &paths, &budget)
-    });
-    sort_by_place(&mut out);
-    out
+    in_scratch_directory("not-run", "to run cargo-mutants on a copy of the tree in", |dir| {
+        on_copy(rust, dir, paths, budget)
+    })
 }
 
 /// The Rust files, in path order, that the change adds lines to and that are Rust code under test

@@ -21,6 +21,7 @@ pub mod paths;
 pub mod process;
 pub mod pytest;
 pub mod python_at_base;
+pub mod python_mutants;
 pub mod report;
 pub mod settings;
 pub mod suppressions;

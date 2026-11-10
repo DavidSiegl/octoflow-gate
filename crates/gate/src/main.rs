@@ -8,10 +8,9 @@
 //! ```
 //!
 //! Its flags are gate.py's, and `--python`, which names what gate.py takes from the Python that runs it
-//! (judge::Change::python). `--test-contexts` is read, but nothing uses it until mutmut's half of surviving-mutants is
-//! ported (gate-standalone/16); `--rust-syntax` names gate.py's helper, which this binary does not need. Exit status 0
-//! for GATE: OK, 1 for GATE: ERROR, 2 when it could not judge the change or the arguments are bad, and 130 for Ctrl-C;
-//! with 2 or 130 it writes no report.
+//! (judge::Change::python). `--rust-syntax` names gate.py's helper, which this binary does not need. Exit status 0 for
+//! GATE: OK, 1 for GATE: ERROR, 2 when it could not judge the change or the arguments are bad, and 130 for Ctrl-C; with
+//! 2 or 130 it writes no report.
 
 use std::ffi::{OsStr, OsString};
 use std::io::Write;
@@ -57,13 +56,15 @@ options:
                           its name FILE's with the .md made .json, or with .json added
   --json FILE             write quality.json, the report as data, here; with --out, instead of beside FILE
   --mutation-budget SECONDS
-                          the seconds the surviving-mutants check may run cargo-mutants for, in place of gate.toml's
-                          budgets.mutation
+                          the seconds the surviving-mutants check may run mutmut and cargo-mutants for, in place of
+                          gate.toml's budgets.mutation
   --base-run-budget SECONDS
                           the seconds the passes-at-base check may run the changed tests at the base for, in place
                           of gate.toml's budgets.base-run
   --test-contexts COVERAGE
-                          accepted for gate.py's sake; no check uses it yet
+                          a coverage.py data file of the tree's test run with a context per test, as
+                          `pytest --cov-context=test` writes it: the surviving-mutants check then has mutmut run
+                          only the tests it records reaching the changed functions
   --rust-syntax PATH      accepted for gate.py's sake, and ignored
   --python PATH           the Python of the judged project, in which its pytest, pytest-randomly and mutmut are
                           installed, in place of gate.toml's python: a path, or a name without a slash for PATH to
@@ -191,7 +192,8 @@ fn parse_args(argv: impl IntoIterator<Item = OsString>) -> Result<Asked, String>
                 given.mutation_budget = Some(seconds(&value()?).map_err(|e| format!("argument {name}: {e}"))?);
             }
             "--python" => given.python = Some(value()?.into()),
-            "--test-contexts" | "--rust-syntax" => {
+            "--test-contexts" => given.test_contexts = Some(value()?.into()),
+            "--rust-syntax" => {
                 value()?;
             }
             _ => unrecognized.push(name),
@@ -349,8 +351,8 @@ mod tests {
         assert_eq!(run(&["--base", "m", "--base-run-budget", "7"]).given.base_run_budget, Some(7));
         assert_eq!(run(&["--base", "m", "--mutation-budget", "5"]).given.mutation_budget, Some(5));
         assert_eq!(run(&["--base", "m", "--python=.venv/bin/python"]).given.python, Some(".venv/bin/python".into()));
-        let ignored = ["--rust-syntax", "x", "--test-contexts", "y"];
-        assert!(parse(&[&["--base", "m"][..], &ignored].concat()).is_ok());
+        assert_eq!(run(&["--base", "m", "--test-contexts", ".coverage"]).given.test_contexts, Some(".coverage".into()));
+        assert!(parse(&["--base", "m", "--rust-syntax", "x"]).is_ok());
         assert_eq!(parse(&["--base", "m", "-x", "y"]).unwrap_err(), "unrecognized arguments: -x y");
         assert_eq!(parse(&["--base", "m", "x=y"]).unwrap_err(), "unrecognized arguments: x=y");
         assert_eq!(parse(&["--bogus", "--help"]), Ok(Asked::Help));

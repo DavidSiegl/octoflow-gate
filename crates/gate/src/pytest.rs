@@ -206,7 +206,7 @@ fn inifile(dir: &Path) -> Option<PathBuf> {
 }
 
 /// Whether Python takes the TOML `value` for true: not an empty table, array or string, zero or false.
-fn truthy(value: &toml::Value) -> bool {
+pub(crate) fn truthy(value: &toml::Value) -> bool {
     match value {
         toml::Value::Table(table) => !table.is_empty(),
         toml::Value::Array(array) => !array.is_empty(),

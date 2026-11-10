@@ -83,15 +83,15 @@ runs the checks of `crates/checks` over it.
 
 ### test-integrity
 
-- **Quoted code is quoted as written.** An assertion appears in a message as the file writes it, its lines joined
-  into one, and an expected value and a skip's decorator by their first line; gate.py prints `ast.unparse` of them:
-  single-quoted strings, adjacent strings joined, no redundant parentheses or trailing comma, and "too deep" or "too
-  long to print" for what it cannot unparse. `cargo xtask compare` compares messages whole, so a finding that quotes
-  a double-quoted string differs in its message alone.
-- **Literals are compared as written, but for a string's quotes.** `"a"` and `'a'` are one value, and adjacent
-  strings of one prefix are joined; `"\x41"` and `"A"`, `r"\d"` and `"\\d"`, `1_000` and `1000`, `0x10` and `16`
-  are different values, where gate.py compares what they evaluate to. Adjacent strings of different prefixes, as
-  `"a" f"b"`, are not joined.
+- **Quoted code is quoted as written.** An assertion appears in a message as the file writes it, its lines joined into
+  one, and an expected value and a skip's decorator by their first line; gate.py prints `ast.unparse` of them:
+  single-quoted strings, adjacent strings joined, an escape as the character it stands for (`é` for `\xe9`), no
+  redundant parentheses or trailing comma, and "too deep" or "too long to print" for what it cannot unparse. `cargo
+  xtask compare` compares messages whole, so a finding that quotes a double-quoted string differs in its message alone.
+- **Literals are compared as written, but for a string's quotes.** `"a"` and `'a'` are one value, and adjacent strings
+  of one prefix are joined, f-strings too; `"\x41"` and `"A"`, `r"\d"` and `"\\d"`, `1_000` and `1000`, `0x10` and `16`
+  are different values, where gate.py compares what they evaluate to. Adjacent strings of different prefixes, as `"a"
+  f"b"`, are not joined.
 - **Redundant parentheses are part of an expression**, so adding or removing them changes an assertion's shape, a
   function's body and a constant's value; `ast` drops them.
 - **`unparsable` is reported only for a file whose base held tests**, as for Rust; gate.py reports it for any Python

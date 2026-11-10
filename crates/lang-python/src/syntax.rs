@@ -109,19 +109,27 @@ pub enum Token<'t> {
     /// A keyword, a name, an operator or punctuation, as written.
     Word(&'t str),
     /// A literal: a number, `True`, `False`, `None` or `...` as written; a string as its prefix letters, lower-case and
-    /// without `u`, a quote, and its contents as written, whatever its quotes, adjacent strings of one prefix as one;
-    /// each piece of text of an f-string likewise.
+    /// without `u`, a quote, and its contents as written, whatever its quotes, adjacent strings of one prefix as one.
+    /// Such a string with replacement fields, an f-string, is a node of the kind `string` instead, holding its prefix
+    /// letters and a quote as one literal, then each run of text between two fields as a literal and each field's
+    /// tokens, so that where its text is split into adjacent strings does not show either.
     Literal(String),
+}
+
+/// What [`tokens`] has still to emit.
+enum Item<'t> {
+    /// The tokens of this node.
+    Node(Node<'t>),
+    /// [`Token::Literal`] of this text.
+    Literal(String),
+    /// [`Token::Close`].
+    Close,
 }
 
 /// Gives `emit` the tokens of `root`'s code in the order they are written, comments left out. Two pieces of code
 /// with the same tokens are the same code, but for what Python reads alike and writes differently other than quotes:
 /// escapes in strings, the spelling of a number, redundant parentheses.
 pub fn tokens<'t>(root: Node<'t>, text: Text<'t>, emit: &mut dyn FnMut(Token<'t>)) {
-    enum Item<'a> {
-        Node(Node<'a>),
-        Close,
-    }
     // A stack rather than recursion: a sum of a few thousand terms is that deep.
     let mut todo = vec![Item::Node(root)];
     while let Some(item) = todo.pop() {
@@ -130,15 +138,34 @@ pub fn tokens<'t>(root: Node<'t>, text: Text<'t>, emit: &mut dyn FnMut(Token<'t>
                 emit(Token::Close);
                 continue;
             }
+            Item::Literal(literal) => {
+                emit(Token::Literal(literal));
+                continue;
+            }
             Item::Node(node) => node,
+        };
+        let strings = match node.kind() {
+            "string" => vec![node],
+            "concatenated_string" => named(node),
+            _ => vec![],
         };
         match node.kind() {
             "comment" | "line_continuation" => {}
             "integer" | "float" | "true" | "false" | "none" | "ellipsis" => emit(Token::Literal(text.of(node).into())),
             "string_content" => emit(Token::Literal(text.of(node).into())),
-            "string" if !interpolated(node) => emit(Token::Literal(string_literal(&[node], text))),
-            "concatenated_string" if one_literal(node, text) => {
-                emit(Token::Literal(string_literal(&named(node), text)))
+            "string" | "concatenated_string" if of_one_prefix(&strings, text) => {
+                let start = format!("{}\"", prefix(strings[0], text));
+                let pieces = pieces(&strings, text);
+                match pieces.as_slice() {
+                    [] => emit(Token::Literal(start)),
+                    [Item::Literal(contents)] => emit(Token::Literal(start + contents)),
+                    _ => {
+                        emit(Token::Open("string"));
+                        emit(Token::Literal(start));
+                        todo.push(Item::Close);
+                        todo.extend(pieces.into_iter().rev());
+                    }
+                }
             }
             _ if node.child_count() == 0 => {
                 if !node.byte_range().is_empty() {
@@ -156,35 +183,35 @@ pub fn tokens<'t>(root: Node<'t>, text: Text<'t>, emit: &mut dyn FnMut(Token<'t>
     }
 }
 
-/// Whether `string`, a `string` node, is an f-string or t-string with a replacement field.
-fn interpolated(string: Node) -> bool {
-    children(string).iter().any(|c| c.kind() == "interpolation")
+/// Whether `strings` is one string literal or adjacent ones that read as one: `string` nodes, at least one, all of
+/// one prefix.
+fn of_one_prefix(strings: &[Node], text: Text) -> bool {
+    let prefix = |s: &Node| prefix(*s, text);
+    !strings.is_empty()
+        && strings.iter().all(|s| s.kind() == "string")
+        && strings.windows(2).all(|pair| prefix(&pair[0]) == prefix(&pair[1]))
 }
 
-/// Whether `concatenated`, adjacent string literals, is one literal: none of them interpolated, all of one prefix.
-fn one_literal(concatenated: Node, text: Text) -> bool {
-    let strings = named(concatenated);
-    let prefix = |s: &Node| prefix(*s, text);
-    strings.iter().all(|s| s.kind() == "string" && !interpolated(*s))
-        && strings.windows(2).all(|pair| prefix(&pair[0]) == prefix(&pair[1]))
+/// What `strings`, `string` nodes of one prefix, hold between their quotes, in order: each replacement field as its
+/// node, and each run of text between two fields as a literal, as written, a run that goes on in the next string as
+/// one. Nothing for strings that are all empty.
+fn pieces<'t>(strings: &[Node<'t>], text: Text) -> Vec<Item<'t>> {
+    let mut out: Vec<Item> = vec![];
+    for part in strings.iter().flat_map(|s| children(*s)) {
+        match (part.kind(), out.last_mut()) {
+            ("string_content", Some(Item::Literal(run))) => run.push_str(text.of(part)),
+            ("string_content", _) => out.push(Item::Literal(text.of(part).into())),
+            ("interpolation", _) => out.push(Item::Node(part)),
+            _ => {}
+        }
+    }
+    out
 }
 
 /// The prefix letters of `string`, a `string` node, lower-case, without the `u` that changes nothing.
 fn prefix(string: Node, text: Text) -> String {
     let start = string.child(0).map(|s| text.of(s)).unwrap_or_default();
     start.chars().filter(|c| c.is_ascii_alphabetic()).map(|c| c.to_ascii_lowercase()).filter(|&c| c != 'u').collect()
-}
-
-/// `strings`, `string` nodes of one prefix without replacement fields, as [`Token::Literal`] writes them.
-fn string_literal(strings: &[Node], text: Text) -> String {
-    let mut out = strings.first().map(|s| prefix(*s, text)).unwrap_or_default();
-    out.push('"');
-    for string in strings {
-        for content in of_kind(*string, "string_content") {
-            out.push_str(text.of(content));
-        }
-    }
-    out
 }
 
 /// What `root`'s code does, without its comments or its layout, as 16 hexadecimal digits: equal for two pieces of

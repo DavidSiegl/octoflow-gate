@@ -242,9 +242,25 @@ fn a_string_requoted_is_no_changed_value_and_one_of_another_prefix_or_text_is() 
     let base = "def test_s():\n    assert name() == 'a' \"b\"\n    assert f'{x}-{y}' == b'c'\n";
     let path = "tests/test_s.py";
     assert_eq!(found(&[code_edit(), edited(path, base, &base.replace("'a' \"b\"", "\"ab\""))]).0, []);
+    assert_eq!(found(&[code_edit(), edited(path, base, &base.replace("f'{x}-{y}'", "F\"{x}-{y}\""))]).0, []);
     for (old, new) in [("'a'", "'A'"), ("b'c'", "'c'"), ("-{y}", "+{y}")] {
         let (place, _) = found(&[code_edit(), edited(path, base, &base.replace(old, new))]);
         assert_eq!(place.len(), 1, "{old} to {new}: {place:?}");
+        assert_eq!(place[0].2, "expected-value-changed");
+    }
+}
+
+#[test]
+fn adjacent_f_strings_split_elsewhere_are_no_changed_value_and_ones_of_other_text_are() {
+    let base = "def test_s():\n    assert name() == f'{x} is a' f'b, not {y}'\n";
+    let path = "tests/test_s.py";
+    for same in ["f'{x} is ' f'ab, not {y}'", "f'{x} is ab, not {y}'", "f'{x}' f\" is ab, not \" f'{y}'"] {
+        let new = base.replace("f'{x} is a' f'b, not {y}'", same);
+        assert_eq!(found(&[code_edit(), edited(path, base, &new)]).0, [], "{same}");
+    }
+    for other in ["f'{x} is a' f' b, not {y}'", "f'{x} was a' f'b, not {y}'"] {
+        let (place, _) = found(&[code_edit(), edited(path, base, &base.replace("f'{x} is a' f'b, not {y}'", other))]);
+        assert_eq!(place.len(), 1, "{other}: {place:?}");
         assert_eq!(place[0].2, "expected-value-changed");
     }
 }

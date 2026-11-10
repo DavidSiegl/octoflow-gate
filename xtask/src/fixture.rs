@@ -21,6 +21,8 @@ const BASE: &[(&str, &str)] = &[
     ("tiny/src/lib.rs", TINY_LIB),
     ("tiny/tests/it.rs", TINY_IT),
     ("tiny/tests/golden/sum.txt", "3\n"),
+    ("calc.py", CALC),
+    ("test_calc.py", TEST_CALC),
 ];
 
 /// The change the working tree makes since `main`: each file it adds or rewrites, by path in the tree, then its new
@@ -49,9 +51,22 @@ fn change() -> Vec<(&'static str, String)> {
         ),
         // actionlint's finding of an untrusted value expanded in a script, on line 8.
         (".github/workflows/ci.yml", format!("{WORKFLOW}      - run: echo \"${{{{ {UNTRUSTED} }}}}\"\n")),
-        // What gate.py's checks of Python report, which the Rust gate does not port yet and the comparison leaves
-        // out: ruff's F401 on line 1, ahead of every ported finding in gate.py's list.
+        // What a linter the Rust gate does not run reports, which the comparison leaves out: ruff's F401 on line 1,
+        // ahead of every ported finding in gate.py's list.
         ("a.py", "import os\n".into()),
+        // What the parser checks report of Python, in a change to its code: a function over the cognitive-complexity
+        // limit on lines 5-39 of calc.py, with a vague name on its line 6, which a comment for ruff follows; and in
+        // its tests, a test removed, a skip added on line 12 of test_calc.py, and a constant an assertion reads
+        // changed on line 5.
+        ("calc.py", calc_changed()),
+        (
+            "test_calc.py",
+            TEST_CALC
+                .replace("from calc", "import pytest\n\nfrom calc")
+                .replace("EXPECTED = 3", "EXPECTED = 4")
+                .replace("def test_zero():\n    assert add(0, 0) == 0\n\n\n", "")
+                .replace("def test_negative", "@pytest.mark.skip\ndef test_negative"),
+        ),
         // What the parser checks report of Rust, in a change to its code: a function over the cognitive-complexity
         // limit, with a vague name in it, on lines 5-56 of lib.rs; and in its tests, a test removed, an `#[ignore]`
         // added on line 4 of it.rs, an expected value changed on line 6, and a golden file changed. No test calls
@@ -75,6 +90,19 @@ fn tiny_lib_changed() -> String {
     let ifs: String = (0..16).map(|k| format!("    if x == {k} {{\n        x += {k};\n    }}\n")).collect();
     format!("{TINY_LIB}\npub fn big(mut x: u32) -> u32 {{\n    let data = x;\n{ifs}    x + data\n}}\n")
 }
+
+const CALC: &str = "def add(a, b):\n    return a + b\n";
+
+/// calc.py with `big`, a function of 16 ifs one after another, and so of cognitive complexity 16, added after `add`.
+fn calc_changed() -> String {
+    let ifs: String = (0..16).map(|k| format!("    if x == {k}:\n        x += {k}\n")).collect();
+    format!("{CALC}\n\ndef big(x):\n    data = x  # noqa: F841\n{ifs}    return x\n")
+}
+
+const TEST_CALC: &str = "from calc import add\n\nEXPECTED = 3\n\n\n\
+                         def test_add():\n    assert add(1, 2) == EXPECTED\n\n\n\
+                         def test_zero():\n    assert add(0, 0) == 0\n\n\n\
+                         def test_negative():\n    assert add(-1, -1) == -2\n";
 
 const TINY_IT: &str = "use tiny::add;\n\n#[test]\nfn negative() {\n    assert_eq!(add(-1, -1), -2);\n}\n\n\
                        #[test]\nfn zero() {\n    assert!(add(0, 0) == 0);\n}\n";

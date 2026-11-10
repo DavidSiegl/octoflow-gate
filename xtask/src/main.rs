@@ -188,7 +188,7 @@ fn ported(report: &Value, from_python: bool) -> Value {
         "findings": kept("findings", ported_finding),
         "failing_tests": report["failing_tests"],
         "coverage": report["coverage"],
-        "suppressions": kept("suppressions", ported_suppression),
+        "suppressions": report["suppressions"],
         "build_config": report["build_config"],
     })
 }
@@ -197,12 +197,12 @@ fn ported(report: &Value, from_python: bool) -> Value {
 type Keep = fn(&Value, bool) -> bool;
 
 /// The lines of `reports`' quality file that come of the parts the Rust gate has ported, gate.py's when
-/// `from_python`. The verdict's line is left out. Of the sections that list the failed conditions, the findings and
-/// the suppressions, only the items are kept, without their numbers, and only those whose entry in quality.json
-/// [`ported`] keeps; a section none of whose items are kept is left out whole. Their other lines are left out, for
-/// they count what was not ported too; whether a list is empty, and how much of it is not listed, quality.json's
-/// comparison already holds. The two files agree only while gate.py's quality file lists every finding it has, fewer
-/// than `QUALITY_ISSUE_LIMIT`: beyond, the findings it leaves unlisted can differ from the Rust gate's.
+/// `from_python`. The verdict's line is left out. Of the sections that list the failed conditions and the findings,
+/// only the items are kept, without their numbers, and only those whose entry in quality.json [`ported`] keeps; a
+/// section none of whose items are kept is left out whole. Their other lines are left out, for they count what was
+/// not ported too; whether a list is empty, and how much of it is not listed, quality.json's comparison already
+/// holds. The two files agree only while gate.py's quality file lists every finding it has, fewer than
+/// `QUALITY_ISSUE_LIMIT`: beyond, the findings it leaves unlisted can differ from the Rust gate's.
 fn ported_markdown(reports: &Reports, from_python: bool) -> Vec<String> {
     let entries = |part: &str| reports.json[part].as_array().cloned().unwrap_or_default();
     let (issues, to_weigh): (Vec<Value>, Vec<Value>) =
@@ -220,7 +220,6 @@ fn ported_markdown(reports: &Reports, from_python: bool) -> Vec<String> {
             "Failed conditions" => (entries("failed_conditions"), ported_condition),
             "Issues on changed lines" => (issues.clone(), ported_finding),
             "Findings to weigh" => (to_weigh.clone(), ported_finding),
-            "Suppressions added" => (entries("suppressions"), ported_suppression),
             _ => {
                 out.push(format!("## {title}"));
                 out.extend(lines.map(String::from));
@@ -272,20 +271,19 @@ fn ported_condition_of_python(c: &str) -> bool {
         || c.contains(", which a linter that reads the file ends a line at and git does not.")
 }
 
-/// The checks the Rust gate runs over Rust (gate::parser_checks, gate::passes_at_base); gate.py's findings of any
-/// other are not compared.
-const PORTED_CHECKS: [&str; 5] =
-    ["test-integrity", "cognitive-complexity", "surviving-mutants", "passes-at-base", "vague-names"];
+/// The checks the Rust gate runs over each language gate.py reads (gate::parser_checks).
+const PARSER_CHECKS: [&str; 3] = ["test-integrity", "cognitive-complexity", "vague-names"];
+
+/// The checks the Rust gate runs over Rust alone (gate::mutants, gate::passes_at_base), their Python halves coming
+/// with gate-standalone/16. gate.py's findings of a check in neither list, as flaky-tests, are not compared.
+const RUST_ONLY_CHECKS: [&str; 2] = ["surviving-mutants", "passes-at-base"];
 
 /// Whether quality.json's finding `f` is compared, given whether it is gate.py's: of gate.py's, only a ported
-/// linter's, a ported check's on a .rs file or a golden file, and one on no file of the Rust half of passes-at-base
-/// ([`rust_s_base_run`]) or of surviving-mutants ([`rust_s_mutation_run`]). gate.py lists a changed golden file
-/// when the change edits the code under test in any language, the Rust gate only when it edits Rust's, so the two
-/// agree on golden files only where the change edits Rust code, or no code at all.
+/// linter's, a parser check's, and of the [`RUST_ONLY_CHECKS`] one on a .rs file, or on no file when it is of the
+/// Rust half of passes-at-base ([`rust_s_base_run`]) or of surviving-mutants ([`rust_s_mutation_run`]).
 fn ported_finding(f: &Value, from_python: bool) -> bool {
     let check = f["check"].as_str().unwrap_or_default();
     let path = f["path"].as_str().unwrap_or_default();
-    let golden = f["rule"] == "test-integrity expected-value-changed" && f["line"].is_null();
     let message = f["message"].as_str().unwrap_or_default();
     let rust_s_run = f["path"].is_null()
         && match check {
@@ -295,7 +293,8 @@ fn ported_finding(f: &Value, from_python: bool) -> bool {
         };
     !from_python
         || PORTED_LINTERS.contains(&check)
-        || (PORTED_CHECKS.contains(&check) && (path.ends_with(".rs") || golden))
+        || PARSER_CHECKS.contains(&check)
+        || (RUST_ONLY_CHECKS.contains(&check) && path.ends_with(".rs"))
         || rust_s_run
 }
 
@@ -311,16 +310,4 @@ fn rust_s_base_run(message: &str) -> bool {
 /// `_cargo_mutants_on_copy` and what it calls; the Python half's speak of mutmut and "the change's functions".
 fn rust_s_mutation_run(message: &str) -> bool {
     message.contains("cargo-mutants") || message.ends_with("the change's Rust was not mutation-tested.")
-}
-
-/// Whether quality.json's suppression `s` is compared, given whether it is gate.py's: of gate.py's, only one in a
-/// file the Rust gate reads the suppressions of, a shell script, a workflow, Markdown or Rust. A shell script that is
-/// Python by its `#!` is gate.py's alone until Python is ported (gate-standalone/15).
-fn ported_suppression(s: &Value, from_python: bool) -> bool {
-    let path = s["path"].as_str().unwrap_or_default();
-    !from_python
-        || path.ends_with(".sh")
-        || path.ends_with(".md")
-        || path.ends_with(".rs")
-        || (path.starts_with(".github/workflows/") && (path.ends_with(".yml") || path.ends_with(".yaml")))
 }

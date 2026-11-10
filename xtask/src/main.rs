@@ -275,30 +275,14 @@ fn ported_condition_of_python(c: &str) -> bool {
         || c.contains(", which a linter that reads the file ends a line at and git does not.")
 }
 
-/// The checks the Rust gate runs whole, over each language gate.py runs them over (gate::parser_checks,
-/// gate::flaky_tests, gate::passes_at_base).
-const WHOLE_CHECKS: [&str; 5] =
-    ["test-integrity", "cognitive-complexity", "vague-names", "flaky-tests", "passes-at-base"];
-
-/// The check the Rust gate runs over Rust alone (gate::mutants), its Python half coming with gate-standalone/16.
-const RUST_ONLY_CHECK: &str = "surviving-mutants";
+/// The checks the Rust gate runs, each over every language gate.py runs it over (gate::parser_checks,
+/// gate::flaky_tests, gate::passes_at_base, gate::mutants).
+const PORTED_CHECKS: [&str; 6] =
+    ["test-integrity", "cognitive-complexity", "vague-names", "flaky-tests", "passes-at-base", "surviving-mutants"];
 
 /// Whether quality.json's finding `f` is compared, given whether it is gate.py's: of gate.py's, only a ported
-/// linter's, one of the [`WHOLE_CHECKS`], and of the [`RUST_ONLY_CHECK`] one on a .rs file, or on no file when it is
-/// of its Rust half ([`rust_s_mutation_run`]).
+/// linter's and one of the [`PORTED_CHECKS`].
 fn ported_finding(f: &Value, from_python: bool) -> bool {
     let check = f["check"].as_str().unwrap_or_default();
-    let path = f["path"].as_str().unwrap_or_default();
-    let message = f["message"].as_str().unwrap_or_default();
-    let of_rust = if f["path"].is_null() { rust_s_mutation_run(message) } else { path.ends_with(".rs") };
-    !from_python
-        || PORTED_LINTERS.contains(&check)
-        || WHOLE_CHECKS.contains(&check)
-        || (check == RUST_ONLY_CHECK && of_rust)
-}
-
-/// Whether `message`, of a surviving-mutants finding on no file, is the Rust half's, by gate.py's words in
-/// `_cargo_mutants_on_copy` and what it calls; the Python half's speak of mutmut and "the change's functions".
-fn rust_s_mutation_run(message: &str) -> bool {
-    message.contains("cargo-mutants") || message.ends_with("the change's Rust was not mutation-tested.")
+    !from_python || PORTED_LINTERS.contains(&check) || PORTED_CHECKS.contains(&check)
 }

@@ -10,7 +10,7 @@ use std::process::Command;
 const BASE: &[(&str, &str)] = &[
     (".gitignore", "/junit.xml\n/coverage.xml\n"),
     ("gate.toml", GATE_TOML),
-    ("pyproject.toml", "[project]\nname = \"fixture\"\nversion = \"0.1.0\"\n"),
+    ("pyproject.toml", PYPROJECT),
     ("versions.txt", "shellcheck 0.10.0\n"),
     ("run-tests.sh", "#!/bin/sh\n# No tests yet.\necho '<testsuite name=\"suite\" tests=\"0\"/>' > junit.xml\n"),
     ("README.md", "# Fixture\n\nThe change `cargo xtask compare` judges.\n"),
@@ -32,7 +32,7 @@ fn change() -> Vec<(&'static str, String)> {
         // An edit to the tree's own settings, and to two files that hold build configuration: a ruleset of the
         // gate's own, and one gate.toml names.
         ("gate.toml", format!("# The fixture's settings.\n{GATE_TOML}")),
-        ("pyproject.toml", "[project]\nname = \"fixture\"\nversion = \"0.2.0\"\n".into()),
+        ("pyproject.toml", PYPROJECT.replace("0.1.0", "0.2.0")),
         ("versions.txt", "shellcheck 0.11.0\n".into()),
         // shellcheck's SC2086 on line 2, and a suppression of it on line 3.
         ("deploy.sh", "#!/bin/sh\necho $1\n# shellcheck disable=SC2086\nrm $2\n".into()),
@@ -58,7 +58,10 @@ fn change() -> Vec<(&'static str, String)> {
         // limit on lines 5-39 of calc.py, with a vague name on its line 6, which a comment for ruff follows; and in
         // its tests, a test removed, a skip added on line 12 of test_calc.py, and a constant an assertion reads
         // changed on line 5. test_sum, added on line 17, passes without the change, as passes-at-base reports.
+        // mutmut finds no test that runs `big`, and the mutants of `scale`, on line 42, surviving test_scale.py.
         ("calc.py", calc_changed()),
+        // The one test mutmut runs ([`PYPROJECT`]): it calls `scale` and does not look at what it gives.
+        ("test_scale.py", "from calc import scale\n\n\ndef test_scale():\n    scale(2, 3)\n".into()),
         (
             "test_calc.py",
             TEST_CALC
@@ -93,6 +96,11 @@ fn change() -> Vec<(&'static str, String)> {
     ]
 }
 
+/// The base's pyproject.toml: mutmut mutates calc.py, by test_scale.py alone, for test_calc.py's tests do not all
+/// pass.
+const PYPROJECT: &str = "[project]\nname = \"fixture\"\nversion = \"0.1.0\"\n\n[tool.mutmut]\n\
+                         source_paths = [\"calc.py\"]\npytest_add_cli_args_test_selection = [\"test_scale.py\"]\n";
+
 const TINY_LIB: &str = "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n";
 
 /// lib.rs with `big`, a function of 16 ifs one after another, and so of cognitive complexity 16, added after `add`.
@@ -103,10 +111,12 @@ fn tiny_lib_changed() -> String {
 
 const CALC: &str = "def add(a, b):\n    return a + b\n";
 
-/// calc.py with `big`, a function of 16 ifs one after another, and so of cognitive complexity 16, added after `add`.
+/// calc.py with two functions added after `add`: `big`, of 16 ifs one after another, and so of cognitive complexity
+/// 16, and then `scale`.
 fn calc_changed() -> String {
     let ifs: String = (0..16).map(|k| format!("    if x == {k}:\n        x += {k}\n")).collect();
-    format!("{CALC}\n\ndef big(x):\n    data = x  # noqa: F841\n{ifs}    return x\n")
+    let scale = "def scale(a, b):\n    return a * b\n";
+    format!("{CALC}\n\ndef big(x):\n    data = x  # noqa: F841\n{ifs}    return x\n\n\n{scale}")
 }
 
 const TEST_CALC: &str = "from calc import add\n\nEXPECTED = 3\n\n\n\

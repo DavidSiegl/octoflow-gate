@@ -481,3 +481,16 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   with the square of the files; `cargo_root` (`crates/gate/src/mutants.rs`) starts one `cargo locate-project` per
   changed .rs path, even for paths of one manifest (review 12, F8, 2026-11-10). Neither changes a finding. Closes
   with `is_code` answered once per path when the `RustChange` is built, and one `locate-project` per directory.
+  Since gate-standalone/15 `Stored::at_base` there also starts one `git cat-file` per base file not named `*.py`, to
+  read its `#!` line, as gate.py's `_was_python_source` does; one `git cat-file --batch` for the change would serve.
+- **A Python expression nested thousands deep can overflow the Rust gate's stack.** `flow::flow`
+  (`crates/lang-python/src/flow.rs`) calls itself at each construct that nests flow, so a chain of thousands of
+  nested conditional expressions or lambdas, which tree-sitter parses without recursing, ends the gate with a stack
+  overflow rather than a finding; plain nesting, runs of boolean operators and `elif` chains are walked with a
+  worklist. Python's own parser, which gate.py reads with, refuses to parse such a file. Found with
+  gate-standalone/15 (2026-11-10). Closes with the walk on a worklist throughout, or a depth past which the file is
+  `not-scored`.
+- **A type parameter named as a skip is read as one in Python.** `is_expression`
+  (`crates/lang-python/src/testing.rs`) does not leave out a type parameter's own name, so `def test_a[skip]():`
+  added to a test file is a `skip` finding of test-integrity, where `ast` has no `Name` there. Found with
+  gate-standalone/15 (2026-11-10). Closes with `type_parameter`'s name told from an expression.

@@ -49,14 +49,64 @@ runs the checks of `crates/checks` over it.
 
 - **An unreadable test file's message** is the front end's reason, "..., so its tests were not checked.", where
   gate.py's names the helper: "the gate-rust helper could not read it as Rust at line N: ...".
-- **Golden files** are listed when the change edits Rust code under test; gate.py lists them when it edits code in
-  any language. The Rust gate reads no Python yet (gate-standalone/15-16), so a change that edits only Python code
-  lists them in gate.py alone.
 
 ### vague-names
 
 - **Two vague names first bound on one line** are listed by column; gate.py lists them in the helper's order.
 - **Case** is folded in ASCII; gate.py folds Unicode. The vague words are ASCII, so no name differs.
+
+## The parser checks over Python (gate-standalone/15)
+
+`gate.py` reads Python with the standard library: `ast`, `tokenize` and the codecs. The Rust gate reads it with
+`crates/lang-python`, on tree-sitter-python, into the same model and checks as Rust.
+
+### Reading a file
+
+- **Encodings.** A file is decoded as its byte order mark or coding cookie says when that is UTF-8, ASCII or Latin-1;
+  a cookie that names any other encoding makes the file one that "could not be read (cannot be decoded as its coding
+  cookie or UTF-8 says: ...)", where gate.py decodes whatever codec Python has and quotes Python's error otherwise.
+  The Rust gate takes no table of codecs (spec decision 7).
+- **What does not parse.** A file tree-sitter cannot parse "does not parse as Python", at the line of the first token
+  it could not place; gate.py quotes `ast`'s `SyntaxError`, on the whole file. tree-sitter-python also reads Python 2,
+  so `print x` parses, and it does not yet read a type parameter's default (PEP 696), which Python 3.13 does.
+- **A test file is decoded as any other Python**, by its mark or cookie; gate.py's test-integrity reads both sides of
+  a test file as UTF-8 alone and calls any other `unreadable`.
+- **A base file is read only where git holds a regular file.** gate.py reads a base symlink's target, the text git
+  stores for it, as Python. The working tree's rule is gate.py's: only a regular file is read.
+- **A working-tree file that cannot be read stops the gate** (exit 2), as for Rust above; gate.py lists it as a
+  finding of each check.
+
+### cognitive-complexity
+
+- **A function takes its base only from Python.** gate.py pairs a function over the limit with a base function of
+  its name in its file's base whatever the language, which shows only when a change renames `a.py` to `a.rs` or back.
+
+### test-integrity
+
+- **Quoted code is quoted as written.** An assertion, an expected value and a skip's decorator appear in a message
+  as the file writes them; gate.py prints `ast.unparse` of them: single-quoted strings, one line,
+  no redundant parentheses, and "too deep" or "too long to print" for what it cannot unparse. `cargo xtask compare`
+  compares messages whole, so a finding that quotes a double-quoted string differs in its message alone.
+- **Literals are compared as written, but for a string's quotes.** `"a"` and `'a'` are one value, and adjacent
+  strings of one prefix are joined; `"\x41"` and `"A"`, `r"\d"` and `"\\d"`, `1_000` and `1000`, `0x10` and `16`
+  are different values, where gate.py compares what they evaluate to. Adjacent strings of different prefixes, as
+  `"a" f"b"`, are not joined.
+- **Redundant parentheses are part of an expression**, so adding or removing them changes an assertion's shape, a
+  function's body and a constant's value; `ast` drops them.
+- **`unparsable` is reported only for a file whose base held tests**, as for Rust; gate.py reports it for any Python
+  test file that does not parse.
+- **A `Test*` class with no test methods** that the change removes is not reported, nor is a deleted file that held
+  only such classes; gate.py reports the class.
+- **Tests of one name in one file** are paired in the order they are written; gate.py keeps only the last.
+- **Two constants first read in one assertion** are listed in the order written; gate.py lists them breadth-first
+  over the expression's tree.
+- **A skip's name written twice on one line** is reported once, at the first.
+
+### Suppressions
+
+- **A Python file that does not parse** has each added line the pattern matches listed, comment or not. gate.py falls
+  back so only when `tokenize` fails, which a file that tokenizes but does not parse does not do: there it still
+  tells a comment from a string.
 
 ## The checks that run Rust's tools (gate-standalone/14)
 

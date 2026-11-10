@@ -61,8 +61,8 @@ pub fn binds<'t>(node: Node, text: Text<'t>) -> Vec<Bound<'t>> {
             out.extend(fields(node, "left").into_iter().flat_map(|left| targets(left, text)));
         }
         "with_item" => {
-            let value = node.child_by_field_name("value").filter(|v| v.kind() == "as_pattern");
-            let alias = value.and_then(|v| v.child_by_field_name("alias"));
+            let renamed = node.child_by_field_name("value").filter(|v| v.kind() == "as_pattern");
+            let alias = renamed.and_then(|v| v.child_by_field_name("alias"));
             out.extend(alias.into_iter().flat_map(|alias| targets(alias, text)));
         }
         "except_clause" | "except_group_clause" => {

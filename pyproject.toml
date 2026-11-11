@@ -51,8 +51,10 @@ max-complexity = 15
 "tests/**" = ["S101", "S105", "S106", "S108", "RUF059", "RUF012", "C408", "C901", "D1"]
 
 [tool.mypy]
-# The tests are untyped by design; the gate is the typed surface.
-files = ["gate.py"]
+# The repository's Python once the cutover (gate-standalone/18) deletes gate.py: what the gate embeds to run in a
+# judged project's Python. scripts/gate judges the cutover by this file, whose mypy could not read a gate.py the
+# change deletes; until then gate.py goes without mypy.
+files = ["crates/gate/src"]
 
 [tool.mutmut]
 # What `gate.py`'s surviving-mutants check runs mutmut by, on a copy of the tree in which only the functions a change

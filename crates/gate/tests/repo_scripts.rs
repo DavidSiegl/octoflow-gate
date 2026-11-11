@@ -206,6 +206,41 @@ fn a_change_that_raises_the_pin_may_use_what_the_new_release_reads() {
     assert_eq!(judged.settings.as_deref(), Some(GATE_TOML));
 }
 
+/// A ci/fetch-gate.sh that unpacks as [`fetching`] does, except for a pin of 0.6.0, the last release before the
+/// cutover: that one unpacks a gate named for its platform, `gate-linux-x86_64`, and no `gate`.
+fn fetching_0_6_0_too() -> String {
+    let rest = fetching().strip_prefix("#!/bin/sh\n").unwrap().to_string();
+    format!(
+        "#!/bin/sh\nif grep -q '^0\\.6\\.0 ' \"$1\"; then\n    mkdir -p \"$2\" && : > \"$2/gate-linux-x86_64\"\n    \
+         echo 0.6.0\n    exit 0\nfi\n{rest}"
+    )
+}
+
+#[test]
+fn a_change_that_pins_a_release_without_gate_is_not_judged_and_told_why() {
+    // Lowering the pin below 0.7.0, the first release that ships `gate`, is a rollback this script no longer runs.
+    let repo = script_repo();
+    commit_judge(&repo, "0.7.0", &fetching_0_6_0_too());
+    repo.put("gate.toml", GATE_TOML.as_bytes());
+    repo.put("ci/gate.pin", pin("0.6.0").as_bytes());
+    let judged = run_gate(&repo, 0);
+    assert_eq!(judged.status, Some(2));
+    let refused = "gate: octoflow-gate 0.6.0, the release the change's ci/gate.pin pins, ships no gate; \
+                   0.7.0 is the first that does\n";
+    assert!(judged.stderr.ends_with(refused), "{}", judged.stderr);
+    assert_eq!(judged.gate_args, None);
+}
+
+#[test]
+fn a_judge_that_pins_a_release_without_gate_is_refused_before_anything_is_installed() {
+    let repo = script_repo();
+    commit_judge(&repo, "0.6.0", &fetching_0_6_0_too());
+    let judged = run_gate(&repo, 0);
+    let refused = "gate: octoflow-gate 0.6.0, the release refs/heads/main's ci/gate.pin pins, ships no gate; \
+                   0.7.0 is the first that does\n";
+    assert_eq!((judged.status, judged.stderr.as_str()), (Some(2), refused));
+}
+
 /// ci/fetch-gate.sh's world: a tarball to serve, and a curl that serves it.
 struct Release {
     repo: Repo,

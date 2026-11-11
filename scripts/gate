@@ -23,8 +23,9 @@
 # interrupted. It cannot be judged when a tool is missing; BASE or the judge is not a commit;
 # the judge lacks ci/gate.pin, ci/fetch-gate.sh, pyproject.toml, or a gate.toml listing a
 # [[test]] command; the judge pins a release that cannot be downloaded or does not match its
-# sha256; the change pins a release that cannot be fetched, or one that would refuse the
-# change's gate.toml (below, where the check is); or the gate itself could not judge. A
+# sha256; the judge or the change pins a release that ships no gate (released_gate, below);
+# the change pins a release that cannot be fetched, or one that would refuse the change's
+# gate.toml (below, where the check is); or the gate itself could not judge. A
 # failing test, or a test command that could not run, is the gate's to report. It leaves at
 # the repo root quality.md and quality.json, which Jenkins archives, and the reports the
 # judge's test commands write, which Jenkins publishes the JUnit ones of.
@@ -104,10 +105,23 @@ fi
 judge_dir=$(mktemp -d)
 trap 'rm -rf "$judge_dir"' EXIT
 git archive "$judge" "${judge_paths[@]}" | tar -x -C "$judge_dir"
+
+# released_gate DIR VERSION WHOSE: the path of the gate of octoflow-gate VERSION, the release
+# unpacked into DIR, which WHOSE ci/gate.pin pins; fails, saying so, when that release ships no
+# gate. 0.7.0 is the first that does, and this script runs no earlier one: pinning one is a revert
+# of the change that stopped running 0.6.0's gate-linux-x86_64 (gate-standalone/18, step C).
+released_gate() {
+	if [[ ! -x $1/gate ]]; then
+		echo "gate: octoflow-gate $2, the release $3 ci/gate.pin pins, ships no gate;" \
+			"0.7.0 is the first that does" >&2
+		return 1
+	fi
+	echo "$1/gate"
+}
 version=$("$judge_dir/ci/fetch-gate.sh" "$judge_dir/ci/gate.pin" "$judge_dir/release")
+gate=$(released_gate "$judge_dir/release" "$version" "$judge_rev's") || exit 2
 echo "gate: judging with octoflow-gate $version, the release $judge_rev's ci/gate.pin pins" >&2
 
-gate=$judge_dir/release/gate
 # Given the judge's gate.toml, the gate takes its rules from the pyproject.toml beside it, never
 # from the change's own.
 gate_args=(--base "$base" --config "$judge_dir/gate.toml")
@@ -125,8 +139,8 @@ if [[ ! -e ci/gate.pin ]]; then
 elif cmp -s ci/gate.pin "$judge_dir/ci/gate.pin"; then
 	next_gate=$gate
 else
-	"$judge_dir/ci/fetch-gate.sh" ci/gate.pin "$judge_dir/next-release" >/dev/null
-	next_gate=$judge_dir/next-release/gate
+	next_version=$("$judge_dir/ci/fetch-gate.sh" ci/gate.pin "$judge_dir/next-release")
+	next_gate=$(released_gate "$judge_dir/next-release" "$next_version" "the change's") || exit 2
 fi
 empty=$judge_dir/empty
 git init --quiet --initial-branch=main "$empty"

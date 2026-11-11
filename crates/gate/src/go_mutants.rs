@@ -46,9 +46,9 @@ pub(crate) struct Edited {
 /// A function counts when the change adds a line to it, from its `func` line to its closing brace, or removes lines
 /// from between two of those, as a deleted guard clause needs a test as much as an added one: a function or method,
 /// with a body, of a Go file that is code under test (GoChange::is_code) and read in the working tree, so not
-/// generated, vendored or a symlink. One whose file's base has a function of its name with the same body, whatever its
-/// comments and layout, does not count: an edit to its comments, its layout or its signature alone changes nothing
-/// gremlins mutates.
+/// generated, vendored or a symlink. One whose file's base has a function of its name with the same declaration, its
+/// signature and body (lang_go::read's body digest), whatever its comments and layout, does not count: an edit to its
+/// comments or layout alone changes nothing gremlins mutates.
 pub(crate) fn edited_functions(go: &GoChange) -> (Vec<Edited>, Vec<Finding>) {
     let removals = removal_points(&go.change.diff);
     let (mut edited, mut unread) = (vec![], vec![]);

@@ -53,7 +53,9 @@ pub fn among_tests(path: &[u8]) -> bool {
 /// What the model's parts are in Go:
 /// - a [`Function`] is a function or method declared with a body, named `f` or, for a method, by its receiver's type,
 ///   `T.m`, with the `func` literals it holds part of its flow (flow.rs says how each construct scores); its lines
-///   start at its doc comment; its calls resolve within the file as [`calls`] says;
+///   start at its doc comment; its body digest takes in its receiver, parameters and results beside its body
+///   ([`syntax::declaration_digest`]), so a signature edited is a function edited; its calls resolve within the file as
+///   [`calls`] says;
 /// - the tests, their assertions and the weakenings are those testing.rs's `read` finds, in a `_test.go` file only;
 /// - a binding is one of those binds.rs's `bindings` lists;
 /// - there are no test groups, as Go has no item that holds tests, and no constants: an expected value in a `const`
@@ -121,7 +123,7 @@ fn functions(root: Node, text: Text, among_tests: bool) -> Vec<Function> {
             name: function_name(node, text),
             line: line(node),
             lines: Lines { first: doc_line(node).unwrap_or(line(node)), last: end_line(node) },
-            body: syntax::digest(body, text),
+            body: syntax::declaration_digest(node, text),
             exempt: among_tests,
             calls: vec![],
             flow,

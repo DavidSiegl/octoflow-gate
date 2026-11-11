@@ -268,7 +268,8 @@ or a module's `m::f(...)`.
 
 Go is judged the same way too, in the `.go` files of a Go module but its `_test.go` files, which are tests. A function
 is a function or method with a body, a method named by its receiver's type as `Stack.Push`; a `func` literal inside it
-is part of it and nests its body as a closure does. Its lines start at its doc comment. Each `if`, `else if`, `else`,
+is part of it and nests its body as a closure does. Its lines start at its doc comment; its body, by which it
+pairs with its base below, takes in its receiver, parameters and results. Each `if`, `else if`, `else`,
 `for` of any form, expression `switch`, type switch and `select` scores as Python's branches do, a `case` adding
 nothing; a run of `&&` and `||` is a sequence of boolean operators; a labelled `break` or `continue`, and a `goto`, a
 point. Recursion follows calls by name within the file: `f(...)` and `f[T](...)`, and `r.m(...)` on the method's own
@@ -479,16 +480,17 @@ the Go functions a change edits with [gremlins](https://gremlins.dev/): a functi
 its closing brace, that the change adds a line to or removes lines from, as Python's are chosen, in a `.go` file of a Go
 module that is not a `_test.go` file nor in a `testdata` directory, and that the gate reads ([reading the
 source](#reading-the-source)), so not a vendored, generated or symlinked one; but not one whose file's base has a
-function of its name with the same body, whatever its comments and layout, as an edit to its comments alone changes
-nothing to mutate. gremlins runs as `gremlins unleash --diff <base>` in the directory of the go.mod nearest above the
-functions' files, once per module, in the gate's copy of the files git tracks. It first runs the module's tests for
-their coverage, then each mutant against the tests of its package, and mutates only what it reads as changed from `git
-diff --merge-base <base>`: the gate puts a `git` first on its `PATH` that answers that one command with the edited
-functions' lines, and passes any other to git, so gremlins mutates the edited functions whole, though the copy has no
-repository. gremlins writes its report only when it finishes, so the gate reads the line it prints for each mutant,
-which a run the budget stopped has printed for those it tried. A mutant that LIVED survived; a KILLED one, and one TIMED
-OUT, did not; one NOT COVERED is on a line no test runs; a NOT VIABLE one, which does not build, was not tried. The
-findings are mutmut's kinds:
+function of its name with the same declaration, its receiver, parameters, results and body, whatever its comments and
+layout, as an edit to its comments or layout alone changes nothing to mutate; a signature edited alone is an edit.
+gremlins runs as `gremlins unleash --diff <base>` in the directory of the go.mod nearest above the functions' files,
+once per module, in the gate's copy of the files git tracks. It first runs the module's tests for their coverage, then
+each mutant against the tests of its package, and mutates only what it reads as changed from `git diff --merge-base
+<base>`: the gate puts a `git` first on its `PATH` that answers that one command with the edited functions' lines, and
+passes any other to git, so gremlins mutates the edited functions whole, though the copy has no repository. gremlins
+writes its report only when it finishes, so the gate reads the line it prints for each mutant, which a run the budget
+stopped has printed for those it tried. A mutant that LIVED survived; a KILLED one, and one TIMED OUT, did not; one NOT
+COVERED is on a line no test runs; a NOT VIABLE one, which does not build, was not tried. The findings are mutmut's
+kinds:
 
 - `survived`: a function with mutants that lived, at its `func` line, with how many of its tried mutants survived and
   the first three, each by its line, column and gremlins' kind, such as `line 13, column 11: CONDITIONALS_BOUNDARY`;

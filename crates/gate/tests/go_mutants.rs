@@ -119,6 +119,21 @@ fn a_function_whose_edit_only_touches_its_comments_and_layout_is_not_mutated() {
 }
 
 #[test]
+fn a_function_whose_signature_alone_changes_is_mutated() {
+    let repo = repo("");
+    // Sub's parameters swap and its body stays; its test calls it and checks nothing.
+    let sub = |params: &str| format!("{CALC}\n// Sub subtracts.\nfunc Sub({params} int) int {{\n\treturn a - b\n}}\n");
+    repo.commit(&[
+        ("calc.go", sub("a, b").as_bytes()),
+        ("sub_test.go", b"package calc\n\nimport \"testing\"\n\nfunc TestSub(t *testing.T) {\n\tSub(3, 1)\n}\n"),
+    ], "Sub");
+    repo.put("calc.go", sub("b, a").as_bytes());
+    let found = findings(&repo, None, &[]);
+    let places: Vec<_> = found.iter().map(|(path, line, rule, _)| (path.as_deref(), *line, rule.as_str())).collect();
+    assert_eq!(places, [(Some("calc.go"), Some(9), "survived")], "{found:?}");
+}
+
+#[test]
 fn a_module_whose_tests_fail_is_not_run() {
     let repo = repo("");
     repo.put("calc.go", format!("{CALC}{ADDED}").as_bytes());

@@ -186,9 +186,15 @@ fn the_gate_judges_by_the_judge_s_settings_and_its_verdict_is_the_script_s() {
 fn a_release_from_before_the_cutover_names_its_gate_for_its_platform() {
     let repo = script_repo();
     commit_judge(&repo, "0.6.0", &fetching("gate-linux-x86_64"));
+    repo.put("pyproject.toml", b"# The change's own rules, which 0.6.0 would take for want of the judge's.\n");
     let judged = run_gate(&repo, 0);
     assert_eq!(judged.status, Some(0), "{}", judged.stderr);
-    assert!(judged.gate_args.is_some());
+    // 0.6.0 takes the rules from a --config that names a pyproject.toml, else from the tree's own.
+    let args = judged.gate_args.unwrap();
+    let rules = args.iter().position(|a| a.ends_with("/pyproject.toml")).expect("the judge's rules given");
+    assert_eq!(args[rules - 1], "--config");
+    assert!(!Path::new(&args[rules]).starts_with(&repo.repo), "{}", args[rules]);
+    assert_eq!(judged.settings.as_deref(), Some(GATE_TOML));
 }
 
 #[test]
@@ -201,7 +207,8 @@ fn a_change_whose_gate_toml_its_pinned_release_refuses_is_not_judged() {
     let judged = run_gate(&repo, 0);
     assert_eq!(judged.status, Some(2));
     let refused = "error: unknown field new_key\n\
-                   gate: the release ci/gate.pin pins would refuse gate.toml, so raise the pin first\n";
+                   gate: the release ci/gate.pin pins could not judge by this gate.toml, for what it said above; \
+                   one it refuses needs the pin raised first\n";
     assert!(judged.stderr.ends_with(refused), "{}", judged.stderr);
     assert_eq!(judged.gate_args, None);
 }

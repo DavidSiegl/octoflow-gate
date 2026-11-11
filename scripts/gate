@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Judge the change this working tree makes since BASE with the gate itself: install what the
-# tests need, then run the judge's gate with the judge's settings (gate.toml) and rules (the
-# pyproject.toml beside it), so that a change cannot loosen how it is itself judged
+# tests need, then run the judge's gate with the judge's settings (gate.toml) and rules (its
+# pyproject.toml), so that a change cannot loosen how it is itself judged
 # (docs/quality-gate.md says what each check means). The gate is the release the judge's
 # ci/gate.pin names, fetched with the judge's ci/fetch-gate.sh as a project fetches it. A
 # release's gate is built for Linux x86_64 alone (README.md, "Running the gate in a project"),
@@ -96,17 +96,16 @@ if [[ -n ${WORKSPACE:-} ]]; then
 	mkdir -p "$TMPDIR"
 fi
 
-# The judge's settings, rules and gate. Given the judge's gate.toml, the gate takes its rules
-# from the pyproject.toml beside it, never from the change's own.
+if [[ $(uname -sm) != "Linux x86_64" ]]; then
+	echo "gate: the release's gate is built for Linux x86_64, not $(uname -sm)" >&2
+	exit 2
+fi
+# The judge's settings, rules and gate.
 judge_dir=$(mktemp -d)
 trap 'rm -rf "$judge_dir"' EXIT
 git archive "$judge" "${judge_paths[@]}" | tar -x -C "$judge_dir"
 version=$("$judge_dir/ci/fetch-gate.sh" "$judge_dir/ci/gate.pin" "$judge_dir/release")
 echo "gate: judging with octoflow-gate $version, the release $judge_rev's ci/gate.pin pins" >&2
-if [[ $(uname -sm) != "Linux x86_64" ]]; then
-	echo "gate: the release's gate is built for Linux x86_64, not $(uname -sm)" >&2
-	exit 2
-fi
 
 # released_gate DIR: the path of the gate in the release unpacked into DIR. 0.6.0, the one
 # release before the cutover that ships it, names it for its platform.
@@ -118,6 +117,12 @@ released_gate() {
 	fi
 }
 gate=$(released_gate "$judge_dir/release")
+# Given the judge's gate.toml, the gate takes its rules from the pyproject.toml beside it, never
+# from the change's own; 0.6.0 takes them from a --config that names a pyproject.toml, and
+# else from the tree's own, the change's.
+gate_args=(--base "$base")
+[[ $gate == */gate-linux-x86_64 ]] && gate_args+=(--config "$judge_dir/pyproject.toml")
+gate_args+=(--config "$judge_dir/gate.toml")
 
 # Once merged, the change's gate.toml is read by the gate the change pins, which refuses a key
 # it does not know: a gate.toml ahead of its pin would leave every later change unjudgeable,
@@ -126,7 +131,10 @@ gate=$(released_gate "$judge_dir/release")
 # raise the pin and use what the new release reads in one go. No release's gate reads a
 # gate.toml but to judge by it, so that gate judges an empty change by this one, in a
 # repository made for it, from a test report given so that no test command runs.
-if cmp -s ci/gate.pin "$judge_dir/ci/gate.pin"; then
+if [[ ! -e ci/gate.pin ]]; then
+	echo "gate: the change deletes ci/gate.pin, by which every later change would be judged" >&2
+	exit 2
+elif cmp -s ci/gate.pin "$judge_dir/ci/gate.pin"; then
 	next_gate=$gate
 else
 	"$judge_dir/ci/fetch-gate.sh" ci/gate.pin "$judge_dir/next-release" >/dev/null
@@ -143,7 +151,8 @@ git -C "$empty" -c user.name=gate -c user.email=gate@localhost -c commit.gpgSign
 echo '<testsuites/>' >"$judge_dir/no-tests.xml"
 next_gate_args=(--base HEAD --config "$top/gate.toml" --tests "$judge_dir/no-tests.xml")
 if ! (cd "$empty" && "$next_gate" "${next_gate_args[@]}" >/dev/null); then
-	echo "gate: the release ci/gate.pin pins would refuse gate.toml, so raise the pin first" >&2
+	echo "gate: the release ci/gate.pin pins could not judge by this gate.toml, for what it said above;" \
+		"one it refuses needs the pin raised first" >&2
 	exit 2
 fi
 
@@ -169,7 +178,7 @@ trap - ERR
 status=0
 # `python` is the environment's, which holds what the gate's checks of Python run: pytest,
 # pytest-randomly and mutmut.
-uv run --frozen "$gate" --base "$base" --config "$judge_dir/gate.toml" --python python --out quality.md || status=$?
+uv run --frozen "$gate" "${gate_args[@]}" --python python --out quality.md || status=$?
 case $status in
 0 | 1 | 130) ;;
 *) status=2 ;;

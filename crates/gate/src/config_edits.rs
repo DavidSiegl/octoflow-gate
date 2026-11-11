@@ -36,15 +36,26 @@ pub struct ToolConfig {
 }
 
 /// Those of `touched`, a change's [`touched_paths`], that a tool takes its configuration from, one [`ToolConfig`] for
-/// each tool with any: clippy's ([`clippy_config_files`], `cargo_home` as there), then Go's ([`GO_CONFIG_NAMES`]).
-pub fn tool_config(touched: &BTreeSet<OsString>, cargo_home: Option<&Path>) -> Vec<ToolConfig> {
-    let named_go =
-        |path: &&OsString| GO_CONFIG_NAMES.iter().any(|n| Path::new(path).file_name() == Some(OsStr::new(n)));
-    let go = touched.iter().filter(named_go).cloned().collect();
+/// each tool with any: clippy's ([`clippy_config_files`], `cargo_home` as there), then Go's: the files
+/// [`GO_CONFIG_NAMES`] names, and each file under the `vendor` directory of a Go module, a dependency's code the go
+/// tool builds in place of the module's download, which go does not check against go.sum. A Go module is a directory
+/// with a go.mod in the working tree at `root`, the tree's top, or with one among `touched`, as a go.mod the change
+/// deletes is.
+pub fn tool_config(root: &Path, touched: &BTreeSet<OsString>, cargo_home: Option<&Path>) -> Vec<ToolConfig> {
+    let named_go = |path: &Path| GO_CONFIG_NAMES.iter().any(|n| path.file_name() == Some(OsStr::new(n)));
+    let module = |dir: &Path| {
+        let manifest = dir.join("go.mod");
+        root.join(&manifest).is_file() || touched.contains(manifest.as_os_str())
+    };
+    let vendored = |path: &Path| {
+        let mut vendor_dirs = path.ancestors().skip(1).filter(|d| d.file_name() == Some(OsStr::new("vendor")));
+        vendor_dirs.any(|vendor| module(vendor.parent().unwrap_or(Path::new(""))))
+    };
+    let go = touched.iter().filter(|p| named_go(Path::new(p)) || vendored(Path::new(p))).cloned().collect();
     let clippy = clippy_config_files(touched, cargo_home);
     [
         (clippy, "clippy takes its rules or its toolchain from; it judged the change by the edited ones"),
-        (go, "the go tool builds a module by or golangci-lint takes its rules from"),
+        (go, "the go tool builds a module by or with, as a vendored dependency, or golangci-lint takes its rules from"),
     ]
     .into_iter()
     .filter(|(files, _)| !files.is_empty())
@@ -138,11 +149,31 @@ mod tests {
     fn go_s_configuration_is_named_by_name_wherever_it_is_after_clippy_s() {
         let diff = b"--- a/svc/go.mod\n--- a/.golangci.yml\n--- a/go.sum\n--- a/Cargo.toml\n--- a/go.work\n\
                      --- a/go.work.sum\n";
-        let found = tool_config(&touched_paths(diff, &Default::default()), None);
+        let found = tool_config(Path::new("/nonexistent"), &touched_paths(diff, &Default::default()), None);
         let files: Vec<Vec<&OsStr>> = found.iter().map(|t| t.files.iter().map(OsString::as_os_str).collect()).collect();
         assert_eq!(files, [vec!["Cargo.toml"], vec![".golangci.yml", "go.work", "svc/go.mod"]]);
         assert!(found[1].what.starts_with("the go tool builds"));
-        assert_eq!(tool_config(&touched_paths(b"--- a/README.md\n", &Default::default()), None), []);
+        let readme = touched_paths(b"--- a/README.md\n", &Default::default());
+        assert_eq!(tool_config(Path::new("/nonexistent"), &readme, None), []);
+    }
+
+    #[test]
+    fn a_file_under_a_go_module_s_vendor_directory_is_go_s_configuration() {
+        let root = std::env::temp_dir().join(format!("gate-go-vendor-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("svc")).unwrap();
+        std::fs::write(root.join("svc/go.mod"), "module example.com/svc\n").unwrap();
+        // The top-level go.mod is one the change deletes; web/ is no Go module.
+        let diff = b"--- a/svc/vendor/example.com/dep/x.go\n--- a/svc/vendor/modules.txt\n--- a/go.mod\n\
+                     --- a/vendor/example.com/old/y.s\n--- a/web/vendor/lib.php\n--- a/svc/vendored/z.go\n";
+        let found = tool_config(&root, &touched_paths(diff, &Default::default()), None);
+        let files: Vec<&OsStr> = found[0].files.iter().map(OsString::as_os_str).collect();
+        assert_eq!(files, [
+            "go.mod",
+            "svc/vendor/example.com/dep/x.go",
+            "svc/vendor/modules.txt",
+            "vendor/example.com/old/y.s"
+        ]);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

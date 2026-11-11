@@ -583,6 +583,12 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   `Equal(t, 3, Add(1, 2))` is no assertion, and removing it or changing its 3 beside the code is not seen. Rare, and
   linters warn against dot imports. As cross-review 22 put it (F9), go-support/01 (2026-11-11). Closes with a
   dot-imported testify package's exported functions, called unqualified, read as its assertions, `New` excepted.
+- **A generated Go file whose header follows a `/* */` comment holding a line that starts with `package` is judged.**
+  `generated` in `crates/lang-go/src/lib.rs` looks for the header line by line up to the first that starts with
+  `package`, without telling a comment's lines from code, so such a line inside a leading block comment, as a licence
+  may hold, ends the search before the header. The file is then read and judged as hand-written, which fails safe:
+  findings on generated code, escaped by `complexity-exempt`. Found by cross-review 22 (round 2), go-support/01
+  (2026-11-11). Closes with the search ending at the `package` clause tree-sitter-go finds.
 - **Go's golden files are not golden files by default.** Go keeps a test's expected output in `testdata/`, by habit as
   `*.golden`, which the default `test-files.golden`, `**/tests/**/golden/**` (`crates/gate/src/settings.rs`), does not
   match, so a change that rewrites them with the code gets no expected-value-changed finding unless the project names

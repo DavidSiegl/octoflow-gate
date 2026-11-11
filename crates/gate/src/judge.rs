@@ -208,7 +208,7 @@ pub fn judge_change(cwd: &Path, base: &str, given: &Given) -> Result<QualityRepo
         coverage,
         suppressions: added_suppressions(&root, changed)?,
         edited_config: edited_config(&touched, &change.settings),
-        tool_config: tool_config(&touched, cargo_home_in(&root, &tool_env()).as_deref()),
+        tool_config: tool_config(&root, &touched, cargo_home_in(&root, &tool_env()).as_deref()),
         rules_from,
         settings_from,
         config_notes: change.settings.build_config.clone(),

@@ -29,7 +29,7 @@ pub struct Sources<'a> {
     pub change: &'a Change,
     pub python: PythonChange<'a>,
     pub rust: RustChange<'a>,
-    pub go: GoChange,
+    pub go: GoChange<'a>,
 }
 
 impl<'a> Sources<'a> {
@@ -43,8 +43,8 @@ impl<'a> Sources<'a> {
         Ok(Sources {
             change,
             python: PythonChange { change, files: python, bases_not_python },
-            rust: RustChange { change, files: rust, gone: stored.gone },
-            go: GoChange { files: go },
+            rust: RustChange { change, files: rust, gone: stored.gone.clone() },
+            go: GoChange { change, files: go, gone: stored.gone },
         })
     }
 }
@@ -160,22 +160,40 @@ impl RustChange<'_> {
     }
 }
 
-/// A change's Go: the files, and whether it edits the code under test rather than its tests.
-pub struct GoChange {
+/// A change's Go: the files, and which of the change's paths are the code under test rather than its tests.
+pub struct GoChange<'a> {
+    pub change: &'a Change,
     /// Each file of the change that is Go source of a Go module on a side ([`GO`]), in the change's order, read with
     /// crates/lang-go as [`Sources`] says. A `_test.go` file is read as test code whole.
     pub files: Vec<ChangedFile>,
+    /// The base paths the change deletes or renames, where a go.mod may have stood.
+    gone: HashSet<PathBuf>,
 }
 
-impl GoChange {
-    /// Whether the change edits Go code under test: whether a side of one of [`files`] is not a `_test.go` file. Go
-    /// has no test code inside a file of code, so, unlike Rust's ([`RustChange::is_code`]), it does not ask what the
-    /// change edits in the file; and what is not read as Go, as a symlink or a vendored or generated file, is no Go
-    /// code.
+impl GoChange<'_> {
+    /// Whether `path`, on either side of the change, is Go code under test: a `.go` file of a Go module
+    /// ([`in_project`]) that is not a `_test.go` file and lies in no `testdata` directory, which holds a test's inputs.
+    ///
+    /// It counts more paths than [`files`] holds, as a file the gate does not judge may still be code the tests run:
+    /// vendored and generated files are built into the module's packages, and a symlink's target is; a file under a
+    /// directory starting with `.` or `_` is counted too, as erring wide only arms expected-value-changed, a finding
+    /// to weigh. A path no file was read at counts, as Rust's does. Go has no test code inside a file of code, so,
+    /// unlike Rust's ([`RustChange::is_code`]), it does not ask what the change edits in the file.
     ///
     /// [`files`]: GoChange::files
+    pub fn is_code(&self, path: &OsStr) -> bool {
+        let bytes = path.as_bytes();
+        bytes.ends_with(b".go")
+            && !lang_go::among_tests(bytes)
+            && !bytes.split(|&b| b == b'/').any(|part| part == b"testdata")
+            && in_project(self.change, &self.gone, path, GO_MANIFEST)
+    }
+
+    /// Whether the change edits Go code under test: whether a path on a side of one of its files [`is_code`].
+    ///
+    /// [`is_code`]: GoChange::is_code
     pub fn edits_code(&self) -> bool {
-        self.files.iter().flat_map(|f| [&f.before, &f.after]).flatten().any(|side| !side.among_tests)
+        any_path(self.change, |path| self.is_code(path))
     }
 }
 

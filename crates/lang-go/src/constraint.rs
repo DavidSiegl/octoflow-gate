@@ -72,9 +72,10 @@ const GOARCHES: &[&str] = &[
 
 /// The weakening the comment `comment`, on line `line` of a `_test.go` file's header, is when it is a build constraint:
 /// platform-only when its expression names no custom tag, only platforms (`GOOS` and `GOARCH` values and `unix`),
-/// release tags (`go1.21`) and the toolchain's tags (`cgo`, `gc`, `gccgo`), and holds on some platform and toolchain,
-/// since that leaves the tests out only where what they test may not be built, as Rust's `cfg(unix)` does; a skip
-/// otherwise, as for a custom tag such as `integration` or `ignore`, or an expression go cannot read. None for a
+/// release tags (`go1.21`, each taken as set, as on the newest toolchain: [`release_tag`]) and the toolchain's tags
+/// (`cgo`, `gc`, `gccgo`), and holds on some platform and toolchain, since that leaves the tests out only where what
+/// they test may not be built, as Rust's `cfg(unix)` does; a skip otherwise, as for a custom tag such as
+/// `integration` or `ignore`, a negated release tag such as `!go1.21`, or an expression go cannot read. None for a
 /// comment that is no `//go:build` line.
 pub fn weakening(comment: &str, line: u32) -> Option<Weakening> {
     let expression = comment.strip_prefix("//go:build")?;
@@ -98,28 +99,25 @@ pub fn weakening(comment: &str, line: u32) -> Option<Weakening> {
     })
 }
 
-/// The tags the go tool sets by the toolchain that builds: `cgo` where cgo is enabled, and the compiler's name.
-const TOOLCHAIN_TAGS: &[&str] = &["cgo", "gc", "gccgo"];
+/// The compilers' names, which the go tool sets as a tag for the compiler that builds.
+const COMPILERS: &[&str] = &["gc", "gccgo"];
 
-/// The minor version `N` that the release tag `tag`, `go1.N`, names; None for any other tag. A toolchain of release
-/// 1.M sets the tags `go1.1` to `go1.M`.
-fn release(tag: &str) -> Option<u32> {
-    let minor = tag.strip_prefix("go1.")?;
-    if minor.is_empty() || !minor.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    minor.parse().ok()
+/// Whether `tag` is a release tag, `go1.N`, N written as the go tool writes it, without a leading zero. Every toolchain
+/// sets those up to its own release, and a change's tests matter where they run on the newest, so each is taken as
+/// set: `go1.21` holds and `!go1.21` turns the tests off.
+fn release_tag(tag: &str) -> bool {
+    tag.strip_prefix("go1.").is_some_and(|minor| {
+        !minor.is_empty() && !minor.starts_with('0') && minor.bytes().all(|b| b.is_ascii_digit())
+    })
 }
 
 /// What a build sets the tags of a constraint by: the platform, and the toolchain.
 struct Build<'a> {
     os: &'a str,
     arch: &'a str,
-    /// `gc` or `gccgo`.
+    /// One of [`COMPILERS`].
     compiler: &'a str,
     cgo: bool,
-    /// The toolchain's minor version, M of go 1.M.
-    release: u32,
 }
 
 /// A build constraint's expression.
@@ -132,54 +130,36 @@ enum Expr {
 }
 
 impl Expr {
-    /// Whether each of its tags is a platform's ([`GOOSES`], [`GOARCHES`] and `unix`), a release's or the
-    /// toolchain's ([`TOOLCHAIN_TAGS`]).
+    /// Whether each of its tags is a platform's ([`GOOSES`], [`GOARCHES`] and `unix`), the toolchain's (`cgo` and
+    /// [`COMPILERS`]) or a release's ([`release_tag`]).
     fn names_no_custom_tag(&self) -> bool {
         match self {
             Expr::Tag(tag) => {
                 let tag = tag.as_str();
                 tag == "unix"
+                    || tag == "cgo"
                     || GOOSES.contains(&tag)
                     || GOARCHES.contains(&tag)
-                    || TOOLCHAIN_TAGS.contains(&tag)
-                    || release(tag).is_some()
+                    || COMPILERS.contains(&tag)
+                    || release_tag(tag)
             }
             Expr::Not(e) => e.names_no_custom_tag(),
             Expr::And(a, b) | Expr::Or(a, b) => a.names_no_custom_tag() && b.names_no_custom_tag(),
         }
     }
 
-    /// Whether it holds for some [`Build`]: a pair of [`GOOSES`] and [`GOARCHES`], either compiler, with cgo or
-    /// without, and a release that is 0 or one its release tags name, which are all the releases it can tell apart.
+    /// Whether it holds for some [`Build`]: a pair of [`GOOSES`] and [`GOARCHES`], with one of [`COMPILERS`], with
+    /// cgo or without.
     fn holds_on_some_build(&self) -> bool {
-        let mut releases = vec![0];
-        self.releases(&mut releases);
-        GOOSES.iter().any(|os| {
-            GOARCHES.iter().any(|arch| {
-                ["gc", "gccgo"].iter().any(|compiler| {
-                    [false, true].iter().any(|&cgo| {
-                        releases.iter().any(|&release| self.holds(&Build { os, arch, compiler, cgo, release }))
-                    })
-                })
-            })
-        })
-    }
-
-    /// Appends to `out` the minor version of each release tag it names.
-    fn releases(&self, out: &mut Vec<u32>) {
-        match self {
-            Expr::Tag(tag) => out.extend(release(tag)),
-            Expr::Not(e) => e.releases(out),
-            Expr::And(a, b) | Expr::Or(a, b) => {
-                a.releases(out);
-                b.releases(out);
-            }
-        }
+        let toolchains: Vec<(&str, bool)> = COMPILERS.iter().flat_map(|c| [(*c, false), (*c, true)]).collect();
+        let holds = |os, arch, (compiler, cgo)| self.holds(&Build { os, arch, compiler, cgo });
+        let on_platform = |os, arch| toolchains.iter().any(|&toolchain| holds(os, arch, toolchain));
+        GOOSES.iter().any(|os| GOARCHES.iter().any(|arch| on_platform(os, arch)))
     }
 
     /// Whether it holds in `build`, with the tags go sets for it: its `GOOS` and `GOARCH`, `unix` on [`UNIX`], and
     /// `linux` on android, `darwin` on ios and `solaris` on illumos; its compiler's name and `cgo` where it has cgo;
-    /// and the release tags up to its release.
+    /// and every release tag ([`release_tag`]).
     fn holds(&self, build: &Build) -> bool {
         match self {
             Expr::Tag(tag) => {
@@ -196,7 +176,7 @@ impl Expr {
                     || (tag == "unix" && UNIX.contains(&os))
                     || tag == build.compiler
                     || (tag == "cgo" && build.cgo)
-                    || release(tag).is_some_and(|n| n <= build.release)
+                    || release_tag(tag)
             }
             Expr::Not(e) => !e.holds(build),
             Expr::And(a, b) => a.holds(build) && b.holds(build),
@@ -299,21 +279,32 @@ mod tests {
     fn a_constraint_naming_release_and_toolchain_tags_beside_platforms_is_platform_only() {
         for comment in [
             "//go:build go1.21",
-            "//go:build !go1.21",
+            "//go:build go1.99",
             "//go:build cgo",
+            "//go:build !cgo",
             "//go:build gc || gccgo",
             "//go:build linux && cgo && go1.22",
-            "//go:build go1.21 && !go1.23",
         ] {
             assert_eq!(kind(comment), Some(WeakeningKind::PlatformOnly), "{comment}");
         }
+    }
+
+    #[test]
+    fn a_release_tag_is_taken_as_set_so_one_negated_turns_the_tests_off_and_a_malformed_one_is_custom() {
         for comment in [
+            "//go:build !go1.1",
+            "//go:build !go1.21",
+            "//go:build go1.21 && !go1.21",
+            "//go:build go1.21 && !go1.23",
+            "//go:build linux && !go1.22",
             "//go:build cgo && !cgo",
             "//go:build gc && gccgo",
-            "//go:build go1.23 && !go1.21",
             "//go:build go1.21 && integration",
             "//go:build go1",
             "//go:build go1.x",
+            "//go:build go1.",
+            "//go:build go1.021",
+            "//go:build go1.0",
         ] {
             assert_eq!(kind(comment), Some(WeakeningKind::Skip), "{comment}");
         }

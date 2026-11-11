@@ -456,7 +456,8 @@ change adds lines to outside the tests (a `.rs` file of a Cargo package, as for 
 has an equal share of what those before it left, among itself and the languages after it that have something to
 mutate, so it also takes whatever an earlier one left unused. With Python and Rust to mutate, mutmut gets half the
 budget and cargo-mutants the rest; with Go as well, mutmut a third, cargo-mutants half of what is left and gremlins the
-rest; a change with no Python functions to mutate gives cargo-mutants all of it, or half with Go to mutate.
+rest; a change with no Python functions to mutate gives cargo-mutants all of it, or half with Go to mutate. A
+`budget-reached` finding names the seconds of the share its tool was stopped at.
 cargo-mutants chooses what to mutate itself: it runs `--in-diff` with the change's diff of the workspace's `.rs` files,
 which mutates only what the added lines hold, `--in-place` in the gate's copy of the files git tracks, once per Cargo
 workspace (that of the nearest `Cargo.toml` above the file, as `cargo locate-project` tells it), with `--test-tool

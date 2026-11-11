@@ -47,16 +47,16 @@ pub(crate) const SURVIVOR_EXAMPLES: usize = 3;
 /// then the Go functions it edits with gremlins (go_mutants::go_mutants), all within `budget` seconds. Each language
 /// in turn has an equal share of what the ones before it left, among itself and the languages after it that have
 /// something to mutate: with all three, mutmut has a third of the budget, cargo-mutants half of what is left, and
-/// gremlins the rest.
+/// gremlins the rest. Each one's findings name its share as the seconds it was stopped at.
 pub fn surviving_mutants(sources: &Sources, mutmut: &Mutmut, budget: u64) -> Vec<Finding> {
     let budget = Budget::starting_now(budget);
     let rust = changed_code(&sources.rust);
     let (go, mut out) = edited_functions(&sources.go);
-    let after_python = u32::from(!rust.is_empty()) + u32::from(!go.is_empty());
-    let seconds = Duration::from_secs(budget.seconds).as_secs_f64() / f64::from(1 + after_python);
-    out.extend(python_mutants(&sources.python, mutmut, seconds));
-    out.extend(rust_mutants(&sources.rust, &rust, &budget.share(1 + u32::from(!go.is_empty()))));
-    out.extend(go_mutants(&sources.go, &go, &budget));
+    let share = |later: &[bool]| budget.share(1 + later.iter().map(|&has| u32::from(has)).sum::<u32>());
+    let python = share(&[!rust.is_empty(), !go.is_empty()]);
+    out.extend(python_mutants(&sources.python, mutmut, python.seconds as f64));
+    out.extend(rust_mutants(&sources.rust, &rust, &share(&[!go.is_empty()])));
+    out.extend(go_mutants(&sources.go, &go, &share(&[])));
     sort_by_place(&mut out);
     out
 }

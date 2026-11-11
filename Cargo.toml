@@ -2,7 +2,15 @@
 # a source file that each language's front end, such as crates/lang-rust, reads; and xtask the workspace's own tasks,
 # such as `cargo xtask smoke-release`. ci/package.sh builds the gate for a release.
 [workspace]
-members = ["crates/gate", "crates/model", "crates/checks", "crates/lang-python", "crates/lang-rust", "xtask"]
+members = [
+    "crates/gate",
+    "crates/model",
+    "crates/checks",
+    "crates/lang-python",
+    "crates/lang-rust",
+    "crates/lang-go",
+    "xtask",
+]
 resolver = "2"
 
 [workspace.package]

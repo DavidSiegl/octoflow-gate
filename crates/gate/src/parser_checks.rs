@@ -1,14 +1,14 @@
 //! The parser checks (crates/checks) on a change: its source files read by their languages' front ends, each side of
-//! each file, and the checks run over them. Python (crates/lang-python) and Rust (crates/lang-rust) are the languages
-//! read ([`Sources`]). What is read of Rust ([`RustChange`]) serves the checks that run a change's Rust too, as
-//! passes_at_base.
+//! each file, and the checks run over them. Python (crates/lang-python), Rust (crates/lang-rust) and Go
+//! (crates/lang-go) are the languages read ([`Sources`]). What is read of Rust ([`RustChange`]) serves the checks that
+//! run a change's Rust too, as passes_at_base.
 
 use std::cell::OnceCell;
 use std::collections::{BTreeSet, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::io::Read;
 use std::os::unix::ffi::OsStrExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use checks::{complexity, integrity, names, ChangedFile, Finding, Side};
 use lang_python::{Unit, FIRST_LINE_BYTES};
@@ -29,6 +29,7 @@ pub struct Sources<'a> {
     pub change: &'a Change,
     pub python: PythonChange<'a>,
     pub rust: RustChange<'a>,
+    pub go: GoChange<'a>,
 }
 
 impl<'a> Sources<'a> {
@@ -36,13 +37,14 @@ impl<'a> Sources<'a> {
     /// the working tree cannot be read.
     pub fn read(change: &'a Change) -> Result<Sources<'a>, Unjudged> {
         let stored = Stored::of(change)?;
-        let gone = change.files.iter().filter(|f| f.before != f.after).filter_map(|f| f.before.clone()).collect();
         let (python, bases_not_python) = stored.files(&PYTHON)?;
         let (rust, _) = stored.files(&RUST)?;
+        let (go, _) = stored.files(&GO)?;
         Ok(Sources {
             change,
             python: PythonChange { change, files: python, bases_not_python },
-            rust: RustChange { change, files: rust, gone },
+            rust: RustChange { change, files: rust, gone: stored.gone.clone() },
+            go: GoChange { change, files: go, gone: stored.gone },
         })
     }
 }
@@ -129,19 +131,19 @@ pub struct RustChange<'a> {
     /// [`Sources`] says. A file gate.toml's `test-files.rust` matches is read as test code whole.
     pub files: Vec<ChangedFile>,
     /// The base paths the change deletes or renames, where a Cargo.toml may have stood.
-    gone: Vec<OsString>,
+    gone: HashSet<PathBuf>,
 }
 
 impl RustChange<'_> {
     /// Whether `path`, on either side of the change, is Rust code under test: a .rs file of a Cargo package
-    /// ([`in_cargo_package`]) that gate.toml's `test-files.rust` does not place among the tests, which the change
+    /// ([`in_project`]) that gate.toml's `test-files.rust` does not place among the tests, which the change
     /// adds, deletes, renames or edits outside its test code ([`integrity::edits_code`]). A path no file was read at,
     /// as a symlink's, counts as edited.
     pub fn is_code(&self, path: &OsStr) -> bool {
         let change = self.change;
         if !path.as_bytes().ends_with(b".rs")
             || change.settings.rust_tests.matches(path)
-            || !in_cargo_package(change, &self.gone, path)
+            || !in_project(change, &self.gone, path, CARGO_MANIFEST)
         {
             return false;
         }
@@ -158,6 +160,43 @@ impl RustChange<'_> {
     }
 }
 
+/// A change's Go: the files, and which of the change's paths are the code under test rather than its tests.
+pub struct GoChange<'a> {
+    pub change: &'a Change,
+    /// Each file of the change that is Go source of a Go module on a side ([`GO`]), in the change's order, read with
+    /// crates/lang-go as [`Sources`] says. A `_test.go` file is read as test code whole.
+    pub files: Vec<ChangedFile>,
+    /// The base paths the change deletes or renames, where a go.mod may have stood.
+    gone: HashSet<PathBuf>,
+}
+
+impl GoChange<'_> {
+    /// Whether `path`, on either side of the change, is Go code under test: a `.go` file of a Go module
+    /// ([`in_project`]) that is not a `_test.go` file and lies in no `testdata` directory, which holds a test's inputs.
+    ///
+    /// It counts more paths than [`files`] holds, as a file the gate does not judge may still be code the tests run:
+    /// vendored and generated files are built into the module's packages, and a symlink's target is; a file under a
+    /// directory starting with `.` or `_` is counted too, as erring wide only arms expected-value-changed, a finding
+    /// to weigh. A path no file was read at counts, as Rust's does. Go has no test code inside a file of code, so,
+    /// unlike Rust's ([`RustChange::is_code`]), it does not ask what the change edits in the file.
+    ///
+    /// [`files`]: GoChange::files
+    pub fn is_code(&self, path: &OsStr) -> bool {
+        let bytes = path.as_bytes();
+        bytes.ends_with(b".go")
+            && !lang_go::among_tests(bytes)
+            && !bytes.split(|&b| b == b'/').any(|part| part == b"testdata")
+            && in_project(self.change, &self.gone, path, GO_MANIFEST)
+    }
+
+    /// Whether the change edits Go code under test: whether a path on a side of one of its files [`is_code`].
+    ///
+    /// [`is_code`]: GoChange::is_code
+    pub fn edits_code(&self) -> bool {
+        any_path(self.change, |path| self.is_code(path))
+    }
+}
+
 /// Whether `holds` is true of a path on a side of one of `change`'s files.
 fn any_path(change: &Change, holds: impl Fn(&OsStr) -> bool) -> bool {
     change.files.iter().flat_map(|f| [&f.before, &f.after]).flatten().any(|path| holds(path))
@@ -169,14 +208,17 @@ pub(crate) fn python_test(settings: &Settings, path: &OsStr) -> bool {
 }
 
 /// The test-integrity check's findings on `sources`: the golden files the change edits ([`changed_golden_files`]),
-/// when it edits a language's code under test ([`PythonChange::edits_code`], [`RustChange::edits_code`]), by path,
-/// then the findings on Python, then those on Rust, each by path and line. Each finding's severity says whether it
-/// fails the gate ([`Finding::severity`]).
+/// when it edits a language's code under test ([`PythonChange::edits_code`], [`RustChange::edits_code`],
+/// [`GoChange::edits_code`]), by path, then the findings on Python, then those on Rust, then those on Go, each by path
+/// and line. Each finding's severity says whether it fails the gate ([`Finding::severity`]).
 pub fn weakened_tests(sources: &Sources) -> Vec<Finding> {
-    let (python_edited, rust_edited) = (sources.python.edits_code(), sources.rust.edits_code());
-    let mut out = if python_edited || rust_edited { changed_golden_files(sources.change) } else { vec![] };
+    let python_edited = sources.python.edits_code();
+    let rust_edited = sources.rust.edits_code();
+    let go_edited = sources.go.edits_code();
+    let mut out = if python_edited || rust_edited || go_edited { changed_golden_files(sources.change) } else { vec![] };
     out.extend(integrity::weakened_tests(&sources.python.files, python_edited));
     out.extend(integrity::weakened_tests(&sources.rust.files, rust_edited));
+    out.extend(integrity::weakened_tests(&sources.go.files, go_edited));
     out
 }
 
@@ -186,6 +228,7 @@ pub fn too_complex(sources: &Sources) -> Vec<Finding> {
     let exempt = |path: &OsStr| sources.change.settings.complexity_exempt.matches(path);
     let mut out = complexity::too_complex(&sources.python.files, &exempt);
     out.extend(complexity::too_complex(&sources.rust.files, &exempt));
+    out.extend(complexity::too_complex(&sources.go.files, &exempt));
     by_path_and_line(out)
 }
 
@@ -193,6 +236,8 @@ pub fn too_complex(sources: &Sources) -> Vec<Finding> {
 pub fn vague_names(sources: &Sources) -> Vec<Finding> {
     let mut out = names::vague_names(&sources.python.files, false);
     out.extend(names::vague_names(&sources.rust.files, true));
+    // Go names its types and its variables in MixedCaps, as `runInfo` and `RunInfo`.
+    out.extend(names::vague_names(&sources.go.files, true));
     by_path_and_line(out)
 }
 
@@ -208,9 +253,17 @@ struct Language {
     /// first [`FIRST_LINE_BYTES`] bytes, none for a file that cannot be read, and is called only when the name does
     /// not decide.
     holds: fn(path: &[u8], head: &dyn Fn() -> Vec<u8>) -> bool,
-    /// Whether `settings` place among the language's tests the side at `path` of one of the language's files, whose
-    /// other side, where the change gives it one, is at `other`.
+    /// Whether the side at `path` of one of the language's files, whose other side, where the change gives it one, is
+    /// at `other`, is among the language's tests: by `settings`, or, for a language whose tool fixes its test files, as
+    /// Go's fixes `_test.go`, by that tool's rule.
     among_tests: fn(settings: &Settings, path: &OsStr, other: Option<&OsStr>) -> bool,
+    /// The name of the file that makes its directory and those below it a project of the language, as Go's `go.mod`:
+    /// a file of the language outside every such directory ([`in_project`]) is not read as the language's. None for a
+    /// language whose files are read wherever they are.
+    project: Option<&'static str>,
+    /// Whether a file that holds the language's source, `source` being all its bytes, is generated, as its generator
+    /// marks it, and so not read as the language's: a generator's output is not code written to be judged.
+    generated: fn(source: &[u8]) -> bool,
     /// Whether a file that holds the language's source in the working tree has its base read as the language's too,
     /// whatever the base's name and first line say, so that a file is compared with its base under any name.
     base_of_any_name: bool,
@@ -224,6 +277,8 @@ const PYTHON: Language = Language {
     // unseen.
     among_tests: |settings, path, other| python_test(settings, path) || other.is_some_and(|o| python_test(settings, o)),
     base_of_any_name: true,
+    project: None,
+    generated: |_| false,
     read: |source, path, among_tests| lang_python::read(source, Path::new(path), among_tests),
 };
 
@@ -231,8 +286,24 @@ const RUST: Language = Language {
     holds: |path, _| path.ends_with(b".rs"),
     among_tests: |settings, path, _| settings.rust_tests.matches(path),
     base_of_any_name: false,
+    // Rust outside a Cargo package is still read, though it is no code under test ([`RustChange::is_code`]).
+    project: None,
+    generated: |_| false,
     read: |source, _, among_tests| lang_rust::read(source, among_tests),
 };
+
+const GO: Language = Language {
+    holds: |path, _| lang_go::is_go(path),
+    among_tests: |_, path, _| lang_go::among_tests(path.as_bytes()),
+    base_of_any_name: false,
+    project: Some(GO_MANIFEST),
+    generated: lang_go::generated,
+    read: |source, _, among_tests| lang_go::read(source, among_tests),
+};
+
+/// The files whose directory, and those below it, are a Rust package and a Go module.
+const CARGO_MANIFEST: &str = "Cargo.toml";
+const GO_MANIFEST: &str = "go.mod";
 
 /// What git and the working tree hold of a change's files, for each [`Language`] to read its own from.
 struct Stored<'a> {
@@ -241,20 +312,25 @@ struct Stored<'a> {
     regular_at_base: HashSet<OsString>,
     /// The lines of its base the change removed from each file, by the file's path in the working tree.
     removed: ChangedLines,
+    /// The base paths the change deletes or renames, where a project's file ([`Language::project`]) may have stood.
+    gone: HashSet<PathBuf>,
 }
 
 impl<'a> Stored<'a> {
     /// Errs when git cannot list the base's tree.
     fn of(change: &'a Change) -> Result<Stored<'a>, Unjudged> {
         let base_paths: Vec<OsString> = change.files.iter().filter_map(|f| f.before.clone()).collect();
+        let gone = change.files.iter().filter(|f| f.before != f.after).filter_map(|f| f.before.as_deref());
         Ok(Stored {
             change,
             regular_at_base: regular_files_at_base(change, &base_paths)?,
             removed: removed_lines(&change.diff),
+            gone: gone.map(PathBuf::from).collect(),
         })
     }
 
-    /// Each file of the change that holds `language`'s source on a side, in the change's order, each such side read;
+    /// Each file of the change that holds `language`'s source on a side, inside one of its projects where it has them
+    /// ([`Language::project`]) and not generated ([`Language::generated`]), in the change's order, each such side read;
     /// and the base paths among them that held none of it by their name or first line, read all the same
     /// ([`Language::base_of_any_name`]). Errs when git cannot show such a file at the base, or one cannot be read in
     /// the working tree.
@@ -290,7 +366,8 @@ impl<'a> Stored<'a> {
         Ok((out, bases_holding_none))
     }
 
-    /// The bytes of the base's regular file at `path`, when it holds `language`'s source or `whatever_it_holds`,
+    /// The bytes of the base's regular file at `path`, when it holds `language`'s source or `whatever_it_holds`, lies
+    /// in one of the language's projects ([`Stored::in_its_project`]) and is not generated ([`Language::generated`]),
     /// with whether it holds that source. A file git cannot show is not the language's when its name would have to
     /// decide and does not, and an error otherwise.
     fn at_base(
@@ -309,14 +386,16 @@ impl<'a> Stored<'a> {
         };
         let head = || show().as_ref().map(|blob| blob[..blob.len().min(FIRST_LINE_BYTES)].to_vec()).unwrap_or_default();
         let holds = (language.holds)(path.as_bytes(), &head);
-        if !whatever_it_holds && !holds {
+        if (!whatever_it_holds && !holds) || !self.in_its_project(path, language) {
             return Ok(None);
         }
         show();
-        Ok(blob.into_inner().transpose()?.map(|bytes| (bytes, holds)))
+        let bytes = blob.into_inner().transpose()?;
+        Ok(bytes.filter(|bytes| !(language.generated)(bytes)).map(|bytes| (bytes, holds)))
     }
 
-    /// The bytes of the working tree's regular file at `path`, when it holds `language`'s source.
+    /// The bytes of the working tree's regular file at `path`, when it holds `language`'s source, lies in one of the
+    /// language's projects ([`Stored::in_its_project`]) and is not generated ([`Language::generated`]).
     fn in_working_tree(&self, path: &OsStr, language: &Language) -> Result<Option<Vec<u8>>, Unjudged> {
         let full = self.change.root.join(path);
         let head = || {
@@ -325,11 +404,20 @@ impl<'a> Stored<'a> {
             let read = std::fs::File::open(&full).and_then(first);
             if read.is_ok() { head } else { vec![] }
         };
-        if !(language.holds)(path.as_bytes(), &head) {
+        if !(language.holds)(path.as_bytes(), &head) || !self.in_its_project(path, language) {
             return Ok(None);
         }
         let read = std::fs::read(&full);
-        read.map(Some).map_err(|e| Unjudged(format!("{} could not be read: {e}", text::path(full.as_os_str()))))
+        let bytes = read.map_err(|e| Unjudged(format!("{} could not be read: {e}", text::path(full.as_os_str()))))?;
+        Ok(Some(bytes).filter(|bytes| !(language.generated)(bytes)))
+    }
+
+    /// Whether `path`, the path of a side that holds `language`'s source, lies in one of the language's projects
+    /// ([`in_project`]), as it must to be read as the language's where the language has them ([`Language::project`]).
+    /// It is asked after [`Language::holds`], which most paths fail by their name alone, as it walks up the path's
+    /// directories with a `stat` at each.
+    fn in_its_project(&self, path: &OsStr, language: &Language) -> bool {
+        language.project.is_none_or(|manifest| in_project(self.change, &self.gone, path, manifest))
     }
 }
 
@@ -354,14 +442,15 @@ fn regular_file(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_file())
 }
 
-/// Whether a Cargo.toml lies in the directory of `path`, from the tree's top, or one above it up to the top: in the
-/// working tree, or at the base where the change deletes or renames it, as `gone`, the base paths the change deletes
-/// or renames, says.
-fn in_cargo_package(change: &Change, gone: &[OsString], path: &OsStr) -> bool {
+/// Whether a file named `manifest`, as a Cargo.toml or a go.mod, lies in the directory of `path`, from the tree's top,
+/// or one above it up to the top: in the working tree, or at the base where the change deletes or renames it, as
+/// `gone`, the base paths the change deletes or renames, says. One test serves both sides of a file, so a manifest
+/// the change adds also places the file's base in a project.
+fn in_project(change: &Change, gone: &HashSet<PathBuf>, path: &OsStr, manifest: &str) -> bool {
     let mut dir = Path::new(path).parent();
     while let Some(d) = dir {
-        let manifest = d.join("Cargo.toml");
-        if gone.iter().any(|g| Path::new(g) == manifest) || change.root.join(&manifest).is_file() {
+        let manifest = d.join(manifest);
+        if gone.contains(&manifest) || change.root.join(&manifest).is_file() {
             return true;
         }
         dir = d.parent();

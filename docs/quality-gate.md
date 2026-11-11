@@ -1,7 +1,7 @@
 # Quality gate
 
 What `gate` judges and why: the [gate](#the-gate) itself, its [Rust tests and
-coverage](#rust-tests-and-coverage), how it [reads Rust and Python](#reading-rust-and-python),
+coverage](#rust-tests-and-coverage), how it [reads Rust, Python and Go](#reading-the-source),
 [whose rules judge a change](#whose-rules-judge-a-change), and [the report as a contract](#the-report-as-a-contract)
 with the programs that read it back. [README.md](../README.md) says how to
 run it in a project.
@@ -20,8 +20,8 @@ gate --base main --out quality.md
 ```
 
 `gate` is one binary, which a release ships built ([README.md](../README.md), "Running the gate in a project"); it
-runs in the tree it judges, and reads the tree's Rust and Python [itself](#reading-rust-and-python). The tools it
-runs it finds on `PATH`, but for the judged project's Python, in which that project's pytest, pytest-randomly and
+runs in the tree it judges, and reads the tree's Rust, Python and Go [itself](#reading-the-source). The tools
+it runs it finds on `PATH`, but for the judged project's Python, in which that project's pytest, pytest-randomly and
 mutmut are installed: `--python PATH` names it, else the `python` key of [the settings](#the-gates-settings), else it
 is `python3`.
 
@@ -88,7 +88,7 @@ committed by accident. Deleting such files is no fault.
 
 | Check | Fails? | Finds |
 |---|---|---|
-| `test-integrity` | yes, but for removed tests, fewer assertions, changed expected values and Rust tests left out on other platforms | tests the change weakened, in test files (by default `tests/**`, `test_*.py`, `*_test.py`; Rust's below) |
+| `test-integrity` | yes, but for removed tests, fewer assertions, changed expected values and Rust and Go tests left out on other platforms | tests the change weakened, in test files (by default `tests/**`, `test_*.py`, `*_test.py`; Rust's below) |
 | `cognitive-complexity` | yes | functions the change edits or adds that it takes over a cognitive complexity of 15 |
 | `flaky-tests` | no | tests the change adds or edits that pass in one order and fail in another |
 | `surviving-mutants` | no | changes to the functions the change edits that no test notices |
@@ -128,10 +128,10 @@ change cannot weaken its tests unseen. Each of these is a finding:
   tests gets one such finding per file, on the whole file, also to weigh. A golden file added, or renamed unedited,
   is none.
 
-It reads Python and Rust, and golden files whatever their language; another language is another front end beside
-`crates/lang-python` and `crates/lang-rust` ([reading Rust and Python](#reading-rust-and-python)).
+It reads Python, Rust and Go, and golden files whatever their language; another language is another front end beside
+`crates/lang-python`, `crates/lang-rust` and `crates/lang-go` ([reading the source](#reading-the-source)).
 
-**Rust tests** it reads as [reading Rust and Python](#reading-rust-and-python) says. A Rust test is a `fn` with an
+**Rust tests** it reads as [reading the source](#reading-the-source) says. A Rust test is a `fn` with an
 attribute whose path ends in the segment `test`, as `#[test]` and `#[tokio::test]` (not `#[rstest]`), in a `.rs` file of
 Rust's test files, by default under a `tests` directory or named `tests.rs`, or anywhere inside an inline module marked
 as test code (`#[cfg(test)] mod tests { ... }`) in any other `.rs` file, on either side of the change. A file with such
@@ -182,12 +182,57 @@ order. The findings are Python's, read of Rust:
   has none to lose, as a fixture under `tests/` that is not Rust on purpose, and is not judged; nor is a base that
   does not parse. A Python test file that does not parse is judged the same way.
 
+**Go tests** it reads as [reading the source](#reading-the-source) says, in a `_test.go` file of a Go module, which is
+test code whole: the go tool fixes which files are tests, so the settings have no key for them. Go code outside the
+tests is any other `.go` file of a module outside a `testdata` directory, and a change that touches one edits it, also
+where the gate does not judge it: a vendored, generated or symlinked file is code the tests run (`GoChange::is_code` in
+`crates/gate/src/parser_checks.rs`). A test is a function `TestX(t *testing.T)`, `BenchmarkX(b *testing.B)` or
+`FuzzX(f *testing.F)`, as `go test` finds them, and a subtest, `t.Run("name", func(t *testing.T) {...})`, named by its
+string literal after the test holding it, as `TestAdd/negative`, with `_` for a space as `go test` writes it. A subtest
+named by any other expression, as a table-driven test's `t.Run(tc.name, ...)`, is part of the test holding it. An
+example, `ExampleX()` with its `// Output:` comment, is no test, though `go test` runs it and checks its output, so
+removing one or changing its output is not seen (`TODO.md`). The findings are Python's, read of Go:
+
+- `removed-test`: a test or subtest gone from its file, its body compared by a digest of its tokens as Rust's is; a
+  deleted file is one finding. Go has no item that holds tests, so there is no group finding;
+- `skip`: a `t.Skip`, `t.Skipf` or `t.SkipNow` on an added line, called on a parameter of type `*testing.T`, `*B`,
+  `*F` or `testing.TB` of any function or `func` literal of the file, a helper's included; and a `//go:build` line
+  added above the file's `package` clause, which builds the file's tests only where its expression holds, as Rust's
+  `cfg` does;
+- `platform-only`: such a `//go:build` line whose expression names no custom tag, only platforms (`GOOS` and `GOARCH`
+  values and `unix`), release tags (`go1.21`, written as go writes them) and the toolchain's tags (`cgo`, `gc`,
+  `gccgo`), with `!`, `&&`, `||` and parentheses, and holds on at least one platform and toolchain, as
+  `//go:build linux || darwin` or `//go:build go1.21`. A release tag, `go1.1` up to the newest Go release the gate
+  knows, `go1.27` (`NEWEST_RELEASE` in `crates/lang-go/src/constraint.rs`, raised with each Go release), is taken as
+  set, as on the newest toolchain, where the tests that matter run; a `go1.N` above it, as `go1.99`, is set by no
+  toolchain and is a custom tag, so until the constant is raised a test file naming a new release's tag is a `skip`.
+  It is one to weigh, as Rust's is; a custom tag such as `integration` or `ignore` beside them makes it a `skip`, as
+  does an expression that holds nowhere, as `cgo && !cgo` or `!go1.21`;
+- `fewer-assertions`: a kept test with fewer assertions than at the base. An assertion is a call, in the test's own
+  body or a `func` literal in it, of testify's `assert` or `require` packages (`assert.Equal(t, 3, got)`, under the
+  names the file imports them by; `assert.New` is none, and a package imported with `.` is not followed, so its
+  unqualified `Equal(t, ...)` is none), or of `Error`, `Errorf`, `Fatal`, `Fatalf`, `Fail` or `FailNow` on a testing
+  parameter as above. Such a call that is a statement of an `if`'s block makes that `if` one assertion, however many
+  it holds, since the `if` holds the expected value: `if got := Add(1, 2); got != 3 { t.Errorf(...) }` is one. A
+  helper's calls are not followed into the tests that call it: `check(t, Add(1, 2), 3)`, where `check` holds the
+  `t.Errorf`, is no assertion of the test, so a test that asserts only through helpers has none to lose (`TODO.md`);
+- `swallowed-error`: on an added line anywhere in the file, `_ = err`, or an `if err != nil {}` whose block holds no
+  statement, `err` being a name Go gives an error by habit: `err`, `err` then a capital or a digit, or a name ending
+  in `Err`. A parser knows no types, so an error thrown away under another name, or as `v, _ := f()`, is not seen;
+- `expected-value-changed`: as Rust's, an assertion whose literals (numbers, runes and strings) changed while its shape
+  stayed, an `if`'s initializer and condition included, in a change that also edits Go code outside the tests.
+  Constants and a table-driven test's table of cases are not followed, so an expected value held there is not seen;
+- `unparsable`: as Rust's.
+
+Go's tests themselves are not run yet, nor is its coverage measured, its code linted with golangci-lint or
+mutation-tested: those come in a later release.
+
 **Cognitive complexity** scores the functions the change edits, so that a change cannot pile branches into the function
 it is editing rather than split it. A function counts when the change adds a line to it, decorators included, in a
 Python file, a `.py` file or a script whose `#!` line names python, outside the files the settings exempt, by default
 `tests/`: any function that no other function holds, a method of a nested class and a function under a module-level `if`
 or `try` included. A function nested in another is part of that one. Files are decoded by their byte order mark or
-coding cookie, as [reading Rust and Python](#reading-rust-and-python) says. Its score is G. Ann Campbell's [cognitive
+coding cookie, as [reading the source](#reading-the-source) says. Its score is G. Ann Campbell's [cognitive
 complexity](https://www.sonarsource.com/docs/CognitiveComplexity.pdf), which SonarQube's rule S3776 measured: a point
 for each `if`, `elif`, `else`, ternary, loop, `except`, `match`, sequence of like boolean operators and recursion, and
 one more for each level of nesting on those that nest. Recursion is a function that calls itself, or one on a cycle of
@@ -206,6 +251,14 @@ scores as Python's branches do; a `match` arm adds nothing, as a `switch`'s case
 and `||` is a sequence of boolean operators, a labelled `break` or `continue` a point, and `?` nothing. Recursion
 follows calls by path within the file: `f(...)`, `self.f(...)`, `Self::f(...)` and `Type::f(...)`, not `crate::f(...)`
 or a module's `m::f(...)`.
+
+Go is judged the same way too, in the `.go` files of a Go module but its `_test.go` files, which are tests. A function
+is a function or method with a body, a method named by its receiver's type as `Stack.Push`; a `func` literal inside it
+is part of it and nests its body as a closure does. Its lines start at its doc comment. Each `if`, `else if`, `else`,
+`for` of any form, expression `switch`, type switch and `select` scores as Python's branches do, a `case` adding
+nothing; a run of `&&` and `||` is a sequence of boolean operators; a labelled `break` or `continue`, and a `goto`, a
+point. Recursion follows calls by name within the file: `f(...)` and `f[T](...)`, and `r.m(...)` on the method's own
+receiver `r` to a method of its type; not `pkg.F(...)`, nor a method on any other variable.
 
 `Flow` in `crates/model` says how the paper's rules score, and each front end which of its language's constructs
 is which. Each of these is a finding:
@@ -331,8 +384,8 @@ each function and class the change does not touch gets mutmut's `# pragma: no mu
 and mutmut skips it. The rules' `[tool.mutmut]` says what can be mutated (`source_paths`, `only_mutate`,
 `do_not_mutate`), which tests run (`pytest_add_cli_args_test_selection`), what the tests read beside the code
 (`also_copy`), and which lines are left alone (`do_not_mutate_patterns`); see [whose rules judge a
-change](#whose-rules-judge-a-change). Python files are decoded by a byte order mark or a coding cookie, as [reading Rust
-and Python](#reading-rust-and-python) says. mutmut runs pytest in the copy's `mutants/`, where it puts the mutated code.
+change](#whose-rules-judge-a-change). Python files are decoded by a byte order mark or a coding cookie, as [reading the
+source](#reading-the-source) says. mutmut runs pytest in the copy's `mutants/`, where it puts the mutated code.
 Its runs get, with `-c`, the configuration of the copy's top directory, in the order the reruns look in a directory: the
 project's own, which `also_copy` puts in `mutants/` so that paths in it, such as `pythonpath`, name the mutated code, or
 an empty one; and `--confcutdir` is `mutants/`. Both are added to the table's `pytest_add_cli_args`, so these runs too
@@ -480,7 +533,7 @@ skipped, name and parameters, since its base class fixes them; an override witho
 `result` is not on the list, since the rules allow it for what a function returns. A file the change adds lines to that
 cannot be decoded or parsed is a `not-read` finding.
 
-Rust is read the same way, by the bindings [reading Rust and Python](#reading-rust-and-python) lists: a name
+Rust is read the same way, by the bindings [reading the source](#reading-the-source) lists: a name
 counts where a line the change adds to a `.rs` file binds it, by any kind of binding listed there, from a `let` to a
 `use ... as`. Rust names its types and traits in CamelCase, with no underscore to split on, so its counterpart of the
 underscore rule is a name whose last CamelCase word is one of the words, such as `RunInfo`, `StateManager` or
@@ -488,6 +541,13 @@ underscore rule is a name whose last CamelCase word is one of the words, such as
 Python rule catches it. The name and parameters of each `fn` of an `impl Trait for T` are skipped, as `@override` is
 in Python, since the trait fixes them; what such a `fn`'s body binds is still read, as is every `fn` of an inherent
 `impl`. A `.rs` file that does not parse is a `not-read` finding at the line the parser stopped at.
+
+Go is read the same way, in a Go module's `.go` files, tests included, with Rust's CamelCase rule, since Go names in
+MixedCaps (`runInfo`, `StateManager`): a name counts where an added line binds it by `:=` (in a statement, an
+initializer, a `range`, a type switch or a `select` case), `var`, `const`, a parameter, a receiver, a named result, a
+function, method, type or interface method, or an import's own name. Which interface a method implements, and so
+whether its name was the author's choice, cannot be told from its file, so every method's name is read, as an
+override without `@override` is in Python: `func (v Version) Value() (driver.Value, error)` is a finding to weigh.
 
 The gate is `GATE: ERROR` when any of these holds, and `GATE: OK` otherwise:
 
@@ -561,14 +621,21 @@ as one list, issues first, at most 50 in all, then a count:
   script), only within a comment, so the same words in a string or a docstring are not one, but in a file that does not
   parse, where the two cannot be told apart, on any line; `# shellcheck disable` in a `.sh` file or a workflow under
   `.github/workflows/`; in Markdown, a `<!-- pyml disable` pragma that is a line of its own, from its first column, as
-  pymarkdown reads one; the attributes in Rust. Any other file has none.
+  pymarkdown reads one; the attributes in Rust; in Go, golangci-lint's `//nolint`, with or without a space after the
+  `//`, staticcheck's `//lint:ignore` and `//lint:file-ignore`, and the generated-code header
+  `// Code generated ... DO NOT EDIT.`, which takes the whole file out of the checks that read Go
+  ([reading the source](#reading-the-source)). Any other file has none.
 - **Build configuration**: an edit to `pyproject.toml` or `uv.lock` (`BUILD_CONFIG_FILES`), to the `gate.toml` at the
   top level, or to a file the settings add with a note of their own is noted, since each can change how the change was
   judged, as is one to a file anywhere in the tree that clippy takes its rules or its toolchain from
   (`Cargo.toml`, `clippy.toml`, `rust-toolchain.toml`, `.cargo/config.toml`; `CLIPPY_CONFIG_NAMES` in
   `crates/gate/src/config_edits.rs`),
   and cargo's `config.toml` in the `CARGO_HOME` clippy runs with when that lies inside the tree, as `scripts/gate`'s
-  `.cargo-home` does in a Jenkins build.
+  `.cargo-home` does in a Jenkins build; and, anywhere in the tree, a `go.mod` or a `go.work`, which the go tool builds
+  a module by, its `replace` directives swapping a dependency for other code, a file under the `vendor` directory of a
+  Go module (one beside a go.mod), which the go tool builds in place of the dependency's download without checking it
+  against go.sum, or golangci-lint's `.golangci.yml`, `.yaml`, `.toml` or `.json` (`GO_CONFIG_NAMES` and `tool_config`,
+  beside clippy's).
 
 ### Rust tests and coverage
 
@@ -603,22 +670,28 @@ cargo llvm-cov nextest --locked --workspace --exclude xtask --ignore-run-fail --
   the surviving-mutants check, each pinned by version and the sha256 of its release's archive; rustup's `llvm-tools`
   component comes with the agent image, as clippy does.
 
-### Reading Rust and Python
+### Reading the source
 
 The gate parses source itself, on [tree-sitter](https://tree-sitter.github.io/tree-sitter/): Rust with
-`crates/lang-rust` and Python with `crates/lang-python`, which is not Python's own `ast`, so the checks that only read
-a change (test integrity, cognitive complexity and vague names) start no other program and need no Python. Each front
-end reads a file into the model of `crates/model`, which the checks of `crates/checks` judge whatever the language;
-another language is another front end.
+`crates/lang-rust`, Go with `crates/lang-go` and Python with `crates/lang-python`, which is not Python's own `ast`, so
+the checks that only read a change (test integrity, cognitive complexity and vague names) start no other program and
+need no Python. Each front end reads a file into the model of `crates/model`, which the checks of `crates/checks` judge
+whatever the language; another language is another front end.
 
-**Which files.** The gate reads, once per run, each file of the change that holds Rust, by a `.rs` name, or Python,
-by a `.py` name or a first line that is a `#!` naming python, on each side of the change where it is a regular file:
-at the base as git stores it, and in the working tree. A side that is a symbolic link, a submodule, a directory or a
-special file is not read: a link's change is the name it points to, a submodule's object is a commit, and reading a
-FIFO or a device could block. A file of the working tree that cannot be read, and a base file git cannot show, leave
-the change unjudged (exit 2). Lines are numbered from 1, at `\n` alone, as git numbers them.
+**Which files.** The gate reads, once per run, each file of the change that holds Rust, by a `.rs` name, Python, by a
+`.py` name or a first line that is a `#!` naming python, or Go, by a `.go` name in a directory that holds a `go.mod`, or
+below one, a go.mod the change deletes included, outside what the go tool leaves out of a package (a directory named
+`testdata`, a name or directory that starts with `.` or `_`) and of `./...` (a directory named `vendor`, which holds the
+module's dependencies), and not generated: a Go file with the header [Go's convention](https://go.dev/s/generatedcode)
+fixes, a line `// Code generated ... DO NOT EDIT.` before its `package` clause, is the generator's output, not code
+written to be judged; an added header is listed among the suppressions, so a hand-written file that gains one is seen. A
+file not read can still be the code a change edits (`GoChange::is_code`). Each is read on each side of the change where
+it is a regular file: at the base as git stores it, and in the working tree. A side that is a symbolic link, a
+submodule, a directory or a special file is not read: a link's change is the name it points to, a submodule's object is
+a commit, and reading a FIFO or a device could block. A file of the working tree that cannot be read, and a base file
+git cannot show, leave the change unjudged (exit 2). Lines are numbered from 1, at `\n` alone, as git numbers them.
 
-**What cannot be read as its language.** Rust source is UTF-8. Python source is decoded as its byte order mark or
+**What cannot be read as its language.** Rust and Go source is UTF-8. Python source is decoded as its byte order mark or
 its coding cookie ([PEP 263](https://peps.python.org/pep-0263/)) says, else as UTF-8; the gate decodes UTF-8, ASCII
 and Latin-1, and a cookie that names any other encoding makes the file one that could not be read. A file that does
 not parse is named at the line of the first token the parser could not place. Either is a finding of each check that
@@ -658,6 +731,10 @@ not read a type parameter's default (PEP 696); `TODO.md` lists what else is know
   `use ... as name`. A pattern binds each identifier in it that does not start with an uppercase letter: a parser
   cannot tell `None` or a `const` from a new name, and Rust names those in CamelCase or capitals, its bindings in
   snake case. `_` binds nothing. Bindings inside a macro's tokens are read only where the assertions are.
+
+**What is read of a Go file** is what each check's text above names: its functions and methods with a body, with the
+flow of each and the calls in it; in a `_test.go` file, its tests and subtests, their assertions, its skips, its
+`//go:build` lines and the errors it throws away; and every name it binds.
 
 **What is read of a Python file** is what each check's text above names: its functions, each `def` that no other
 `def` holds, named by its classes as `C.D.f`, with the flow of its body; in a test file, its tests, their assertions,

@@ -1,6 +1,6 @@
 [package]
 name = "gate"
-version = "0.7.0"
+version = "0.8.0"
 description = "The quality gate as one binary (docs/quality-gate.md)"
 edition.workspace = true
 publish.workspace = true
@@ -11,6 +11,7 @@ workspace = true
 [dependencies]
 checks = { path = "../checks" }
 lang-python = { path = "../lang-python" }
+lang-go = { path = "../lang-go" }
 lang-rust = { path = "../lang-rust" }
 model = { path = "../model" }
 libc = "0.2.191"

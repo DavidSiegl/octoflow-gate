@@ -3,8 +3,9 @@
 
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use gate::config_edits::{tool_config, touched_paths, ToolConfig};
 use gate::coverage::NewCoverage;
 use gate::report::{Finding, QualityReport, GATE_VERSION, QUALITY_ISSUE_LIMIT};
 
@@ -33,6 +34,16 @@ fn issues(n: u32) -> Vec<Finding> {
             message: format!("m{i}"),
         })
         .collect()
+}
+
+/// The configuration of clippy's that a change editing `files`, each a file clippy reads, edits, as
+/// config_edits::tool_config gives it.
+fn clippy(files: Vec<String>) -> ToolConfig {
+    let diff: String = files.iter().map(|f| format!("--- a/{f}\n")).collect();
+    let touched = touched_paths(diff.as_bytes(), &Default::default());
+    let mut found = tool_config(Path::new("/nonexistent"), &touched, None);
+    assert_eq!(found.len(), 1, "{files:?} are clippy's alone");
+    found.remove(0)
 }
 
 fn finding(path: Option<&str>, line: Option<u32>, rule: &str) -> Finding {
@@ -90,7 +101,7 @@ fn an_error_report_with_every_section() {
         edited_config: ["pyproject.toml", "uv.lock", "gate.toml", "Jenkinsfile"].map(OsString::from).into(),
         settings_from: Some("`main.toml`".into()),
         config_notes: vec![("Jenkinsfile".into(), "The quality job reads it from `main`.".into())],
-        clippy_config: (0..7).map(|k| OsString::from(format!("c{k}/Cargo.toml"))).collect(),
+        tool_config: vec![clippy((0..7).map(|k| format!("c{k}/Cargo.toml")).collect())],
         ..report()
     };
     assert_golden("quality_report_error", &r);
@@ -103,7 +114,7 @@ fn an_error_report_whose_findings_to_weigh_are_cut() {
         conditions: vec![format!("{n} findings on lines the change added; each is listed below.")],
         issues: issues(n),
         to_weigh: (1..4).map(|line| weigh("t.py", line)).collect(),
-        clippy_config: vec!["clippy.toml".into(), "ui/Cargo.toml".into()],
+        tool_config: vec![clippy(vec!["clippy.toml".into(), "ui/Cargo.toml".into()])],
         ..report()
     };
     assert_golden("quality_report_error_to_weigh_cut", &r);

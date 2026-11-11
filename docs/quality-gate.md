@@ -70,15 +70,17 @@ cargo's own: a change that deletes a function an old line calls breaks the build
 that outlives its timeout is killed with every process it started, such as cargo's rustc.
 
 golangci-lint runs as `golangci-lint run --output.json.path stdout --show-stats=false --max-issues-per-linter 0
---max-same-issues 0 --path-mode abs ./...` in the directory of each go.mod among its files, its tests included, but
-for a module the go tool leaves out of `./...`, as one under `testdata` or `vendor` (`linted_module` in
-`crates/gate/src/golangci.rs`). Which linters it runs, and how, is the module's own choice, the configuration
+--max-same-issues 0 --issues-exit-code 1 --path-mode abs ./...` in the directory of each go.mod among its files, its
+tests included, but for a module the go tool leaves out of `./...`, as one under `testdata` or `vendor` (`linted_module`
+in `crates/gate/src/golangci.rs`). Which linters it runs, and how, is the module's own choice, the configuration
 golangci-lint finds from the module's directory up, as clippy's lints are the workspace's; without one it runs its
 standard set (errcheck, govet, ineffassign, staticcheck, unused). The gate asks for every finding, none held back as a
-repeat of another, and each is an `error` named by its linter, as `golangci-lint errcheck`. Code that does not compile
-is a failed condition naming the type checker's first error, as clippy's is, since golangci-lint places it at the
-package clause, on no line the change added. A run that exits with any status but 0 or 1, or prints no JSON report, as
-for a configuration it cannot read, is a failed condition quoting what it said.
+repeat of another, and for exit status 1 on findings, whatever the configuration says, and each is an `error` named by
+its linter, as `golangci-lint errcheck`. Code that does not compile is a failed condition naming the type checker's
+first error, as clippy's is, since golangci-lint places it at the package clause, on no line the change added. A module
+with no Go file of its own, its code all in modules nested in it, has nothing to lint (exit status 5). A run that exits
+with any other status but 0 or 1, or prints no JSON report, as for a configuration it cannot read, is a failed condition
+quoting what it said.
 
 The gate runs each linter as a process, found on `PATH`. In this repository ruff, mypy and pymarkdownlnt are in uv's
 `dev` group, and `scripts/gate` starts the gate with `uv run`, which puts them there; shellcheck, actionlint, cargo

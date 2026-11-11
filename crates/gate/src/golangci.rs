@@ -25,10 +25,15 @@ use crate::text;
 /// The linter golangci-lint reports a package that does not compile under, as it reports a lint under its own.
 const TYPECHECK: &str = "typecheck";
 
+/// golangci-lint's exit status when `./...` matches no Go file, as in a module whose code all lies in modules nested
+/// in it (`NoGoFiles` in golangci-lint 2's `pkg/exitcodes`): nothing to lint, so nothing found.
+const NO_GO_FILES: i32 = 5;
+
 /// golangci-lint's findings over `files`, the tracked files it reads, in the tree whose top level is `root`, and the
 /// failed conditions it caused, as linters::Linter::run says, `name` being the linter's. Of `files` the go.mod files
 /// say which modules it lints, those the go tool would build ([`linted_module`]); without a Go source among them
-/// there is nothing to lint, and golangci-lint does not run.
+/// there is nothing to lint, and golangci-lint does not run. A module with no Go file of its own, its code all in
+/// modules nested in it, gives nothing.
 pub fn run(name: &str, root: &Path, files: &[OsString], tracked: &Tracked) -> (Vec<Finding>, Vec<String>) {
     if !files.iter().any(|f| f.as_bytes().ends_with(b".go")) {
         return (vec![], vec![]);
@@ -66,6 +71,8 @@ fn lint_module(name: &str, root: &Path, manifest: &Path, tracked: &Tracked) -> (
         "0",
         "--max-same-issues",
         "0",
+        "--issues-exit-code",
+        "1",
         "--path-mode",
         "abs",
         "./...",
@@ -76,13 +83,15 @@ fn lint_module(name: &str, root: &Path, manifest: &Path, tracked: &Tracked) -> (
         Ok(done) => done,
     };
     let named = text::path(manifest.as_os_str());
-    // Exit status 1 means it found something, any other but 0 that it failed; the JSON is its standard output's last
-    // line, after anything a linter printed.
+    // Exit status 1 means it found something, whatever the module's configuration asks for (--issues-exit-code),
+    // NO_GO_FILES that there was nothing to lint, and any other but 0 that it failed; the JSON is its standard output's
+    // last line, after anything a linter printed.
     let report = done.stdout.split(|&b| b == b'\n').rev().find_map(|line| serde_json::from_slice::<Value>(line).ok());
     let issues = report.as_ref().and_then(|r| r.get("Issues")).and_then(Value::as_array);
     let (status, issues) = match (done.status, issues) {
         (0 | 1, Some(issues)) => (done.status, issues),
         (0, None) if done.stdout.trim_ascii().is_empty() => return (vec![], None),
+        (NO_GO_FILES, _) => return (vec![], None),
         (status, _) => {
             let said = done.said();
             return (vec![], Some(format!("`{name}` failed with exit status {status} in `{named}`: {said}")));

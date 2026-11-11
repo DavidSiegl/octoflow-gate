@@ -68,6 +68,31 @@ fn code_that_does_not_compile_fails_the_gate_naming_the_type_checker_s_first_err
 }
 
 #[test]
+fn a_module_with_no_go_files_of_its_own_is_nothing_to_lint() {
+    let repo = module_repo();
+    // The top's module holds no package: its code is all in calc/, a module of its own.
+    repo.commit(&[("go.mod", b"module example.com/top\n\ngo 1.22\n")], "a module at the top");
+    repo.put("calc/calc.go", format!("{CALC}{CLEAN}").as_bytes());
+    let (exit_code, out) = gate(&repo, None);
+    assert_eq!(exit_code, 1, "{out}");
+    assert!(out.contains("## Failed conditions\n\n- 1 findings on lines the change added; each is listed below.\n\n"),
+            "{out}");
+    assert!(out.contains("1. `calc/calc.go:12` error golangci-lint errcheck: "), "{out}");
+}
+
+#[test]
+fn a_configuration_s_issues_exit_code_drops_no_finding() {
+    let repo = module_repo();
+    repo.commit(&[("calc/.golangci.yml", b"version: \"2\"\nrun:\n  issues-exit-code: 2\n")], "an exit code");
+    repo.put("calc/calc.go", format!("{CALC}{CLEAN}").as_bytes());
+    let (exit_code, out) = gate(&repo, None);
+    assert_eq!(exit_code, 1, "{out}");
+    assert!(out.contains("## Failed conditions\n\n- 1 findings on lines the change added; each is listed below.\n\n"),
+            "{out}");
+    assert!(out.contains("1. `calc/calc.go:12` error golangci-lint errcheck: "), "{out}");
+}
+
+#[test]
 fn a_module_under_testdata_is_not_linted() {
     let repo = module_repo();
     repo.commit(&[

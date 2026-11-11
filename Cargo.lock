@@ -304,9 +304,10 @@ dependencies = [
 
 [[package]]
 name = "gate"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "checks",
+ "lang-go",
  "lang-python",
  "lang-rust",
  "libc",

@@ -550,3 +550,33 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   is named under "Build configuration" only while the working tree still has it under that name, not when the change
   deletes it or renames it away. Found with gate-standalone/18 (2026-11-11). Closes with the names read through the diff
   module's own `unquote`.
+- **A Go test's expected value outside its assertions is not seen changing.** The expected-value-changed finding reads
+  the literals of an assertion, an `if` that guards a `t.Error*` or `t.Fatal*` included (`read` in
+  `crates/lang-go/src/testing.rs`), but follows no `const`, no local such as `want := 3`, and no table of cases, which
+  is where a table-driven Go test, the common kind, keeps its expected values: editing `{in: 2, want: 4}` to `want: 5`
+  beside the code is not seen. Rust's front end follows no constants either. Found with go-support/01 (2026-11-11).
+  Closes with the front end giving `model::Constant`s for a file's top-level `const`s, as lang-python does, and an
+  assertion's `reads` naming them; and, for tables, a test's composite literals of cases read as its expected values.
+- **Some ways a Go test is weakened are not seen.** `crates/lang-go/src/testing.rs` and `constraint.rs` miss: an error
+  thrown away as `v, _ := f()` or `_ = f()`, left out on purpose since a parser knows no types and both forms are
+  common for values that are no error (`v, _ := m[k]`); a legacy `// +build` line, which go 1.17 and later still obey
+  in a file with no `//go:build`; and a test file renamed to a name with a `GOOS` or `GOARCH` suffix, as
+  `calc_windows_test.go`, which builds it on that platform alone. testify's `a := assert.New(t); a.Equal(...)` and a
+  suite's `s.Equal(...)` are not assertions, so removing them is no fewer-assertions finding. Found with go-support/01
+  (2026-11-11). Closes with each read where the file says it: `// +build` beside `//go:build`, the file name's suffix as
+  a constraint in `crates/gate/src/parser_checks.rs`, and the variables bound to `assert.New` followed.
+- **Go's golden files are not golden files by default.** Go keeps a test's expected output in `testdata/`, by habit as
+  `*.golden`, which the default `test-files.golden`, `**/tests/**/golden/**` (`crates/gate/src/settings.rs`), does not
+  match, so a change that rewrites them with the code gets no expected-value-changed finding unless the project names
+  them in its `gate.toml`. Found with go-support/01 (2026-11-11). Closes with `**/testdata/**/*.golden` among the
+  defaults, a change of the settings' contract that the user decides.
+- **vague-names reports a Go method whose name an interface fixes.** `bindings` in `crates/lang-go/src/binds.rs` marks
+  no binding fixed, since which interfaces a type implements cannot be told from its file, so `func (v Version) Value()
+  (driver.Value, error)`, which `driver.Valuer` names, is a finding to weigh, as a Python override without `@override`
+  is. Found with go-support/01 (2026-11-11). Closes with the well-known interfaces' method names (`Value`, `String`,
+  `Error`, `Handle`...) taken as fixed, or with the user's word that a finding to weigh is the right cost.
+- **Each language's front end repeats the same tree-sitter helpers.** `crates/lang-rust/src/syntax.rs`,
+  `crates/lang-python/src/syntax.rs` and `crates/lang-go/src/syntax.rs` each have their own `named`, `children`, line
+  numbering, a token digest (FNV-1a) and a `first_error`, and the digests must agree with what the checks compare only
+  within a language, so nothing breaks; but a fix to one is a fix to three. Found with go-support/01 (2026-11-11), which
+  followed the two front ends before it. Closes with a small crate of the shared helpers that the three depend on.

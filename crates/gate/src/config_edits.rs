@@ -18,6 +18,37 @@ use crate::settings::Settings;
 const CLIPPY_CONFIG_NAMES: [&str; 5] =
     ["Cargo.toml", "clippy.toml", ".clippy.toml", "rust-toolchain", "rust-toolchain.toml"];
 const CARGO_CONFIG_NAMES: [&str; 2] = ["config", "config.toml"];
+/// The files, wherever they are, that the go tool builds a module by and golangci-lint takes its rules from: a
+/// module's go.mod, and golangci-lint's configuration in each format it reads.
+const GO_CONFIG_NAMES: [&str; 5] = ["go.mod", ".golangci.yml", ".golangci.yaml", ".golangci.toml", ".golangci.json"];
+
+/// The files a change edits that one tool takes its rules, its toolchain or its build from, wherever they lie in the
+/// tree, with what they are to it, as the quality file names them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToolConfig {
+    /// The files, from the tree's top level, in path order; never empty.
+    pub files: Vec<OsString>,
+    /// What the files are to the tool, the clause the quality file gives after "The change edits `a` and `b`, which":
+    /// "clippy takes its rules or its toolchain from; it judged the change by the edited ones".
+    pub what: &'static str,
+}
+
+/// The files `diff` changes, deletes or renames away, `changed` being its lines as diff::changed_lines gives them, that
+/// a tool takes its configuration from, one [`ToolConfig`] for each tool with any: clippy's ([`clippy_config_files`],
+/// `cargo_home` as there), then Go's ([`GO_CONFIG_NAMES`]).
+pub fn tool_config(diff: &[u8], changed: &ChangedLines, cargo_home: Option<&Path>) -> Vec<ToolConfig> {
+    let named_go = |path: &OsString| GO_CONFIG_NAMES.iter().any(|n| Path::new(path).file_name() == Some(OsStr::new(n)));
+    let go = touched_paths(diff, changed).into_iter().filter(named_go).collect();
+    let clippy = clippy_config_files(diff, changed, cargo_home);
+    [
+        (clippy, "clippy takes its rules or its toolchain from; it judged the change by the edited ones"),
+        (go, "the go tool builds a module by or golangci-lint takes its rules from"),
+    ]
+    .into_iter()
+    .filter(|(files, _)| !files.is_empty())
+    .map(|(files, what)| ToolConfig { files, what })
+    .collect()
+}
 
 /// The build configuration files `diff` changes, deletes or renames away, `changed` being its lines as
 /// diff::changed_lines gives them: of BUILD_CONFIG_FILES, the gate.toml at the top level, and the files `settings`
@@ -38,7 +69,7 @@ pub fn edited_config(diff: &[u8], changed: &ChangedLines, settings: &Settings) -
 /// order. `cargo_home` is the directory, relative to the tree's top and "" for the top itself, of the CARGO_HOME
 /// clippy runs with, as [`cargo_home_in`] gives it; None when that is outside the tree, so that no file of the tree
 /// is cargo's configuration there.
-pub fn clippy_config_files(diff: &[u8], changed: &ChangedLines, cargo_home: Option<&Path>) -> Vec<OsString> {
+fn clippy_config_files(diff: &[u8], changed: &ChangedLines, cargo_home: Option<&Path>) -> Vec<OsString> {
     let configures_clippy = |path: &OsString| {
         let path = Path::new(path);
         let name = path.file_name().unwrap_or_default();
@@ -100,6 +131,16 @@ mod tests {
         assert!(clippy_config_files(b"--- a/config\n", &Default::default(), None).is_empty());
         assert_eq!(clippy_config_files(b"--- a/config\n", &Default::default(), Some(Path::new(""))), ["config"]);
         assert!(clippy_config_files(b"--- a/.cargo/notes.md\n", &Default::default(), None).is_empty());
+    }
+
+    #[test]
+    fn go_s_configuration_is_named_by_name_wherever_it_is_after_clippy_s() {
+        let diff = b"--- a/svc/go.mod\n--- a/.golangci.yml\n--- a/go.sum\n--- a/Cargo.toml\n";
+        let found = tool_config(diff, &Default::default(), None);
+        let files: Vec<Vec<&OsStr>> = found.iter().map(|t| t.files.iter().map(OsString::as_os_str).collect()).collect();
+        assert_eq!(files, [vec!["Cargo.toml"], vec![".golangci.yml", "svc/go.mod"]]);
+        assert!(found[1].what.starts_with("the go tool builds"));
+        assert_eq!(tool_config(b"--- a/README.md\n", &Default::default(), None), []);
     }
 
     #[test]

@@ -7,6 +7,7 @@ use std::ffi::OsString;
 pub use checks::Finding;
 use serde::Serialize;
 
+use crate::config_edits::ToolConfig;
 use crate::coverage::NewCoverage;
 use crate::text::{self, fingerprint, one_line, series};
 
@@ -82,8 +83,8 @@ pub struct QualityReport {
     pub settings_from: Option<String>,
     /// The (path, note) of each file gate.toml adds to the build configuration.
     pub config_notes: Vec<(String, String)>,
-    /// The files the change edits that clippy takes its rules or its toolchain from.
-    pub clippy_config: Vec<OsString>,
+    /// The files the change edits that a tool takes its configuration from, as config_edits::tool_config gives them.
+    pub tool_config: Vec<ToolConfig>,
 }
 
 impl QualityReport {
@@ -220,16 +221,10 @@ impl QualityReport {
                 .filter(|(path, _)| edited(path))
                 .map(|(path, note)| ConfigItem::of(path, format!("The change edits `{path}`. {note}"))),
         );
-        if !self.clippy_config.is_empty() {
-            let files: Vec<String> = self.clippy_config.iter().map(|p| text::path(p)).collect();
+        for tool in &self.tool_config {
+            let files: Vec<String> = tool.files.iter().map(|p| text::path(p)).collect();
             let named = series(&files.iter().map(|f| format!("`{f}`")).collect::<Vec<_>>(), Some(5));
-            out.push(ConfigItem {
-                text: format!(
-                    "The change edits {named}, which clippy takes its rules or its toolchain from; it judged the \
-                     change by the edited ones."
-                ),
-                files,
-            });
+            out.push(ConfigItem { text: format!("The change edits {named}, which {}.", tool.what), files });
         }
         out
     }

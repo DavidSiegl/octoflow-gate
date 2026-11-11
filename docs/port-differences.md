@@ -42,7 +42,7 @@ over this repository's changes showed (gate-standalone/17); a difference found l
 
 `gate.py` reads Rust through the gate-rust helper, built on syn. The Rust gate reads it with `crates/lang-rust`, on
 tree-sitter-rust, into the model of `crates/model`, and runs the checks of `crates/checks` over it
-(docs/quality-gate.md, "Reading Rust and Python").
+(docs/quality-gate.md, "Reading the source").
 
 ### Reading a file
 

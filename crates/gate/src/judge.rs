@@ -1,11 +1,11 @@
 //! The gate's judgement of one change: what it reads of the change, and the report it gives on it, from the linters
-//! and the checks beside them, over Python and Rust.
+//! and the checks beside them, over Python and Rust, and Go for the checks that only read a change.
 
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 
-use crate::config_edits::{cargo_home_in, clippy_config_files, edited_config};
+use crate::config_edits::{cargo_home_in, edited_config, tool_config};
 use crate::coverage::new_coverage;
 use crate::diff::{change_diff, changed_files, changed_lines, ChangedFile, ChangedLines};
 use crate::flaky_tests::flaky_tests;
@@ -207,7 +207,7 @@ pub fn judge_change(cwd: &Path, base: &str, given: &Given) -> Result<QualityRepo
         coverage,
         suppressions: added_suppressions(&root, changed)?,
         edited_config: edited_config(&change.diff, changed, &change.settings),
-        clippy_config: clippy_config_files(&change.diff, changed, cargo_home_in(&root, &tool_env()).as_deref()),
+        tool_config: tool_config(&change.diff, changed, cargo_home_in(&root, &tool_env()).as_deref()),
         rules_from,
         settings_from,
         config_notes: change.settings.build_config.clone(),

@@ -1,6 +1,6 @@
 # octoflow-gate
 
-octoflow-gate is a quality gate for changes to Python and Rust projects. `gate` judges what a git working tree
+octoflow-gate is a quality gate for changes to Python, Rust and Go projects. `gate` judges what a git working tree
 changed since a commit and writes its report twice: as the quality file, Markdown whose first line is `GATE: OK` or
 `GATE: ERROR`, for the people and agents who answer it, and as `quality.json`, the same report as data for a program to
 read. It was written for [octoflow](https://github.com/DavidSiegl/octoflow-ai), whose agents answer the quality file in
@@ -19,7 +19,8 @@ against it.
 - **Checks of what the change did**: tests it weakened (removed, skipped, fewer assertions, expected values changed
   together with the code), functions whose cognitive complexity it took over 15, and, as findings to weigh that do not
   fail the gate, tests that are flaky, tests that pass without the change, surviving mutants of the functions it
-  edits, and vague names it binds.
+  edits, and vague names it binds. Go is read for test integrity, cognitive complexity and vague names; its tests,
+  coverage, linter (golangci-lint) and mutation testing come in a later release.
 - **What to read**: the suppressions it added and the build configuration it edited.
 
 [docs/quality-gate.md](docs/quality-gate.md) says what each of these judges and why.

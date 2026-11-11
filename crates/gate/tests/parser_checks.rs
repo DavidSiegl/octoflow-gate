@@ -742,3 +742,76 @@ fn a_python_file_renamed_into_or_out_of_the_tests_has_its_tests_read_on_both_sid
     repo.git(&["mv", "tests/test_more.py", "checks/calc_checks.py"]);
     assert_eq!(found_at(&repo), []);
 }
+
+const GO_CALC: &str = "package calc\n\nfunc Add(a, b int) int {\n\treturn a + b\n}\n";
+
+const GO_CALC_TEST: &str = "\
+package calc
+
+import \"testing\"
+
+func TestAdd(t *testing.T) {
+\tif got := Add(1, 2); got != 3 {
+\t\tt.Errorf(\"got %d\", got)
+\t}
+}
+";
+
+/// A Go module at the top of the tree with its code in calc.go and its tests in calc_test.go, and `more`, (path,
+/// contents), committed with it as the base. `module` is where its go.mod is, "" for none.
+fn go_module(module: &str, more: &[(&str, &str)]) -> Repo {
+    let mut files = vec![("calc.go", GO_CALC), ("calc_test.go", GO_CALC_TEST)];
+    if !module.is_empty() {
+        files.push((module, "module example.com/calc\n\ngo 1.22\n"));
+    }
+    files.extend(more);
+    let files: Vec<(&str, &[u8])> = files.iter().map(|(p, t)| (*p, t.as_bytes())).collect();
+    Repo::with(&files)
+}
+
+/// Raises `Add`'s result and the expected value of `TestAdd`, beside a new function over the limit and a vague name.
+fn change_go(repo: &Repo) {
+    edit(repo, "calc.go", "return a + b\n", "return a + b + 1\n");
+    edit(repo, "calc_test.go", "got != 3 {", "got != 4 {");
+    edit(repo, "calc_test.go", "\tif got := Add", "\tt.Skip(\"later\")\n\tif got := Add");
+    let ifs: String = (0..16).map(|k| format!("\tif x == {k} {{\n\t\tx += {k}\n\t}}\n")).collect();
+    let big = format!("package calc\n\nfunc big(x int) int {{\n{ifs}\tinfo := x\n\treturn info\n}}\n");
+    repo.put("big.go", big.as_bytes());
+}
+
+#[test]
+fn go_of_a_go_module_gets_each_parser_check_s_findings() {
+    let repo = go_module("go.mod", &[]);
+    change_go(&repo);
+    let found: Vec<(Option<String>, Option<u32>, String)> =
+        found(&repo).into_iter().map(|(path, line, rule, _)| (path, line, rule)).collect();
+    let at = |path: &str, line: u32, rule: &str| (Some(path.to_string()), Some(line), rule.to_string());
+    assert_eq!(found, [
+        at("calc_test.go", 6, "test-integrity skip"),
+        at("calc_test.go", 7, "test-integrity expected-value-changed"),
+        at("big.go", 3, "cognitive-complexity over-limit"),
+        at("big.go", 52, "vague-names vague-name"),
+    ]);
+}
+
+#[test]
+fn go_outside_a_go_module_or_under_testdata_is_not_read() {
+    for (module, more) in [("", vec![]), ("go.mod", vec![("testdata/broken.go", "package broken\nfunc (\n")])] {
+        let repo = go_module(module, &more);
+        if module.is_empty() {
+            change_go(&repo);
+        } else {
+            edit(&repo, "testdata/broken.go", "func (\n", "func ((\n");
+        }
+        assert_eq!(found(&repo), vec![], "{module:?}");
+    }
+}
+
+#[test]
+fn go_of_a_module_whose_go_mod_the_change_deletes_is_still_read() {
+    let repo = go_module("sub/go.mod", &[("sub/calc.go", GO_CALC), ("sub/calc_test.go", GO_CALC_TEST)]);
+    repo.git(&["rm", "--quiet", "sub/go.mod", "sub/calc_test.go"]);
+    let rules: Vec<(Option<String>, String)> =
+        found(&repo).into_iter().map(|(path, _, rule, _)| (path, rule)).collect();
+    assert_eq!(rules, [(Some("sub/calc_test.go".into()), "test-integrity removed-test".into())]);
+}

@@ -15,7 +15,7 @@ use crate::Unjudged;
 
 /// How one kind of file silences something the gate runs, a linter or a coverage or mutation tool, which the quality
 /// file lists for the reviewer: shell scripts and workflows, whose run scripts actionlint has shellcheck read,
-/// Markdown and Rust. Python is told and read its own way ([`python_suppressions`]), ahead of these.
+/// Markdown, Rust and Go. Python is told and read its own way ([`python_suppressions`]), ahead of these.
 struct Syntax {
     /// Whether the file at `path`, from the tree's top level, is of this kind.
     holds: fn(path: &[u8]) -> bool,
@@ -27,7 +27,7 @@ struct Syntax {
 const PYTHON_SUPPRESSION: &str = r"#.*\b(?:noqa|type:\s*ignore|pragma:\s*no\s*(?:cover|branch|mutate))\b";
 
 /// The kinds of file, the first that holds a file deciding; a file of none holds no suppression the gate knows.
-static SYNTAXES: [Syntax; 3] = [
+static SYNTAXES: [Syntax; 4] = [
     // A comment for shellcheck.
     Syntax {
         holds: |path| {
@@ -50,6 +50,9 @@ static SYNTAXES: [Syntax; 3] = [
             r"|#!?\[[^\]]*\bmutants::skip\b|^\s*mutants::skip\b"
         ),
     },
+    // A directive for golangci-lint, `//nolint` or `//nolint:linter,...`, and `// nolint`, which its 1.x releases also
+    // took; and one for staticcheck, `//lint:ignore` or `//lint:file-ignore`.
+    Syntax { holds: |path| path.ends_with(b".go"), pattern: r"//\s*nolint\b|//lint:(?:file-)?ignore\b" },
 ];
 
 /// The (path, line, text) of each added line, in the working tree at `root`, that silences something the gate runs,
@@ -272,6 +275,23 @@ mod tests {
         }
         for line in ["let mutants = skip(1);", "Write `#[deny(lint)]`.", "fn allow_all() {}"] {
             assert!(!rust.is_match(line), "{line}");
+        }
+    }
+
+    #[test]
+    fn go_s_nolint_and_lint_ignore_are_suppressions() {
+        let go = Regex::new(SYNTAXES.iter().find(|s| (s.holds)(b"a.go")).unwrap().pattern).unwrap();
+        for line in [
+            "x := f() //nolint:errcheck // closed below",
+            "//nolint",
+            "\tdefer f.Close() // nolint",
+            "//lint:ignore SA1019 the old API is what we test",
+            "//lint:file-ignore U1000 generated",
+        ] {
+            assert!(go.is_match(line), "{line}");
+        }
+        for line in ["nolintCount := 0", "// lint the file", "//lint:check SA1019"] {
+            assert!(!go.is_match(line), "{line}");
         }
     }
 

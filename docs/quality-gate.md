@@ -34,7 +34,7 @@ The files in the table are each linter's default, which a project's [settings](#
 | Linter | Files | Rules |
 |---|---|---|
 | ruff | `**/*.py` | `[tool.ruff.lint]` in `pyproject.toml` |
-| mypy | `[tool.mypy] files`, here `gate.py` | `[tool.mypy]` |
+| mypy | `[tool.mypy] files`, less `exclude`; here `gate.py` and `crates/gate/src` | `[tool.mypy]` |
 | pymarkdown | `**/*.md` | `[tool.pymarkdown]` |
 | shellcheck | `**/*.sh` | its defaults |
 | actionlint | `.github/workflows/*.yml`, `*.yaml` | its defaults |
@@ -791,8 +791,9 @@ a change that adds or edits files there fails the gate, as [the gate](#the-gate)
 The rule sets were tuned until `main` gave a short list of real findings: ruff's defaults plus bugbear,
 simplifications, pyupgrade, bandit, cyclomatic complexity (`C90`, `max-complexity = 15`; nesting is the
 `cognitive-complexity` check's) and pylint's errors and warnings, with the fake tokens, paths and fixtures of `tests/`
-exempt; mypy at its default strictness on `gate.py`; pymarkdown without the line-length and
-inline-HTML rules. Only lines a change adds count, so what `main` already has does not block.
+exempt; mypy at its default strictness on `gate.py` and the Python the gate embeds, in `crates/gate/src`;
+pymarkdown without the line-length and inline-HTML rules. Only lines a change adds count, so what `main` already
+has does not block.
 
 ## The report as a contract
 

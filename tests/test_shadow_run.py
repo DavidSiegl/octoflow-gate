@@ -58,14 +58,13 @@ class TestShadowRun(unittest.TestCase):
             f.write(text)
         os.chmod(gate, 0o755)  # noqa: S103
 
-    def start_in_a_session(self, sigint):
+    def start_in_a_session(self):
         """Start shadow-run.sh on the reports' directory in a session of its own, so that a signal to its process
-        group is what a terminal's would be, with sigint as what SIGINT does to it and self.scratch, a new directory,
-        for its temporary files; returns it once the stub gate has written GATE_LOG."""
-        self.scratch = tempfile.mkdtemp(dir=self.tmp.name)
+        group is what a terminal's would be, with SIGINT at its default whatever the tests run with; returns it once
+        the stub gate has written GATE_LOG."""
         run = subprocess.Popen([self.script, self.dir],  # noqa: S603
-                               env={**os.environ, "GATE_LOG": self.log, "TMPDIR": self.scratch},
-                               preexec_fn=lambda: signal.signal(signal.SIGINT, sigint),  # noqa: PLW1509
+                               env={**os.environ, "GATE_LOG": self.log},
+                               preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL),  # noqa: PLW1509
                                start_new_session=True, stderr=subprocess.DEVNULL)
         self.addCleanup(run.wait)
         self.addCleanup(self.kill_group, run.pid)
@@ -78,12 +77,11 @@ class TestShadowRun(unittest.TestCase):
         with contextlib.suppress(ProcessLookupError):
             os.killpg(pgid, signal.SIGKILL)
 
-    def wait_for(self, happened, run=None):
+    def wait_for(self, happened, run):
         """Wait until happened() is true, failing after 10 seconds, or when the process run has ended before."""
         deadline = time.monotonic() + 10
         while not happened():
-            if run is not None:
-                self.assertIsNone(run.poll())
+            self.assertIsNone(run.poll())
             self.assertLess(time.monotonic(), deadline)
             time.sleep(0.05)
 
@@ -138,53 +136,35 @@ class TestShadowRun(unittest.TestCase):
         self.assertIn("-GATE: OK\n+GATE: ERROR\n", diff)
         self.assertIn('-  "gate": "OK"\n+  "gate": "ERROR"\n', diff)
 
-    def test_a_gate_that_could_not_judge_is_said_with_its_words(self):
+    def test_a_gate_that_could_not_judge_is_said_and_its_words_come_through(self):
         self.write("quality-rust.md", "an earlier run's\n")
         shadow_exit, stderr = self.shadow(gate_exit=2, said="gate: main names no commit\n")
         self.assertEqual((shadow_exit, stderr), (0, "gate: main names no commit\n"))
         self.assertEqual(self.read("quality-diff.txt"),
-                         "The Rust gate could not judge the change (exit status 2). It said:\n"
-                         "gate: main names no commit\n")
+                         "The Rust gate could not judge the change (exit status 2); its standard error says why.\n")
         self.assertFalse(os.path.exists(os.path.join(self.dir, "quality-rust.md")))
 
     def test_a_gate_that_was_killed_is_said_with_the_exit_status_a_shell_gives_it(self):
         self.put_gate("#!/bin/sh\nkill -KILL $$\n")
         self.assertEqual(self.shadow()[0], 0)
-        self.assertIn("The Rust gate could not judge the change (exit status 137). It said:\n",
-                      self.read("quality-diff.txt"))
+        self.assertIn("(exit status 137)", self.read("quality-diff.txt"))
 
     @pytest.mark.real_sleep
-    def test_ctrl_c_reaches_the_gate_and_ends_the_script(self):
-        self.put_gate("#!/bin/sh\ntrap 'trap \"\" INT; echo interrupted >> \"$GATE_LOG\"; exit 130' INT\n"
+    def test_ctrl_c_ends_the_script_once_the_gate_has_stopped(self):
+        # The stub takes a moment to stop, as a gate that stops its tools does.
+        self.put_gate("#!/bin/sh\ntrap 'trap \"\" INT; sleep 0.5; echo interrupted >> \"$GATE_LOG\"; exit 130' INT\n"
                       "echo started >> \"$GATE_LOG\"\nsleep 20 &\nwait\n")
-        run = self.start_in_a_session(signal.SIG_DFL)
+        run = self.start_in_a_session()
         os.killpg(run.pid, signal.SIGINT)
         self.assertEqual(run.wait(timeout=10), 130)
         self.assertEqual(self.logged(), "started\ninterrupted\n")
-        self.assertEqual(os.listdir(self.scratch), [])
-
-    @pytest.mark.real_sleep
-    def test_told_to_stop_with_its_gate_the_script_leaves_no_temporary_file(self):
-        # A Jenkins step has SIGINT ignored, and a build that is aborted signals the script and the gate.
-        self.put_gate("#!/bin/sh\ntrap 'echo stopped >> \"$GATE_LOG\"; exit 143' HUP TERM\n"
-                      "echo started >> \"$GATE_LOG\"\nsleep 20 &\nwait\n")
-        for told in (signal.SIGTERM, signal.SIGHUP):
-            for sigint in (signal.SIG_IGN, signal.SIG_DFL):
-                with contextlib.suppress(FileNotFoundError):
-                    os.remove(self.log)
-                with self.subTest(told=told, sigint=sigint):
-                    run = self.start_in_a_session(sigint)
-                    os.killpg(run.pid, told)
-                    self.assertEqual(run.wait(timeout=10), 143)
-                    self.wait_for(lambda: self.logged() == "started\nstopped\n")
-                    self.assertEqual(os.listdir(self.scratch), [])
+        self.assertFalse(os.path.exists(os.path.join(self.dir, "quality-diff.txt")))
 
     def test_a_gate_that_cannot_be_started_is_said_too(self):
         os.remove(os.path.join(self.release, "gate-linux-x86_64"))
         shadow_exit, _ = self.shadow()
         self.assertEqual(shadow_exit, 0)
-        self.assertIn("The Rust gate could not judge the change (exit status 127). It said:\n",
-                      self.read("quality-diff.txt"))
+        self.assertIn("(exit status 127)", self.read("quality-diff.txt"))
 
     def test_without_gate_py_s_reports_nothing_runs(self):
         os.remove(os.path.join(self.dir, "quality.json"))

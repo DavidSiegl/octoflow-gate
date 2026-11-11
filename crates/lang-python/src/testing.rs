@@ -1,6 +1,5 @@
 //! What the test-integrity check reads of a Python test file: its tests and their assertions, the skips and
-//! swallowed errors written in it, and the module-level constants its assertions can name. gate.py's
-//! `_python_tests`, `_python_assertions`, `_python_added_weakenings` and `_PythonConstants`.
+//! swallowed errors written in it, and the module-level constants its assertions can name.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;

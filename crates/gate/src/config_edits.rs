@@ -68,7 +68,8 @@ pub fn cargo_home_in(root: &Path, env: &[(OsString, OsString)]) -> Option<std::p
 }
 
 /// The paths `diff`, of `changed` as diff::changed_lines gives it, changes, deletes or renames away, as its `--- a/`
-/// and `rename from ` lines name them, unquoted as gate.py leaves them.
+/// and `rename from ` lines name them. No name git wrote in quotes is unquoted: after `rename from ` it is taken with
+/// its quotes and escapes, and a `--- "a/…"` line is not read, so such a file is named only when `changed` holds it.
 fn touched_paths(diff: &[u8], changed: &ChangedLines) -> BTreeSet<OsString> {
     static FROM: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"(?m-u)^(?:--- a/|rename from )([^\n]+?)\t?$").expect("a valid regex"));

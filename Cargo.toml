@@ -1,18 +1,15 @@
-# The Rust port of gate.py (gate-standalone/12-16), which judges beside gate.py until the cutover (18): crates/gate
-# is the `gate` binary; crates/checks its parser checks, over crates/model, the model of a source file that each
-# language's front end, such as crates/lang-rust, reads; and xtask the workspace's own tasks, such as `cargo xtask
-# compare`. gate-rust, the helper gate.py reads Rust with, is a crate of its own, built apart from this workspace,
-# so it stays out of it; ci/package.sh builds both for a release.
+# The quality gate: crates/gate is the `gate` binary; crates/checks its parser checks, over crates/model, the model of
+# a source file that each language's front end, such as crates/lang-rust, reads; and xtask the workspace's own tasks,
+# such as `cargo xtask smoke-release`. ci/package.sh builds the gate for a release.
 [workspace]
 members = ["crates/gate", "crates/model", "crates/checks", "crates/lang-python", "crates/lang-rust", "xtask"]
-exclude = ["gate-rust"]
 resolver = "2"
 
 [workspace.package]
 edition = "2021"
 publish = false
 
-# clippy's rules for the workspace, as gate-rust's own: its defaults, and the lints below at warn.
+# clippy's rules for the workspace: its defaults, and the lints below at warn.
 [workspace.lints.rust]
 unsafe_code = "warn"
 

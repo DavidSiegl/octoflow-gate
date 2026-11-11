@@ -1,6 +1,5 @@
 //! What one node of a Python file's tree binds: the one reading of Python's binding forms that the vague-names
-//! bindings, the names a test binds, a scope's bindings and the resolution of calls all go by. gate.py's
-//! `_BINDING_NAME`, over tree-sitter's nodes.
+//! bindings, the names a test binds, a scope's bindings and the resolution of calls all go by.
 
 use tree_sitter::{Node, Point};
 

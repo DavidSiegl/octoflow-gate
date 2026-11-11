@@ -1,11 +1,11 @@
 //! Python's half of the passes-at-base check over a real git repository, its tests run with the workspace's own
-//! pytest (common::python), through the `gate` binary and its quality.json, as gate.py's TestPassesAtBase runs
-//! gate.py's check (tests/test_gate.py). Where gate.py's tests patch the gate, these give the binary a `--python`
-//! that is a shell script or a virtual environment's, a TMPDIR, or a stub `tar` ahead of PATH; whether pytest ran at
-//! the base is read from what a `--python` that logs its arguments was asked. The gate runs its flaky-tests check on
-//! the same change with the same Python, so a test that must behave differently at the base asks [`AT_BASE`]. An
-//! empty pytest configuration that cannot be written has no such route: pytest.rs's own test holds the error, and
-//! none holds the finding this check or flaky-tests makes of it.
+//! pytest (common::python), through the `gate` binary and its quality.json. Where a test needs pytest or the system
+//! to behave otherwise, it gives the binary a `--python` that is a shell script or a virtual environment's, a
+//! TMPDIR, or a stub `tar` ahead of PATH; whether pytest ran at the base is read from what a `--python` that logs its
+//! arguments was asked. The gate runs its flaky-tests check on the same change with the same Python, so a test that
+//! must behave differently at the base asks [`AT_BASE`]. An empty pytest configuration that cannot be written has no
+//! such route: pytest.rs's own test holds the error, and none holds the finding this check or flaky-tests makes of
+//! it.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};

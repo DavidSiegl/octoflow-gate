@@ -1,6 +1,5 @@
-//! Property tests of the gate's parsers of what git wrote, its diffs and its quoted paths: tests/test_properties.py's,
-//! ported. proptest generates the inputs, PROPTEST_CASES of them, else 25; git is the oracle, run in a temporary
-//! directory.
+//! Property tests of the gate's parsers of what git wrote, its diffs and its quoted paths. proptest generates the
+//! inputs, PROPTEST_CASES of them, else 25; git is the oracle, run in a temporary directory.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;

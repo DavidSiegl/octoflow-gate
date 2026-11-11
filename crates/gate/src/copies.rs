@@ -16,7 +16,7 @@ use crate::{git, text, Unjudged};
 /// afterwards whatever `run` finds; `purpose` says what it is for, as a clause such as "to run cargo-mutants in".
 /// When the directory cannot be made, `run` is not called, and the one finding is of `rule`, of the check whose run it
 /// is, saying so; when it cannot be removed, a `not-removed` finding naming it follows `run`'s. The findings' rules
-/// are the check's own, without its name. gate.py's `_in_scratch_directory`.
+/// are the check's own, without its name.
 pub fn in_scratch_directory(rule: &str, purpose: &str, run: impl FnOnce(&Path) -> Vec<Finding>) -> Vec<Finding> {
     let dir = match scratch_directory(&std::env::temp_dir()) {
         Ok(dir) => dir,
@@ -62,8 +62,8 @@ pub fn finding(path: Option<&OsStr>, line: Option<u32>, rule: &str, message: Str
     Finding { path: path.map(OsStr::to_os_string), line, severity: "warning".into(), rule: rule.into(), message }
 }
 
-/// A new directory, mode 0700, in `parent`, named for the gate's process.
-fn scratch_directory(parent: &Path) -> std::io::Result<PathBuf> {
+/// A new directory, mode 0700, in `parent`, named for the gate's process. Whoever makes it removes it.
+pub(crate) fn scratch_directory(parent: &Path) -> std::io::Result<PathBuf> {
     use std::os::unix::fs::DirBuilderExt;
     use std::sync::atomic::{AtomicU32, Ordering};
     static MADE: AtomicU32 = AtomicU32::new(0);
@@ -81,7 +81,7 @@ fn scratch_directory(parent: &Path) -> std::io::Result<PathBuf> {
 /// Copies the files git tracks in the working tree at `root`, as they are there, to the same paths under `dest`, a
 /// directory it makes, with its parents. A symbolic link is copied as a link and a submodule as its directory; a
 /// tracked file missing from the working tree is left out. Errs, a clause, when git cannot list the files, `dest`
-/// exists or a file cannot be copied; `dest` may then hold part of the copy. gate.py's `_copy_tracked`.
+/// exists or a file cannot be copied; `dest` may then hold part of the copy.
 pub fn copy_tracked(root: &Path, dest: &Path) -> Result<(), String> {
     let listed = git::output(root, &["ls-files", "-z"]).map_err(|Unjudged(e)| e)?;
     let mut names: Vec<&[u8]> = listed.split(|&b| b == 0).filter(|n| !n.is_empty()).collect();
@@ -103,8 +103,7 @@ pub fn copy_tracked(root: &Path, dest: &Path) -> Result<(), String> {
 }
 
 /// Copies `src` to `dst`, which must not exist: a symbolic link as a link, a directory with all it holds, a file with
-/// its permissions. Errs on anything else, as a named pipe, whose reading could block the gate for good, as gate.py's
-/// `shutil.copy2` refuses one.
+/// its permissions. Errs on anything else, as a named pipe, whose reading could block the gate for good.
 fn copy(src: &Path, dst: &Path) -> Result<(), String> {
     let meta = src.symlink_metadata().map_err(|e| failed("read", src, &e))?;
     if meta.file_type().is_symlink() {
@@ -138,7 +137,7 @@ pub fn failed(what: &str, path: &Path, e: &std::io::Error) -> String {
 /// [`unpack_commit`] writes them.
 ///
 /// Gives back the submodules left empty, as [`unpack_commit`] does. Errs, a clause, when git cannot list or write a
-/// commit, `tar` cannot unpack it, `dest` exists or a file cannot be written. gate.py's `_copy_base_with_tests`.
+/// commit, `tar` cannot unpack it, `dest` exists or a file cannot be written.
 pub fn copy_base_with_tests(
     change: &Change,
     dest: &Path,
@@ -185,7 +184,7 @@ pub fn copy_base_with_tests(
 ///
 /// Gives back those submodules, each by its path with `prefix` before it, and why, a clause such as "which is not
 /// initialised in the working tree". Errs, a clause, when git cannot list or write a commit, or `tar` cannot unpack
-/// it. gate.py's `_unpack_commit`.
+/// it.
 fn unpack_commit(
     repo: &Path,
     commit: &str,
@@ -241,7 +240,7 @@ fn unpack_commit(
 
 /// `dest`/`path`, `path` a repository path, after making each directory above it in `dest` a real one: a symbolic
 /// link there is replaced by an empty directory, and a missing one made. So a file written or removed at it stays in
-/// `dest`. Errs, a clause, when one cannot be. gate.py's `_unlinked_path`.
+/// `dest`. Errs, a clause, when one cannot be.
 fn unlinked_path(dest: &Path, path: &OsStr) -> Result<PathBuf, String> {
     let path = Path::new(path);
     let mut at = dest.to_path_buf();

@@ -1,5 +1,5 @@
 //! Python's half of the passes-at-base check (passes_at_base.rs): the Python tests a change adds or edits, run with
-//! pytest against the code the change started from. gate.py's `_base_run_findings` and what it calls.
+//! pytest against the code the change started from.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};

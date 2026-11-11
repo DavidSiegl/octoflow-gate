@@ -1,6 +1,6 @@
 //! Running pytest in a copy of a tree, for the checks that run a change's Python tests: which configuration each
 //! test file takes, the run itself, and how pytest names a test in what it prints and in its JUnit report. The
-//! Python is the judged project's (judge::Change::python). gate.py's `_pytest` and what stands around it.
+//! Python is the judged project's (judge::Change::python).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ffi::{OsStr, OsString};
@@ -28,7 +28,6 @@ pub type Tests = BTreeMap<(OsString, String), u32>;
 /// its end. What lies above its def, such as its decorators and comments, may have changed it, and a decorator
 /// replaced or removed leaves no line of the def itself changed; lines removed right after its last line count too,
 /// though they may have been the blank lines below it. And each such file that could not be read or parsed.
-/// gate.py's `_changed_python_tests`.
 pub fn changed_tests(python: &PythonChange) -> (Tests, UnreadFiles) {
     let in_scope = |path: &OsStr| python_test(&python.change.settings, path);
     let (units, unreadable) = python.changed_units(in_scope, |unit, added, removal_points| {
@@ -397,7 +396,7 @@ mod tests {
 
     #[test]
     fn the_configuration_is_found_as_pytest_finds_it() {
-        // TestFlakyTests' cases (tests/test_gate.py): the files of a directory, and the one pytest takes.
+        // Each case is the files of a directory, and the one pytest takes its configuration from.
         type Files = [(&'static str, &'static str)];
         let cases: [(&Files, Option<&str>); 10] = [
             (&[], None),
@@ -462,8 +461,8 @@ mod tests {
 
     #[test]
     fn an_empty_configuration_that_cannot_be_written_is_an_error() {
-        // gate.py's test_an_empty_configuration_that_cannot_be_written_is_a_finding, as far as the error: the checks
-        // make a finding of it, and no run of the gate can be made to fail writing into the directory it has made.
+        // Only the error is held here: the checks make a finding of it, but no run of the gate can be made to fail
+        // writing into the directory it has made.
         let dir = scratch("empty-ini");
         let (tree, tmp) = (dir.join("tree"), dir.join("tmp"));
         write(&tree, "test_top.py", "");

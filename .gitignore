@@ -1,35 +1,26 @@
 # Python-generated files
 __pycache__/
 *.py[oc]
-build/
-dist/
-*.egg-info
 
-# Virtual environments
+# The environment uv makes of pyproject.toml's tools
 .venv
 
-# What the test commands of gate.toml, `gate.py --out` and the shadow run of the Rust gate (scripts/gate) write
-.coverage
-coverage.xml
-coverage-rust.xml
+# The release ci/package.sh builds, where the Jenkinsfile has it put
+dist/
+
+# What the test command of gate.toml and `gate --out` (scripts/gate) write
 coverage-gate.xml
-test-results.xml
 quality.md
 quality.json
-quality-rust.md
-quality-rust.json
-quality-diff.txt
 
 # The tools scripts/gate downloads when PATH lacks them, and its CARGO_HOME in a Jenkins build
 .tools/
 .cargo-home/
 
-# The build output of the gate-rust helper
-gate-rust/target/
+# cargo's build output
 /target/
 
-# What Hypothesis keeps of the examples it tried, and mutmut's working copy
-.hypothesis/
+# mutmut's working copy
 mutants/
 
 # Agent working notes

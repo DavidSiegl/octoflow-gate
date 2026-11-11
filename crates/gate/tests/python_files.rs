@@ -1,6 +1,5 @@
 //! How the checks that rerun, mutate and score read the Python files a change touches, end to end through the `gate`
-//! binary over a real git repository, with the workspace's own pytest and mutmut (common::python), as gate.py's
-//! TestChangedPythonFiles runs its checks (tests/test_gate.py).
+//! binary over a real git repository, with the workspace's own pytest and mutmut (common::python).
 
 use std::process::Command;
 

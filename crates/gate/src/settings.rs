@@ -2,21 +2,21 @@
 
 use std::ffi::OsStr;
 use std::fmt;
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 use serde::de::{Deserializer, MapAccess, Visitor};
 use serde::Deserialize;
 
 use crate::glob::Globs;
 use crate::paths::real_path;
-use crate::report::{BUILD_CONFIG_FILES, SETTINGS_FILE};
+use crate::report::{BUILD_CONFIG_FILES, RULES_FILE, SETTINGS_FILE};
 use crate::Unjudged;
 
 /// The linters gate.toml may choose the files of, each a name its `[linters]` table may hold.
 pub const LINTER_NAMES: [&str; 6] = ["ruff", "mypy", "pymarkdown", "shellcheck", "actionlint", "clippy"];
 
 /// The settings a project is judged by: [`Settings::default`] for one without gate.toml, else what its gate.toml
-/// says, a default for each key it leaves out. gate.py's GateSettings.
+/// says, a default for each key it leaves out.
 #[derive(Clone, Debug)]
 pub struct Settings {
     pub python_tests: Globs,
@@ -51,7 +51,8 @@ pub struct TestCommand {
     pub name: String,
     /// The argv, run in the tree's top level; never through a shell. Never empty.
     pub command: Vec<String>,
-    /// The JUnit and the Cobertura reports it writes, paths inside the tree from its top level.
+    /// The JUnit reports and the coverage reports (Cobertura or LCOV, coverage::new_coverage) it writes, paths inside
+    /// the tree from its top level.
     pub junit: Vec<String>,
     pub coverage: Vec<String>,
 }
@@ -116,35 +117,67 @@ impl Settings {
         Ok(settings)
     }
 
-    /// The settings the gate judges the work tree at `root` by, and where they came from when that is not root's
-    /// own gate.toml, for the quality file to say.
-    ///
-    /// They are those of the gate.toml at `given`, a path absolute or relative to the current directory, when given;
-    /// else those of the gate.toml beside `rules`, the absolute path of the pyproject.toml the gate reads, which is
-    /// root's own unless `--config` named another: a CI that judges a change by main's rules thereby judges it by
-    /// main's settings too, never by the change's own. A gate.toml that is there but no file, such as a dangling
-    /// link, is an error to read; with none there, the settings are the defaults.
-    ///
-    /// Where they came from is None when the settings are root's own gate.toml's, or the defaults for want of one;
-    /// else the file as a code span, or "the defaults (there is no `path`)". Errs as [`Settings::read`] does.
-    pub fn for_tree(root: &Path, rules: &Path, given: Option<&Path>) -> Result<(Settings, Option<String>), Unjudged> {
-        let path = match given {
-            Some(given) => crate::paths::abs_path(given),
-            None => rules.parent().unwrap_or(Path::new("/")).join(SETTINGS_FILE),
-        };
-        let there = given.is_some() || path.symlink_metadata().is_ok();
-        let settings = if there { Settings::read(&path)? } else { Settings::default() };
-        if tree_s_own(root, &path, SETTINGS_FILE) {
-            return Ok((settings, None));
-        }
-        let shown = crate::text::path(path.as_os_str());
-        Ok((settings, Some(if there { format!("`{shown}`") } else { format!("the defaults (there is no `{shown}`)") })))
-    }
-
     /// The globs gate.toml gives the linter `name`, None when it gives none and the linter reads its own.
     pub fn linter_globs(&self, name: &str) -> Option<&Globs> {
         self.linters.iter().find(|(linter, _)| linter == name).map(|(_, globs)| globs)
     }
+}
+
+/// What the work tree at a root is judged by, as [`JudgedBy::for_tree`] finds it: the gate's settings, and the rules
+/// of the tools that take theirs from a pyproject.toml, which are ruff, mypy, pymarkdown and mutmut.
+#[derive(Clone, Debug)]
+pub struct JudgedBy {
+    pub settings: Settings,
+    /// Where the settings came from when that is not the root's own gate.toml, for the quality file to say: the
+    /// file as a code span, or "the defaults (there is no `path`)". None for the root's own, or the defaults for
+    /// want of it.
+    pub settings_from: Option<String>,
+    /// The pyproject.toml that holds the rules, an absolute path to a file; None when there is none, and each tool
+    /// runs on its defaults, whatever configuration the tree holds.
+    pub rules: Option<PathBuf>,
+    /// Where the rules came from when that is not the root's own pyproject.toml, as `settings_from` says it. None
+    /// for the root's own, or the defaults for want of it.
+    pub rules_from: Option<String>,
+}
+
+impl JudgedBy {
+    /// What the gate judges the work tree at `root` by.
+    ///
+    /// The settings are those of the gate.toml at `given`, a path absolute or relative to the current directory,
+    /// which `--config` names; without one, those of root's own gate.toml, or the defaults when it has none. The
+    /// rules are the pyproject.toml in the directory of that gate.toml, as the path names it and not where a link
+    /// leads, so root's own unless `--config` names a gate.toml elsewhere: a CI that judges a change by main's
+    /// settings thereby judges it by main's rules too, never by the change's own.
+    ///
+    /// Errs as [`Settings::read`] does, also for a `given` that is not there and for a gate.toml of root's that is
+    /// there but no file, such as a dangling link; and when the pyproject.toml is there but no file.
+    pub fn for_tree(root: &Path, given: Option<&Path>) -> Result<JudgedBy, Unjudged> {
+        let path = given.map_or_else(|| root.join(SETTINGS_FILE), crate::paths::abs_path);
+        let there = given.is_some() || path.symlink_metadata().is_ok();
+        let settings = if there { Settings::read(&path)? } else { Settings::default() };
+        let rules = path.parent().unwrap_or(Path::new("/")).join(RULES_FILE);
+        let ruled = rules.symlink_metadata().is_ok();
+        if ruled && !rules.is_file() {
+            return Err(Unjudged(format!("no rules: {} is not a file", crate::text::path(rules.as_os_str()))));
+        }
+        Ok(JudgedBy {
+            settings,
+            settings_from: from_elsewhere(root, &path, SETTINGS_FILE, there),
+            rules_from: from_elsewhere(root, &rules, RULES_FILE, ruled),
+            rules: ruled.then_some(rules),
+        })
+    }
+}
+
+/// Where what the gate reads at `path`, an absolute path, came from, as [`JudgedBy`]'s `settings_from` says it: None
+/// when `path` is the file `name` at the top level of the work tree at `root`; else `path` as a code span when it is
+/// `there`, or the defaults taken for want of it.
+fn from_elsewhere(root: &Path, path: &Path, name: &str, there: bool) -> Option<String> {
+    if tree_s_own(root, path, name) {
+        return None;
+    }
+    let shown = crate::text::path(path.as_os_str());
+    Some(if there { format!("`{shown}`") } else { format!("the defaults (there is no `{shown}`)") })
 }
 
 /// The `[build-config]` entry `name = note`, as [`Settings::build_config`] holds it; errs, with why, when `name` is
@@ -193,7 +226,7 @@ fn budget(key: &str, seconds: Option<i64>, default: u64) -> Result<u64, String> 
 
 /// Whether `path`, an absolute path, names the file `name` at the top level of the work tree at `root`, also through
 /// a symbolic link on either side.
-pub fn tree_s_own(root: &Path, path: &Path, name: &str) -> bool {
+fn tree_s_own(root: &Path, path: &Path, name: &str) -> bool {
     real_path(path) == real_path(&root.join(name))
 }
 
@@ -328,7 +361,7 @@ mod tests {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../gate.toml");
         let settings = Settings::read(&path).unwrap();
         let names: Vec<&str> = settings.test_commands.iter().map(|c| c.name.as_str()).collect();
-        assert_eq!(names, ["cargo-nextest-gate"]);
+        assert_eq!(names, ["cargo-nextest"]);
     }
 
     #[test]

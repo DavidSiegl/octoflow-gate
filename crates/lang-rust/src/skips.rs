@@ -1,6 +1,6 @@
-//! The attributes that skip a Rust test or turn it off, read off the source text line by line, as gate.py's
-//! `_rust_skips` reads them: so that an attribute the parser places nowhere, such as one inside a test's body, is
-//! still seen. docs/quality-gate.md, "Test integrity", says which attributes are skips and where.
+//! The attributes that skip a Rust test or turn it off, read off the source text line by line, so that an attribute
+//! the parser places nowhere, such as one inside a test's body, is still seen. docs/quality-gate.md, "Test
+//! integrity", says which attributes are skips and where.
 
 use model::{first_line, Weakening, WeakeningKind};
 
@@ -83,7 +83,7 @@ fn skip(n: u32, attributes: &[&str], weighed: bool) -> Weakening {
 
 /// Whether `attribute`, from its `#`, skips a test or turns it or the module holding it off: `#[ignore]`, a `cfg`
 /// other than `cfg(test)`, such as `cfg(all(test, feature = "slow"))`, or a `cfg_attr` that writes `ignore`, as an
-/// argument after its predicate's comma. Read no further than its first `]`. gate.py's `_RUST_SKIPPING`.
+/// argument after its predicate's comma. Read no further than its first `]`.
 pub fn skipping(attribute: &str) -> bool {
     let Some(rest) = attribute.strip_prefix('#') else { return false };
     let rest = rest.strip_prefix('!').unwrap_or(rest);

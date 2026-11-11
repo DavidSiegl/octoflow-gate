@@ -10,8 +10,7 @@ use serde::Serialize;
 use crate::coverage::NewCoverage;
 use crate::text::{self, fingerprint, one_line, series};
 
-/// The version this binary carries into quality.json: its crate's, which tests/test_invariants.py holds to
-/// pyproject.toml's, as it does gate.py's GATE_VERSION.
+/// The version this binary carries into quality.json: its crate's.
 pub const GATE_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// quality.json's `schema_version`, the version of schema/quality-v1.json it follows: raised on any change to the
 /// JSON a reader could notice, but not for a new optional field.
@@ -22,8 +21,11 @@ pub const QUALITY_ISSUE_LIMIT: usize = 50;
 /// The file at the top level of the judged tree that holds the gate's settings (settings.rs), unless `--config`
 /// names another.
 pub const SETTINGS_FILE: &str = "gate.toml";
+/// The file beside the settings' that holds the rules of the tools that take theirs from one
+/// (settings::JudgedBy::rules).
+pub const RULES_FILE: &str = "pyproject.toml";
 /// Files a change may edit that alter how the gate judges it: its rules and the versions of the linters it runs.
-pub const BUILD_CONFIG_FILES: [&str; 2] = ["pyproject.toml", "uv.lock"];
+pub const BUILD_CONFIG_FILES: [&str; 2] = [RULES_FILE, "uv.lock"];
 
 /// The headings of the sections a reader of the quality file finds the failed conditions and failing tests under.
 const FAILED_CONDITIONS: &str = "## Failed conditions";
@@ -74,9 +76,9 @@ pub struct QualityReport {
     pub suppressions: Vec<(OsString, u32, String)>,
     /// The build configuration files the change edits, as config_edits::edited_config gives them.
     pub edited_config: Vec<OsString>,
-    /// The file the gate took its rules from, as a code span, when that was not the tree's own pyproject.toml.
+    /// Where the gate took its rules and its settings from when that was not the tree's own pyproject.toml and
+    /// gate.toml, each as settings::JudgedBy gives it.
     pub rules_from: Option<String>,
-    /// Where the gate took its settings from when that was not the tree's own gate.toml, as a phrase.
     pub settings_from: Option<String>,
     /// The (path, note) of each file gate.toml adds to the build configuration.
     pub config_notes: Vec<(String, String)>,
@@ -97,7 +99,7 @@ impl QualityReport {
     ///
     /// It numbers at most [`QUALITY_ISSUE_LIMIT`] findings and lists as many failing tests, each by the first line of
     /// its detail, and counts the rest. It is prose, whose wording may change in any release; a program reads
-    /// [`QualityReport::json`] instead. Until the cutover it is gate.py's, word for word (tests/golden/).
+    /// [`QualityReport::json`] instead.
     pub fn markdown(&self) -> String {
         let mut out = vec![format!("GATE: {}", self.verdict().word()), String::new(), self.intro()];
         if !self.conditions.is_empty() {
@@ -166,12 +168,11 @@ impl QualityReport {
     }
 
     /// The quality file's opening sentence: which commit's tree was judged against which base, and where the rules
-    /// and settings came from when they were not the tree's own. It names gate.py, as gate.py's does, until the
-    /// cutover (TODO.md).
+    /// and settings came from when they were not the tree's own.
     fn intro(&self) -> String {
-        let mut out = format!("`gate.py` judged the working tree at `{}` against the base `{}`", self.head, self.base);
+        let mut out = format!("`gate` judged the working tree at `{}` against the base `{}`", self.head, self.base);
         if let Some(rules) = &self.rules_from {
-            out += &format!(", by the rules in {rules}");
+            out += &format!(", by the rules from {rules}");
         }
         if let Some(settings) = &self.settings_from {
             out += &format!(", with the settings from {settings}");
@@ -184,15 +185,16 @@ impl QualityReport {
     fn config_items(&self) -> Vec<ConfigItem> {
         let edited = |name: &str| self.edited_config.iter().any(|p| p == name);
         let mut out = Vec::new();
-        if edited("pyproject.toml") {
-            out.push(ConfigItem::of("pyproject.toml", match &self.rules_from {
+        if edited(RULES_FILE) {
+            out.push(ConfigItem::of(RULES_FILE, match &self.rules_from {
                 Some(rules) => format!(
-                    "The change edits `pyproject.toml`. The gate took its rules from {rules}, so the edit did not \
+                    "The change edits `{RULES_FILE}`. The gate took its rules from {rules}, so the edit did not \
                      change how the change was judged."
                 ),
-                None => "The change edits `pyproject.toml`, which holds the gate's rules; the change was judged by \
-                         the edited rules."
-                    .into(),
+                None => format!(
+                    "The change edits `{RULES_FILE}`, which holds the gate's rules; the change was judged by the \
+                     edited rules."
+                ),
             }));
         }
         if edited("uv.lock") {

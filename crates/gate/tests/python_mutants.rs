@@ -1,10 +1,10 @@
 //! Python's half of the surviving-mutants check over a real git repository, through the `gate` binary and its
-//! quality.json, as gate.py's TestSurvivingMutants runs gate.py's check (tests/test_gate.py): with the workspace's
-//! own mutmut (common::python), or a `--python` that is a shell script standing in for it. Where gate.py's tests
-//! patch the gate, these give the binary such a `--python`, or a TMPDIR; what a `--python` cannot vary, the gate's
-//! own waits and a scratch directory that cannot be removed among it, is the unit tests' in python_mutants.rs,
-//! copies.rs and process.rs. The gate runs its flaky-tests and passes-at-base checks on the same change with the same
-//! Python, so a fake mutmut answers nothing to what is not mutmut's.
+//! quality.json: with the workspace's own mutmut (common::python), or a `--python` that is a shell script standing
+//! in for it. Where a test needs mutmut or the system to go wrong, it gives the binary such a `--python`, or a
+//! TMPDIR; what a `--python` cannot vary, the gate's own waits and a scratch directory that cannot be removed among
+//! it, is the unit tests' in python_mutants.rs, copies.rs and process.rs. The gate runs its flaky-tests and
+//! passes-at-base checks on the same change with the same Python, so a fake mutmut answers nothing to what is not
+//! mutmut's.
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -48,21 +48,17 @@ const EDITS: [(&str, &str, &str); 4] = [
 const WEAKLY_TESTED: [(&str, u32, &str); 3] =
     [("calc.py", 5, "survived"), ("calc.py", 13, "untested"), ("calc.py", 18, "survived")];
 
-/// The workspace's own `[tool.mutmut]` do_not_mutate_patterns, as TOML, which keep mutmut off argparse's help and
-/// description texts.
-fn patterns() -> String {
-    let own = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../pyproject.toml")).unwrap();
-    let own: toml::Table = own.parse().unwrap();
-    own["tool"]["mutmut"]["do_not_mutate_patterns"].to_string()
-}
+/// `[tool.mutmut]`'s do_not_mutate_patterns of the base's rules, as TOML: they keep mutmut off the help and
+/// description texts of an argparse parser, any keyword argument of those names.
+const PATTERNS: &str = r"['\bhelp=', '\bdescription=']";
 
 /// A repository whose base holds [`BASE`] as calc.py, [`TESTS`], and a pyproject.toml whose `[tool.mutmut]` mutates
-/// calc.py by the tests under tests/, with the workspace's [`patterns`]; it runs neither ruff nor mypy.
+/// calc.py by the tests under tests/, with [`PATTERNS`]; it runs neither ruff nor mypy.
 fn calc() -> Repo {
     let rules = format!(
         "[tool.mutmut]\nsource_paths = [\"calc.py\"]\npytest_add_cli_args_test_selection = [\"tests/\"]\n\
          do_not_mutate_patterns = {}\n",
-        patterns()
+        PATTERNS
     );
     Repo::with(&[
         common::NO_PYTHON_LINTERS,
@@ -89,7 +85,7 @@ fn change_the_functions(repo: &Repo, names: &[&str]) {
     repo.put("calc.py", changed(names).as_bytes());
 }
 
-/// A rules file outside the tree, as `gate --config` names one, with the TOML `table` as its `[tool.mutmut]`.
+/// A rules file outside the tree, for [`Gate`]'s `rules`, with the TOML `table` as its `[tool.mutmut]`.
 fn rules(repo: &Repo, table: &str) -> PathBuf {
     let path = repo.outside.join("pyproject.toml");
     std::fs::write(&path, format!("[tool.mutmut]\n{table}")).unwrap();
@@ -106,7 +102,8 @@ struct Gate {
     budget: Option<u64>,
     /// The project's Python; None for the workspace's.
     python: Option<PathBuf>,
-    /// `--config`: the pyproject.toml whose `[tool.mutmut]` judges the change; None for the tree's own.
+    /// The pyproject.toml whose `[tool.mutmut]` judges the change, in a directory outside the tree: `--config` then
+    /// names a copy of the tree's gate.toml beside it. None for the tree's own.
     rules: Option<PathBuf>,
     /// `--test-contexts`.
     test_contexts: Option<PathBuf>,
@@ -129,7 +126,9 @@ fn findings(repo: &Repo, how: Gate) -> Vec<Found> {
     command.arg("--python").arg(how.python.unwrap_or_else(common::python)).arg("--json").arg(&json);
     command.args(["--base-run-budget", "1", "--mutation-budget", &how.budget.unwrap_or(60).to_string()]);
     if let Some(rules) = how.rules {
-        command.arg("--config").arg(rules);
+        let settings = rules.with_file_name("gate.toml");
+        std::fs::copy(repo.repo.join("gate.toml"), &settings).unwrap();
+        command.arg("--config").arg(settings);
     }
     if let Some(test_contexts) = how.test_contexts {
         command.arg("--test-contexts").arg(test_contexts);

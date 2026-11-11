@@ -1,22 +1,10 @@
-[tool.pytest.ini_options]
-pythonpath = ["."]
-testpaths = ["tests"]
-
-[project]
-name = "octoflow-gate"
-version = "0.6.0"
-description = "The quality gate: judge the change a git working tree makes since a commit, and write the quality file"
-readme = "README.md"
-# gate.py is stdlib-only, so it runs with a system python3 3.13+ without uv.
-requires-python = ">=3.13"
-license = "MIT OR Apache-2.0"
-license-files = ["LICENSE-MIT", "LICENSE-APACHE"]
-dependencies = []
+# Not a Python project: the gate is Rust (crates/). This file and uv.lock hold, with .python-version, the Python tools
+# the gate runs when it judges this repository and that its tests run it with: the linters, and pytest and mutmut
+# with their plugins, in the Python the tests give the gate as the judged project's (crates/gate/tests/common). They
+# also hold the linters' rules. The release version is crates/gate/Cargo.toml's.
 
 [dependency-groups]
 dev = [
-    "hypothesis>=6.170.8",
-    "jsonschema>=4.26.0",
     "mutmut>=3.8.0",
     "mypy>=2.4.0",
     "pymarkdownlnt>=0.9.41",
@@ -26,9 +14,10 @@ dev = [
     "ruff>=0.17.2",
 ]
 
-# The rules `gate.py` judges a change by. scripts/gate has the gate read them from the judge's copy of this file
-# (--config), never the change's own, so a change cannot loosen the rules it is judged by (its header says which
-# commit judges). Only findings on lines a change adds count, so the findings already on main do not block.
+# The rules the gate judges a change by. scripts/gate has the gate read them from the judge's copy of this file, the
+# one beside the gate.toml it is given (--config), never the change's own, so a change cannot loosen the rules it is
+# judged by (its header says which commit judges). Only findings on lines a change adds count, so the findings already
+# on main do not block.
 
 [tool.ruff.lint]
 # The defaults, plus bugbear, simplifications, pyupgrade, bandit's security checks, complexity and pylint's errors
@@ -45,40 +34,9 @@ max-doc-length = 120
 [tool.ruff.lint.mccabe]
 max-complexity = 15
 
-[tool.ruff.lint.per-file-ignores]
-# assert is how pytest checks; the tokens and /tmp paths are fakes; unused unpacked fixtures, dict() calls, class-level
-# fake data are how the tests read best; a test documents itself by its name.
-"tests/**" = ["S101", "S105", "S106", "S108", "RUF059", "RUF012", "C408", "C901", "D1"]
-
 [tool.mypy]
-# gate.py and the Python the gate embeds to run in a judged project's Python (crates/gate/src). Named by what is left
-# out rather than by file, so the same rules check a tree from which the cutover (gate-standalone/18) has deleted
-# gate.py: mypy refuses a named file that is not there. The tests are untyped by design; mutants/ and target/ hold
-# copies of the sources. mypy skips directories whose names start with a dot (.venv, .cargo-home, .tools) itself.
-# The list stays here, in the judge's rules: a .gitignore is the judged change's own to edit.
-files = ["."]
-exclude = ["^tests/", "^ci/", "^xtask/", "^gate-rust/", "^mutants/", "^target/"]
-
-[tool.mutmut]
-# What `gate.py`'s surviving-mutants check runs mutmut by, on a copy of the tree in which only the functions a change
-# edits can be mutated (docs/quality-gate.md). mutmut runs the tests in a directory of its own, which holds only what
-# is listed here; tests/test_gate.py builds the gate-rust helper from gate-rust/'s sources, without its target/:
-# mutmut copies a file into a directory that must be there, which copying src/ first makes.
-source_paths = ["gate.py"]
-pytest_add_cli_args_test_selection = ["tests/"]
-also_copy = ["gate-rust/src/", "gate-rust/Cargo.toml", "gate-rust/Cargo.lock"]
-# argparse's help and description texts: prose, not behaviour, which no test reads word for word. mutmut matches each
-# pattern against each source line and skips every expression that starts on a matching line, with what it holds, the
-# following lines of a text too. The patterns match any keyword argument of those names, not only argparse's. Flag
-# names stay mutated: they are behaviour.
-do_not_mutate_patterns = ['\bhelp=', '\bdescription=']
-
-[tool.coverage.run]
-# The C tracer, which the gate's pytest command (gate.toml) records a context per test with (--cov-context=test), for
-# gate.py --test-contexts to pick the tests mutmut runs. Under Python 3.14, coverage's default core, sys.monitoring,
-# records each line for only the first few tests to run it, without a warning, so mutmut would leave out tests that
-# kill its mutants and report them as survivors.
-core = "ctrace"
+# The repository's Python: what the gate embeds to run in a judged project's Python.
+files = ["crates/gate/src"]
 
 [tool.pymarkdown]
 # The docs wrap at 120, by eye.

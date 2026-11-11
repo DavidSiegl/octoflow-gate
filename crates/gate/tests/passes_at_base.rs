@@ -1,10 +1,8 @@
 //! The passes-at-base check over a real git repository's Cargo package, its tests run with cargo-nextest, through
-//! the `gate` binary and its quality.json, as gate.py's TestRustPassesAtBase runs gate.py's check
-//! (tests/test_gate.py). Where gate.py's tests patch what runs cargo-nextest or copies the base, these put a stub
-//! `cargo` or `tar` ahead of PATH. TestRustPassesAtBase's budget of a thousandth of a second, which the `gate` binary's
-//! whole seconds cannot give, is passes_at_base.rs's own test of a spent budget. cargo runs offline, so it never
-//! reaches for the registry, and the surviving-mutants check, which the gate runs too, has a budget too short to
-//! start cargo-mutants.
+//! the `gate` binary and its quality.json. Where a test needs cargo-nextest or the copy of the base to go wrong, it
+//! puts a stub `cargo` or `tar` ahead of PATH. A budget spent before anything runs, which the `gate` binary's whole
+//! seconds cannot give, is passes_at_base.rs's own test. cargo runs offline, so it never reaches for the registry,
+//! and the surviving-mutants check, which the gate runs too, has a budget too short to start cargo-mutants.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};

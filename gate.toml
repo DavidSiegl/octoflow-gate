@@ -1,14 +1,12 @@
 # The gate's settings for judging this repository (docs/quality-gate.md, "The gate's settings"): the defaults, but
-# for the commands that run its tests. scripts/gate judges a change by main's copy of this file, so an edit here
+# for the command that runs its tests. scripts/gate judges a change by main's copy of this file, so an edit here
 # takes effect once it is on main.
 
-# The tests of the Cargo workspace (crates/), with line coverage; xtask, the workspace's own tasks, is no part of the
-# gate and has no tests. --ignore-run-fail writes the coverage report whatever tests fail and exits 0 for them;
-# ci/nextest.toml's ci profile writes the JUnit report, to target/nextest/ci/junit.xml. The one command: the cutover
-# (gate-standalone/18), which this file judges from main, deletes gate.py's tests and gate-rust, whose commands were
-# here; until it merges, a change to either is judged without their tests.
+# The workspace's tests, with line coverage; xtask, the workspace's own tasks, is no part of the gate and has no
+# tests. --ignore-run-fail writes the coverage report whatever tests fail and exits 0 for them; ci/nextest.toml's ci
+# profile writes the JUnit report, to target/nextest/ci/junit.xml.
 [[test]]
-name = "cargo-nextest-gate"
+name = "cargo-nextest"
 command = ["cargo", "llvm-cov", "nextest", "--locked", "--workspace", "--exclude", "xtask", "--ignore-run-fail",
            "--profile", "ci", "--config-file", "ci/nextest.toml", "--cobertura", "--output-path", "coverage-gate.xml"]
 junit = ["target/nextest/ci/junit.xml"]

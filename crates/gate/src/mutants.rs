@@ -1,6 +1,6 @@
 //! The surviving-mutants check: a function the change touches whose mutants its tests do not notice is a finding.
-//! gate.py's `surviving_mutants`. Here is the check and its Rust half, in which cargo-mutants mutates what the change
-//! adds to Rust code under test; the Python half, which runs mutmut, is python_mutants.rs.
+//! Here is the check and its Rust half, in which cargo-mutants mutates what the change adds to Rust code under test;
+//! the Python half, which runs mutmut, is python_mutants.rs.
 
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
@@ -28,11 +28,11 @@ const TRIED: [&str; 3] = ["MissedMutant", "CaughtMutant", "Timeout"];
 const TEST_TIMEOUT: u64 = 60;
 
 /// How long cargo-mutants has, after the SIGINT that stops a run at the deadline, to write what it found and exit
-/// before it is killed, and mutmut as long; gate.py's MUTMUT_STOP_GRACE.
+/// before it is killed, and mutmut as long.
 pub(crate) const STOP_GRACE: Duration = Duration::from_secs(10);
 
 /// What a run is given beyond [`STOP_GRACE`] after the deadline: the most process::run_with waits for what a killed
-/// process printed (its KILL_WAIT); gate.py's TOOL_KILL_WAIT.
+/// process printed (its KILL_WAIT).
 pub(crate) const KILL_WAIT: Duration = Duration::from_secs(5);
 
 /// How many of a function's surviving mutants its finding shows, in the order the mutation tool made them.

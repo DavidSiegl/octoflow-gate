@@ -1,5 +1,4 @@
-//! The vague-names check on Rust, read with lang_rust: tests/test_gate.py's TestRustVagueNames, the cases that do not
-//! depend on gate.py's gate-rust helper.
+//! The vague-names check on Rust, read with lang_rust.
 
 mod common;
 

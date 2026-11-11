@@ -7,7 +7,7 @@ use std::os::unix::ffi::OsStrExt;
 use sha2::{Digest, Sha256};
 
 /// `bytes` as text: UTF-8 where it is, and each byte that is not written `\xNN`, two lowercase hex digits, so a file
-/// or a terminal can take it. gate.py holds such a byte as a lone surrogate and writes it the same way (its `_utf8`).
+/// or a terminal can take it.
 pub fn lossless(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len());
     for chunk in bytes.utf8_chunks() {
@@ -24,8 +24,8 @@ pub fn path(p: &OsStr) -> String {
     lossless(p.as_bytes())
 }
 
-/// `bytes` as text with each byte that is not UTF-8 one U+FFFD, so a glob counts it as the one character gate.py's
-/// surrogate is; unlike `String::from_utf8_lossy`, which gives one U+FFFD for a run of such bytes.
+/// `bytes` as text with each byte that is not UTF-8 one U+FFFD, so a glob counts each such byte as one character;
+/// unlike `String::from_utf8_lossy`, which gives one U+FFFD for a run of such bytes.
 pub fn per_byte_lossy(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len());
     for chunk in bytes.utf8_chunks() {
@@ -61,7 +61,7 @@ pub fn py_strip(text: &str) -> &str {
     text.trim_matches(|c: char| c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c))
 }
 
-/// `text` in at most 160 characters, the last of them "…" when it was longer. gate.py's `_clip`.
+/// `text` in at most 160 characters, the last of them "…" when it was longer.
 pub fn clip(text: &str) -> String {
     if text.chars().count() <= 160 {
         return text.to_string();
@@ -148,8 +148,7 @@ mod tests {
 
     #[test]
     fn the_fingerprint_is_the_engine_s() {
-        // gate.py's test_the_fingerprint_is_the_engine_s, whose values are octoflow-ai's
-        // engine/tests/oracle/quality.json.
+        // The values are those of octoflow-ai's engine/tests/oracle/quality.json.
         for (path, rule, message, want) in [
             (Some("a.py"), "ruff C901", "too complex (16 > 15)", "d0917b36716743cd"),
             (None, "x", "y", "2081f4f26135019e"),

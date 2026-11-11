@@ -1,6 +1,6 @@
 //! The cognitive-complexity check: functions a change edits whose score, by G. Ann Campbell's "Cognitive Complexity"
-//! as [`model::Flow`] reads it, is over [`LIMIT`] and worse than at the base. gate.py's too_complex_functions; the
-//! rules each language's constructs map onto are in docs/quality-gate.md, "Cognitive complexity".
+//! as [`model::Flow`] reads it, is over [`LIMIT`] and worse than at the base. The rules each language's constructs
+//! map onto are in docs/quality-gate.md, "Cognitive complexity".
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::{OsStr, OsString};

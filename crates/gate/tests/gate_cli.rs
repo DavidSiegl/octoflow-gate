@@ -1,6 +1,5 @@
-//! The `gate` binary run on a git repository of its own, as gate.py's TestGate runs gate.py (tests/test_gate.py):
-//! the whole report it writes held to gate.py's golden files, and its exit statuses. The linters are stubs, as
-//! TestGate's are ([`Repo::stub_linters`]).
+//! The `gate` binary run on a git repository of its own: the whole report it writes held to the golden files under
+//! tests/golden/, and its exit statuses. The linters are stubs ([`Repo::stub_linters`]).
 
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
@@ -12,13 +11,13 @@ use gate::report::GATE_VERSION;
 
 mod common;
 
-/// TestGate's BASE_FILES: rules for ruff, and f.py of three lines.
-fn test_gate_repo() -> Repo {
+/// A repository whose base holds rules for ruff, and f.py of three lines.
+fn repo() -> Repo {
     Repo::with(&[("pyproject.toml", b"[tool.ruff]\n"), ("f.py", b"line1 = 1\nline2 = 2\nline3 = 3\n")])
 }
 
-/// TestGate's junit: a pytest JUnit report, results.xml in the tree, of test_ok passing and `failing`, each a test
-/// and its failure's message.
+/// Writes a pytest JUnit report, results.xml in the tree, of test_ok passing and `failing`, each a test and its
+/// failure's message.
 fn junit(repo: &Repo, failing: &[(&str, &str)]) {
     let case = |(name, message): &(&str, &str)| {
         let failure = format!("<failure message=\"{message}\">trace</failure>");
@@ -32,8 +31,8 @@ fn junit(repo: &Repo, failing: &[(&str, &str)]) {
     repo.put("results.xml", report.as_bytes());
 }
 
-/// TestGate's coverage: a Cobertura report, coverage.xml in the tree, of f.py, with each of `hits` a line and how
-/// often it ran. Gives back its path.
+/// Writes a Cobertura report, coverage.xml in the tree, of f.py, with each of `hits` a line and how often it ran.
+/// Gives back its path.
 fn coverage(repo: &Repo, hits: &[(u32, u32)]) -> PathBuf {
     let lines: String = hits.iter().map(|(n, hits)| format!("<line number=\"{n}\" hits=\"{hits}\"/>")).collect();
     let report = format!(
@@ -74,7 +73,7 @@ fn assert_golden(name: &str, written: [String; 2], shas: &[(String, &str)]) {
 
 #[test]
 fn the_file_of_a_passing_change_is_golden() {
-    let repo = test_gate_repo();
+    let repo = repo();
     let name = OsStr::from_bytes(b"m\xff.py");
     repo.put(name, b"m = 1\n");
     repo.git(&[OsStr::new("add"), name]);
@@ -90,12 +89,11 @@ fn the_file_of_a_passing_change_is_golden() {
     assert_golden("gate_ok", written, &[(head, "<head>")]);
 }
 
-/// gate.py's test of this change runs test-integrity as its only check, the others running pytest, whose words are
-/// the host's. This binary runs them all, and flaky-tests has one finding to weigh, of the test the change skips,
-/// which is taken out of both files before they are held to the golden ones.
+/// The golden files hold no finding worded by pytest, whose words are the host's: flaky-tests has one finding to
+/// weigh, of the test the change skips, which is taken out of both files before they are held to the golden ones.
 #[test]
 fn the_file_of_a_failing_change_is_golden() {
-    let repo = test_gate_repo();
+    let repo = repo();
     let tests = "def test_one():\n    assert 1\n\n\ndef test_two():\n    assert 2\n";
     repo.commit(&[("tests/test_f.py", tests.as_bytes()), ("uv.lock", b"version = 1\n")], "tests");
     let base = repo.git(&["rev-parse", "HEAD"]).trim().to_string();
@@ -125,7 +123,7 @@ fn the_file_of_a_failing_change_is_golden() {
 
 #[test]
 fn a_finding_on_an_added_line_fails_the_gate_and_the_report_goes_to_standard_output() {
-    let repo = test_gate_repo();
+    let repo = repo();
     // A shell script shellcheck reads, run as a stub that finds something on the line the change adds and the one
     // before it, which only the first counts against.
     let bin = repo.stub("shellcheck", "echo 'run.sh:1:1: warning: Old. [SC1000]'\n\
@@ -149,10 +147,15 @@ fn a_finding_on_an_added_line_fails_the_gate_and_the_report_goes_to_standard_out
 
 #[test]
 fn a_change_it_cannot_judge_writes_nothing_and_exits_2() {
-    let repo = test_gate_repo();
+    let repo = repo();
     let out = repo.outside.join("quality.md");
+    // A pyproject.toml that is there, beside the settings, but is no file to read rules from.
+    std::os::unix::fs::symlink("nowhere.toml", repo.outside.join("pyproject.toml")).unwrap();
+    std::fs::write(repo.outside.join("gate.toml"), "").unwrap();
+    let unruled = repo.outside.join("gate.toml");
     for (args, said) in [
-        (&["--config", "missing/pyproject.toml"][..], "is not a file"),
+        (&["--config", "missing/gate.toml"][..], "cannot read the gate's settings"),
+        (&["--config", unruled.to_str().unwrap()][..], "pyproject.toml is not a file"),
         (&["--base", "no-such-rev"][..], "no-such-rev names no commit in"),
     ] {
         let done = repo.gate("HEAD", &[args, &["--out", out.to_str().unwrap()]].concat().iter().map(OsStr::new)
@@ -165,11 +168,14 @@ fn a_change_it_cannot_judge_writes_nothing_and_exits_2() {
     let done = repo.gate("HEAD", &[OsStr::new("--bogus")]);
     assert_eq!(done.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&done.stderr).contains("gate: error: unrecognized arguments: --bogus"));
+    let done = repo.gate("HEAD", &[OsStr::new("--config"), OsStr::new("pyproject.toml")]);
+    assert_eq!(done.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&done.stderr).contains("gate: error: argument --config: names the gate's settings"));
 }
 
 #[test]
 fn ctrl_c_writes_nothing_and_exits_130() {
-    let repo = test_gate_repo();
+    let repo = repo();
     repo.put("gate.toml", b"[[test]]\nname = \"slow\"\ncommand = [\"sh\", \"-c\", \"touch started; sleep 30\"]\n\
                            junit = [\"results.xml\"]\n");
     let out = repo.outside.join("quality.md");

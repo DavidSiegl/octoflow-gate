@@ -38,7 +38,7 @@ impl Finished {
     /// What a tool that went wrong, such as cargo, said about it, in a line cut as text::clip cuts one: the
     /// exception of a pytest internal error, else the exception that ended it when it printed a traceback, else the
     /// first line of its standard error, else the last line of its output; "nothing" when it printed nothing. Only
-    /// `\n` ends a line, so a path in it stays whole. gate.py's `_said`.
+    /// `\n` ends a line, so a path in it stays whole.
     pub fn said(&self) -> String {
         let lines = |printed: &[u8]| -> Vec<String> {
             let printed = crate::text::lossless(printed);
@@ -63,10 +63,13 @@ impl Finished {
 /// variables whose names end in `_TOKEN`, `_PASSWORD`, `_SECRET` or `_API_KEY`, without UPDATE_GOLDEN, and without
 /// git's switches for how it reads every pathspec.
 ///
-/// So a test the change brings never inherits a CI's or a service's tokens when the gate runs where they are set; a
-/// golden test (tests/golden.py) compares with its file instead of rewriting it, as it does under UPDATE_GOLDEN=1;
-/// and the gate's pathspecs, written in git's default syntax, mean what they say: each switch changes what they
-/// match without an error. gate.py's tool_env, whose comment tells how.
+/// So a test the change brings never inherits a CI's or a service's tokens when the gate runs where they are set. A
+/// golden test that rewrites its file under UPDATE_GOLDEN=1 instead of comparing with it could not fail in the
+/// flaky-tests reruns, the passes-at-base run or a mutation run. And the gate's pathspecs are written in git's default
+/// syntax, which each switch breaks without an error: under GIT_LITERAL_PATHSPECS the linters' globs and
+/// judge::Change::from_tree's exclude match nothing, under GIT_NOGLOB_PATHSPECS the globs match nothing, under
+/// GIT_GLOB_PATHSPECS `*.py` matches only the top level's files, and under GIT_ICASE_PATHSPECS the exclude leaves out
+/// a `Mutants/` that is not mutmut's.
 pub fn tool_env() -> Vec<(OsString, OsString)> {
     const LEFT_OUT: [&str; 5] =
         ["UPDATE_GOLDEN", "GIT_LITERAL_PATHSPECS", "GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS"];
@@ -106,9 +109,9 @@ pub struct Extras<'a> {
 /// the soft stop's grace and [`KILL_WAIT`]. When Ctrl-C reaches the gate meanwhile, the group is killed and the gate
 /// exits through [`exit_interrupted`]. Errs when `argv` cannot be started.
 ///
-/// The process starts a session of its own, as under gate.py, so it has no controlling terminal: the terminal's
-/// Ctrl-C is the gate's to pass on, and a tool that would read the terminal, or write to it under `stty tostop`,
-/// fails rather than stopping the gate with it.
+/// The process starts a session of its own, so it has no controlling terminal: the terminal's Ctrl-C is the gate's
+/// to pass on, and a tool that would read the terminal, or write to it under `stty tostop`, fails rather than
+/// stopping the gate with it.
 pub fn run_with(argv: &[&OsStr], cwd: &Path, timeout: Duration, extras: &Extras) -> std::io::Result<Finished> {
     let (mut child, group) = start(argv, cwd, Stdio::piped(), Stdio::piped(), extras)?;
     let stdout = Printed::read(child.stdout.take());
@@ -269,9 +272,9 @@ impl Printed {
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 
 /// Makes Ctrl-C stop the gate, through [`run`] and [`interrupted`], unless the gate was started with SIGINT ignored,
-/// as a command a Jenkins `sh` step runs is: then it stays ignored, for the gate and every process it starts, as for
-/// gate.py. Call it once, at the start. Errs when the handler cannot be installed, as Ctrl-C would then leave the
-/// processes the gate starts running.
+/// as a command a Jenkins `sh` step runs is: then it stays ignored, for the gate and every process it starts. Call it
+/// once, at the start. Errs when the handler cannot be installed, as Ctrl-C would then leave the processes the gate
+/// starts running.
 pub fn catch_interrupt() -> std::io::Result<()> {
     extern "C" fn note(_: libc::c_int) {
         INTERRUPTED.store(true, Ordering::SeqCst);

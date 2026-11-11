@@ -1,6 +1,6 @@
 //! A Python source file's bytes as text, decoded as Python decodes them: by a byte order mark or a PEP 263 coding
-//! cookie (<https://peps.python.org/pep-0263/>), else as UTF-8. gate.py's `_decode_python`, for the encodings the
-//! standard library can decode: UTF-8, ASCII and Latin-1 (docs/port-differences.md).
+//! cookie (<https://peps.python.org/pep-0263/>), else as UTF-8. Of the encodings a cookie can name, only those Rust's
+//! standard library can decode are read: UTF-8, ASCII and Latin-1 (docs/port-differences.md).
 
 use std::borrow::Cow;
 

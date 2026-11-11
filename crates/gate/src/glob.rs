@@ -11,8 +11,8 @@ use crate::text;
 /// git's `:(glob)` pathspecs do: `*`, `?` and a bracket expression stop at a slash, `**/` stands for any
 /// directories, none included, and a trailing `/**` for everything below; a name starting with a dot is matched like
 /// any other. A bracket expression is fnmatch's: `[!...]` negates it, and a backslash in it is itself. No glob
-/// matches nothing. gate.py's _glob_pattern, which is Python 3.13's `glob.translate(recursive=True,
-/// include_hidden=True)` with no bracket expression matching a slash.
+/// matches nothing. A glob means what Python 3.13's `glob.translate(recursive=True, include_hidden=True)` makes of
+/// it, except that no bracket expression matches a slash.
 #[derive(Clone, Debug)]
 pub struct Globs {
     globs: Vec<String>,
@@ -29,7 +29,7 @@ impl Globs {
     }
 
     /// Whether one of the globs matches `path`, from the tree's top level. A byte of the path that is not UTF-8 is
-    /// one character to `?` or a bracket expression, as gate.py's surrogate is.
+    /// one character to `?` or a bracket expression.
     pub fn matches(&self, path: &OsStr) -> bool {
         self.whole.is_match(&text::per_byte_lossy(path.as_bytes()))
     }

@@ -1,5 +1,5 @@
 //! cargo clippy as one of the gate's linters (linters::LINTERS), over every Cargo workspace that a manifest among the
-//! files it is given belongs to, all its targets checked, tests and examples included. gate.py's `Clippy`.
+//! files it is given belongs to, all its targets checked, tests and examples included.
 //!
 //! Which lints are on is each workspace's own choice, the `[lints]` tables of its manifests and its clippy.toml: the
 //! pyproject.toml the gate is given holds none of clippy's. The gate caps every lint of the workspace's own crates

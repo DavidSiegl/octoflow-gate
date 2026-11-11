@@ -2,15 +2,12 @@
 //! gate::judge::judge_change does, and writes the quality file and quality.json.
 //!
 //! ```text
-//! gate --base REV [--config PYPROJECT] [--config GATE_TOML] [--tests JUNIT]... [--coverage XML]...
-//!      [--out FILE] [--json FILE] [--mutation-budget SECONDS] [--base-run-budget SECONDS]
-//!      [--test-contexts COVERAGE] [--rust-syntax PATH] [--python PATH]
+//! gate --base REV [--config GATE_TOML] [--tests JUNIT]... [--coverage XML]... [--out FILE] [--json FILE]
+//!      [--mutation-budget SECONDS] [--base-run-budget SECONDS] [--test-contexts COVERAGE] [--python PATH]
 //! ```
 //!
-//! Its flags are gate.py's, and `--python`, which names what gate.py takes from the Python that runs it
-//! (judge::Change::python). `--rust-syntax` names gate.py's helper, which this binary does not need. Exit status 0 for
-//! GATE: OK, 1 for GATE: ERROR, 2 when it could not judge the change or the arguments are bad, and 130 for Ctrl-C; with
-//! 2 or 130 it writes no report.
+//! Exit status 0 for GATE: OK, 1 for GATE: ERROR, 2 when it could not judge the change or the arguments are bad, and
+//! 130 for Ctrl-C; with 2 or 130 it writes no report.
 
 use std::ffi::{OsStr, OsString};
 use std::io::Write;
@@ -21,7 +18,7 @@ use std::process::ExitCode;
 use gate::judge::{judge_change, Given};
 use gate::paths::real_path;
 use gate::process;
-use gate::report::Verdict;
+use gate::report::{Verdict, RULES_FILE};
 use gate::text::{self, series};
 use gate::Unjudged;
 
@@ -30,14 +27,14 @@ const EXIT_UNJUDGED: u8 = 2;
 
 const USAGE: &str = "usage: gate --base REV [--config FILE] [--coverage XML] [--tests XML] [--out FILE] [--json FILE]
             [--mutation-budget SECONDS] [--base-run-budget SECONDS] [--test-contexts COVERAGE]
-            [--rust-syntax PATH] [--python PATH] [--help]";
+            [--python PATH] [--help]";
 
 const HELP: &str = "
-The Rust port of gate.py. It judges by ruff, mypy, pymarkdown, shellcheck, actionlint and clippy over the files the
-repository tracks, the checks test-integrity, cognitive-complexity, vague-names, flaky-tests, passes-at-base and
-surviving-mutants over Python and Rust, gate.toml's [[test]] commands, the tests and coverage they report, files
-committed under mutmut's mutants/, stray line ends, suppressions added and edited build configuration. It writes the
-quality file: GATE: OK or GATE: ERROR on its first
+Judges the change the git working tree around the current directory makes since --base: by ruff, mypy, pymarkdown,
+shellcheck, actionlint and clippy over the files the repository tracks, the checks test-integrity,
+cognitive-complexity, vague-names, flaky-tests, passes-at-base and surviving-mutants over Python and Rust, gate.toml's
+[[test]] commands, the tests and coverage they report, files committed under mutmut's mutants/, stray line ends,
+suppressions added and edited build configuration. It writes the quality file: GATE: OK or GATE: ERROR on its first
 line, then the failed conditions, the findings on lines added since --base, failing tests, coverage of new code,
 suppressions added and edited build configuration. Exit status 0 for OK, 1 for ERROR, 2 when it could not judge,
 writing nothing. --out FILE also writes quality.json, the same report as data.
@@ -45,9 +42,9 @@ writing nothing. --out FILE also writes quality.json, the same report as data.
 options:
   --help                  show this help and exit
   --base REV              the commit the change is measured from
-  --config FILE           a file named *.toml but pyproject.toml holds the gate's settings, used instead of the
-                          tree's own gate.toml; any other is a pyproject.toml whose rules the linters take instead of
-                          the tree's own, and beside which the settings are then looked for. Given once for each
+  --config FILE           a gate.toml whose settings are used instead of those of the tree's own; the rules of
+                          ruff, mypy, pymarkdown and mutmut are then those of the pyproject.toml beside FILE, and
+                          their defaults when there is none, instead of the tree's own
   --coverage XML          a Cobertura or LCOV coverage report of the tree; given more than once, the reports are
                           merged by path and line. With --coverage or --tests, gate.toml's [[test]] commands do not
                           run: these reports are what is judged
@@ -66,7 +63,6 @@ options:
                           a coverage.py data file of the tree's test run with a context per test, as
                           `pytest --cov-context=test` writes it: the surviving-mutants check then has mutmut run
                           only the tests it records reaching the changed functions
-  --rust-syntax PATH      accepted for gate.py's sake, and ignored
   --python PATH           the Python of the judged project, in which its pytest, pytest-randomly and mutmut are
                           installed, in place of gate.toml's python: a path, or a name without a slash for PATH to
                           find. Without either, python3";
@@ -151,16 +147,14 @@ fn unjudged(message: &str) -> ExitCode {
     ExitCode::from(EXIT_UNJUDGED)
 }
 
-/// The command line `argv`, without the program's name, as gate.py's parse_args reads it: each option as `--name
-/// value` or `--name=value`, a single-valued one given twice taking the last; `--help` or `-h` as an option asks for
-/// help, whatever else is there. Errs, with the message for after "error: ", on an unknown or incomplete option, a
-/// missing --base, a budget that is not a whole number of seconds of at least 1, --config naming more than one
-/// pyproject.toml or more than one file of settings, or --json naming the file --out writes. Unlike
-/// argparse, it takes no abbreviation of an option's name.
+/// The command line `argv`, without the program's name: each option as `--name value` or `--name=value`, a
+/// single-valued one given twice taking the last; `--help` or `-h` as an option asks for help, whatever else is
+/// there. Errs, with the message for after "error: ", on an unknown or incomplete option, a missing --base, a budget
+/// that is not a whole number of seconds of at least 1, --config naming a pyproject.toml, which up to 0.6.0 it took
+/// for the rules, or --json naming the file --out writes. It takes no abbreviation of an option's name.
 fn parse_args(argv: impl IntoIterator<Item = OsString>) -> Result<Asked, String> {
     let mut argv = argv.into_iter();
     let mut base = None;
-    let mut configs: Vec<PathBuf> = vec![];
     let mut given = Given::default();
     let (mut out, mut json) = (None, None);
     let mut unrecognized: Vec<String> = vec![];
@@ -181,7 +175,16 @@ fn parse_args(argv: impl IntoIterator<Item = OsString>) -> Result<Asked, String>
                 let rev = value()?.into_string();
                 base = Some(rev.map_err(|rev| format!("argument --base: not UTF-8: {}", text::path(&rev)))?);
             }
-            "--config" => configs.push(value()?.into()),
+            "--config" => {
+                let config = PathBuf::from(value()?);
+                if config.file_name() == Some(OsStr::new(RULES_FILE)) {
+                    return Err(format!(
+                        "argument --config: names the gate's settings, a gate.toml, not a {RULES_FILE}: the rules \
+                         are those of the {RULES_FILE} beside it"
+                    ));
+                }
+                given.settings = Some(config);
+            }
             "--coverage" => given.coverage.push(value()?.into()),
             "--tests" => given.tests.push(value()?.into()),
             "--out" => out = Some(PathBuf::from(value()?)),
@@ -194,9 +197,6 @@ fn parse_args(argv: impl IntoIterator<Item = OsString>) -> Result<Asked, String>
             }
             "--python" => given.python = Some(python(value()?).map_err(|e| format!("argument {name}: {e}"))?.into()),
             "--test-contexts" => given.test_contexts = Some(value()?.into()),
-            "--rust-syntax" => {
-                value()?;
-            }
             _ => unrecognized.push(name),
         }
     }
@@ -204,12 +204,6 @@ fn parse_args(argv: impl IntoIterator<Item = OsString>) -> Result<Asked, String>
     if !unrecognized.is_empty() {
         return Err(format!("unrecognized arguments: {}", unrecognized.join(" ")));
     }
-    let (settings, rules): (Vec<PathBuf>, Vec<PathBuf>) = configs.into_iter().partition(|c| names_settings(c));
-    if rules.len() > 1 || settings.len() > 1 {
-        return Err("--config names at most one pyproject.toml and one file of settings".into());
-    }
-    given.rules = rules.into_iter().next();
-    given.settings = settings.into_iter().next();
     if let Some(out) = &out {
         let json = json.get_or_insert_with(|| json_path_for(out));
         if real_path(json) == real_path(out) {
@@ -245,11 +239,6 @@ fn python(named: OsString) -> Result<OsString, String> {
         true => Err("must be the path or the name of a Python".into()),
         false => Ok(named),
     }
-}
-
-/// Whether `gate --config path` names a file of the gate's settings rather than a pyproject.toml of rules.
-fn names_settings(path: &Path) -> bool {
-    path.as_os_str().as_bytes().ends_with(b".toml") && path.file_name() != Some(OsStr::new("pyproject.toml"))
 }
 
 /// Where quality.json goes beside the quality file at `out`: `out` with its `.md` made `.json`, or with `.json` added
@@ -328,12 +317,11 @@ mod tests {
     }
 
     #[test]
-    fn config_files_are_rules_or_settings_by_name() {
-        let args = run(&["--base", "main", "--config", "a/gate.toml", "--config=b/pyproject.toml"]);
-        assert_eq!(args.given.settings, Some("a/gate.toml".into()));
-        assert_eq!(args.given.rules, Some("b/pyproject.toml".into()));
-        let err = parse(&["--base", "m", "--config", "a.toml", "--config", "b.toml"]).unwrap_err();
-        assert_eq!(err, "--config names at most one pyproject.toml and one file of settings");
+    fn config_names_the_settings_and_never_a_pyproject_toml() {
+        let args = run(&["--base", "main", "--config", "a/gate.toml", "--config=b/settings"]);
+        assert_eq!(args.given.settings, Some("b/settings".into()));
+        let err = parse(&["--base", "m", "--config", "b/pyproject.toml"]).unwrap_err();
+        assert!(err.starts_with("argument --config: names the gate's settings, a gate.toml, not a pyproject.toml"));
     }
 
     #[test]
@@ -366,7 +354,8 @@ mod tests {
         assert_eq!(parse(&["--base", "m", "--python="]).unwrap_err(),
                    "argument --python: must be the path or the name of a Python");
         assert_eq!(run(&["--base", "m", "--test-contexts", ".coverage"]).given.test_contexts, Some(".coverage".into()));
-        assert!(parse(&["--base", "m", "--rust-syntax", "x"]).is_ok());
+        assert_eq!(parse(&["--base", "m", "--rust-syntax", "x"]).unwrap_err(),
+                   "unrecognized arguments: --rust-syntax x");
         assert_eq!(parse(&["--base", "m", "-x", "y"]).unwrap_err(), "unrecognized arguments: -x y");
         assert_eq!(parse(&["--base", "m", "x=y"]).unwrap_err(), "unrecognized arguments: x=y");
         assert_eq!(parse(&["--bogus", "--help"]), Ok(Asked::Help));

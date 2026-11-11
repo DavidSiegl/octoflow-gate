@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/DavidSiegl/octoflow-gate/blob/main/schema/quality-v1.json",
   "title": "quality.json",
-  "description": "The gate's report on one change, as data: what gate.py writes beside the quality file (`--out`) or where `--json` names. Its schema_version is raised on any change a reader could notice; a new optional field does not raise it, so a reader ignores fields it does not know. Strings hold the text as the gate read it, line breaks included, but for each byte that is not UTF-8, written as the four characters `\\xNN`.",
+  "description": "The gate's report on one change, as data: what the gate writes beside the quality file (`--out`) or where `--json` names. Its schema_version is raised on any change a reader could notice; a new optional field does not raise it, so a reader ignores fields it does not know. Strings hold the text as the gate read it, line breaks included, but for each byte that is not UTF-8, written as the four characters `\\xNN`.",
   "type": "object",
   "required": ["schema_version", "gate", "gate_version", "base", "head", "failed_conditions", "findings",
                "findings_total", "failing_tests", "coverage", "suppressions", "build_config"],
@@ -16,7 +16,7 @@
       "enum": ["OK", "ERROR"]
     },
     "gate_version": {
-      "description": "The version of the gate.py that wrote the report, as its release names it, such as 0.3.0.",
+      "description": "The version of the gate that wrote the report, as its release names it, such as 0.3.0.",
       "type": "string"
     },
     "base": {

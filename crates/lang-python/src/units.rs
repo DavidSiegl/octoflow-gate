@@ -1,6 +1,6 @@
 //! The units of a Python file that pytest runs and mutmut mutates one by one: its top-level defs and the methods of
 //! its top-level classes; and where a comment goes that is to cover a whole def or class, the line its header ends
-//! on. gate.py's `_python_units` and `_skip_unchanged`.
+//! on.
 
 use model::{Lines, Unreadable};
 use tree_sitter::Node;

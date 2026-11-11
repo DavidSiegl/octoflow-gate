@@ -1,177 +1,206 @@
 //! The workspace's own tasks, run as `cargo xtask <task>` from anywhere in it (.cargo/config.toml):
 //!
 //! ```text
-//! cargo xtask compare [--repo DIR] [BASE] [-- GATE_ARGS...]
-//! cargo xtask fixture DIR
+//! cargo xtask smoke-release TARBALL
 //! ```
 //!
-//! `compare` judges the change the git working tree at DIR (default the current directory) makes since BASE (default
-//! `main`) with gate.py and with the Rust `gate`, each given `--base BASE --out FILE` and GATE_ARGS, and compares
-//! their quality.json, part by part, and their quality file, line by line. It exits 0 when they agree, 1 when they
-//! differ, printing each part that does and the quality files from their first line that does, and 2 when
-//! either gate could not judge the change or the arguments are bad. Both run in this workspace's Python environment,
-//! with its dev tools on PATH: gate.py as `uv run --project <workspace> python <workspace>/gate.py`, reading Rust with
-//! the gate-rust helper built from the workspace's gate-rust/, and `gate` as `uv run --project <workspace> cargo run`,
-//! with that environment's Python as the judged project's (`--python python`), as it is gate.py's.
-//! Each gate runs the tree's `[[test]]` commands unless GATE_ARGS gives `--tests` or `--coverage`. A change between
-//! two commits is compared with the later one checked out.
+//! `smoke-release` checks a release tarball that ci/package.sh built, before Jenkins's Release stage publishes it.
+//! Unpacked into an empty directory, the release must:
 //!
-//! `fixture` makes DIR, which must not exist, a git repository whose working tree holds a change since its branch
-//! `main` that gives every linter and check something to report ([`fixture`]), for `cargo xtask compare --repo
-//! DIR`. It exits 0 once DIR is made, and 2 when it cannot make it.
+//! - answer `gate --help` with exit status 0;
+//! - judge a fixture project as a project runs it, `gate --base REV --out quality.md`. The project has no
+//!   pyproject.toml, its gate.toml lists one `[[test]]` command, and its change adds a Rust function over the
+//!   cognitive-complexity limit. The gate must find that function and fail on that alone, read the command's JUnit
+//!   report, and write a quality.json that the release's schema/quality-v1.json accepts.
+//!
+//! It exits 0 when all hold, saying so; 1, naming the first that does not on standard error, otherwise; and 2 when
+//! the arguments are bad. It needs tar, git, sh, and cargo with clippy on PATH: without clippy the gate raises a
+//! condition for it, which fails the check.
 
-use std::ffi::{OsStr, OsString};
-use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::ffi::OsStr;
+use std::path::Path;
+use std::process::{Command, ExitCode, Output};
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
-mod fixture;
+const USAGE: &str = "usage: cargo xtask smoke-release TARBALL";
 
-const USAGE: &str = "usage: cargo xtask compare [--repo DIR] [BASE] [-- GATE_ARGS...]\n       cargo xtask fixture DIR";
+/// The fixture project's settings: one test command, which writes a JUnit report of one passing test and exits 0.
+const GATE_TOML: &str = r#"[[test]]
+name = "smoke"
+command = ["sh", "-c", """
+echo '<testsuites><testsuite><testcase classname="smoke" name="test_ok"/></testsuite></testsuites>' > junit.xml"""]
+junit = ["junit.xml"]
+"#;
+
+/// The fixture project's change: a new Rust function of cognitive complexity 21 (1 + 2 + ... + 6), over the limit
+/// of 15.
+const TANGLED_RS: &str = "\
+pub fn tangled(a: u32) -> u32 {
+    let mut n = 0;
+    if a > 0 {
+        if a > 1 {
+            if a > 2 {
+                if a > 3 {
+                    if a > 4 {
+                        if a > 5 {
+                            n += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    n
+}
+";
+
+/// The one failed condition the fixture project's change must raise, in the gate's words for a check's findings; any
+/// other, such as a check that could not run, fails the smoke check.
+const EXPECTED_CONDITION: &str = "1 findings of the `cognitive-complexity` check; each is listed below.";
 
 fn main() -> ExitCode {
     let mut args = std::env::args_os().skip(1);
-    let task = args.next();
-    let done = match task.as_ref().and_then(|t| t.to_str()) {
-        Some("compare") => compare(args.collect()),
-        Some("fixture") => match (args.next(), args.next()) {
-            (Some(dir), None) => fixture::make(Path::new(&dir)).map(|()| true),
-            _ => Err(USAGE.into()),
-        },
-        _ => Err(USAGE.into()),
+    let (task, tarball, more) = (args.next(), args.next(), args.next());
+    let (Some("smoke-release"), Some(tarball), None) = (task.as_deref().and_then(OsStr::to_str), tarball, more) else {
+        eprintln!("{USAGE}");
+        return ExitCode::from(2);
     };
-    match done {
-        Ok(true) => ExitCode::SUCCESS,
-        Ok(false) => ExitCode::from(1),
+    let tarball = Path::new(&tarball);
+    match smoke_release(tarball) {
+        Ok(()) => {
+            println!("xtask smoke-release: {} passed", tarball.display());
+            ExitCode::SUCCESS
+        }
         Err(e) => {
-            let task = task.map(|t| format!(" {}", t.to_string_lossy())).unwrap_or_default();
-            eprintln!("xtask{task}: {e}");
-            ExitCode::from(2)
+            eprintln!("xtask smoke-release: {e}");
+            ExitCode::from(1)
         }
     }
 }
 
-/// Runs `compare` with its arguments `args`, as the module comment says: true when the two gates agree, false when
-/// they differ; errs with why it could not compare them.
-fn compare(args: Vec<OsString>) -> Result<bool, String> {
-    let (mut repo, mut base, mut gate_args) = (PathBuf::from("."), "main".to_string(), vec![]);
-    let mut args = args.into_iter();
-    while let Some(arg) = args.next() {
-        match arg.to_str() {
-            Some("--repo") => repo = args.next().ok_or("--repo needs a directory")?.into(),
-            Some("--") => gate_args = args.by_ref().collect(),
-            Some(rev) if !rev.starts_with('-') => base = rev.to_string(),
-            _ => return Err(format!("{}\nunknown argument {arg:?}", USAGE)),
+/// Runs every check of the module comment on the release in `tarball`, in a temporary directory it removes; errs
+/// with the first check that fails and why.
+fn smoke_release(tarball: &Path) -> Result<(), String> {
+    let tmp = std::env::temp_dir().join(format!("xtask-smoke-release-{}", std::process::id()));
+    // One already there is a killed earlier run's, of the same process id: it goes, so that nothing it unpacked can
+    // stand in for what this tarball lacks.
+    let made = match std::fs::create_dir(&tmp) {
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            std::fs::remove_dir_all(&tmp).and_then(|()| std::fs::create_dir(&tmp))
         }
-    }
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).parent().ok_or("xtask has no workspace")?;
-    let out = std::env::temp_dir().join(format!("xtask-compare-{}", std::process::id()));
-    std::fs::create_dir_all(&out).map_err(|e| format!("cannot make {}: {e}", out.display()))?;
-    let judged = judge_twice(workspace, &repo, &base, &gate_args, &out);
-    // The reports are read by now, or no longer needed.
-    if let Err(e) = std::fs::remove_dir_all(&out) {
-        eprintln!("xtask compare: cannot remove {}: {e}", out.display());
-    }
-    let (python, rust) = judged?;
-    let mut agree = true;
-    let parts = |report: &Value| report.as_object().cloned().unwrap_or_default();
-    let (json_python, json_rust) = (parts(&python.json), parts(&rust.json));
-    for part in json_python.keys().chain(json_rust.keys().filter(|part| !json_python.contains_key(*part))) {
-        let (from_python, from_rust) = (&python.json[part], &rust.json[part]);
-        if from_python != from_rust {
-            agree = false;
-            println!("{part} differ:\n  gate.py: {from_python}\n  gate:    {from_rust}");
-        }
-    }
-    let lines = |reports: &'_ Reports| -> Vec<String> { reports.markdown.split('\n').map(String::from).collect() };
-    let (md_python, md_rust) = (lines(&python), lines(&rust));
-    if let Some(k) = (0..md_python.len().max(md_rust.len())).find(|&k| md_python.get(k) != md_rust.get(k)) {
-        agree = false;
-        // Five lines from the first that differs, of each.
-        let from = |md: &[String]| -> String {
-            md.get(k..).unwrap_or_default().iter().take(5).map(|l| format!("\n    {l}")).collect()
-        };
-        let (from_python, from_rust) = (from(&md_python), from(&md_rust));
-        println!("the quality files differ from line {}:\n  gate.py:{from_python}\n  gate:{from_rust}", k + 1);
-    }
-    if agree {
-        println!("gate.py and gate agree.");
-    }
-    Ok(agree)
-}
-
-/// One gate's reports of a change: its quality.json, parsed, and its quality file, the Markdown.
-struct Reports {
-    json: Value,
-    markdown: String,
-}
-
-/// The reports of gate.py, then of the Rust gate, judging the tree at `repo` since `base` with `gate_args`, each
-/// written to `out`, a directory.
-fn judge_twice(
-    workspace: &Path,
-    repo: &Path,
-    base: &str,
-    gate_args: &[OsString],
-    out: &Path,
-) -> Result<(Reports, Reports), String> {
-    // Both in this workspace's Python environment, so that each finds the linters it installs on PATH.
-    let in_uv = |program: &OsStr| {
-        let mut command = Command::new("uv");
-        command.args(["run", "--quiet", "--project"]).arg(workspace).arg(program);
-        command
+        made => made,
     };
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let mut python = in_uv("python".as_ref());
-    python.arg(workspace.join("gate.py")).arg("--rust-syntax").arg(gate_rust(workspace, &cargo)?);
-    let mut rust = in_uv(&cargo);
-    rust.args(["run", "--quiet", "--package", "gate", "--manifest-path"]).arg(workspace.join("Cargo.toml")).arg("--");
-    // The Python that runs gate.py, which reruns a tree's tests with its own interpreter, whatever the tree's
-    // gate.toml names.
-    rust.args(["--python", "python"]);
-    let mut reports = vec![];
-    for (name, mut command) in [("gate.py", python), ("gate", rust)] {
-        let md = out.join(format!("{name}.md"));
-        let done = command
-            .current_dir(repo)
-            .args(["--base", base, "--out"])
-            .arg(&md)
-            .args(gate_args)
-            .status()
-            .map_err(|e| format!("cannot run {name}: {e}"))?;
-        if !matches!(done.code(), Some(0 | 1)) {
-            return Err(format!("{name} could not judge the change: {done}"));
-        }
-        let read =
-            |path: &Path| std::fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()));
-        let json_path = out.join(format!("{name}.json"));
-        let json = serde_json::from_str(&read(&json_path)?)
-            .map_err(|e| format!("{} is not JSON: {e}", json_path.display()))?;
-        reports.push(Reports { json, markdown: read(&md)? });
+    let (release, project) = (tmp.join("release"), tmp.join("project"));
+    let checked = made
+        .map_err(|e| format!("cannot make {}: {e}", tmp.display()))
+        .and_then(|()| {
+            [&release, &project]
+                .into_iter()
+                .try_for_each(|dir| std::fs::create_dir(dir).map_err(|e| format!("cannot make {}: {e}", dir.display())))
+        })
+        .and_then(|()| unpack(tarball, &release))
+        .and_then(|()| check_help(&release))
+        .and_then(|()| check_fixture_project(&release, &project));
+    if let Err(e) = std::fs::remove_dir_all(&tmp) {
+        eprintln!("xtask smoke-release: cannot remove {}: {e}", tmp.display());
     }
-    let rust = reports.pop().ok_or("no report of gate")?;
-    let python = reports.pop().ok_or("no report of gate.py")?;
-    Ok((python, rust))
+    checked
 }
 
-/// The path of the gate-rust helper, with which gate.py reads Rust, built from the workspace's gate-rust/ with `cargo`:
-/// a debug build, wherever CARGO_TARGET_DIR puts it, as tests/test_gate.py's gate_rust builds it. Errs when it does
-/// not build.
-fn gate_rust(workspace: &Path, cargo: &OsStr) -> Result<PathBuf, String> {
-    let built = Command::new(cargo)
-        .args(["build", "--locked", "--quiet", "--message-format=json", "--manifest-path"])
-        .arg(workspace.join("gate-rust/Cargo.toml"))
-        .output()
-        .map_err(|e| format!("cannot run cargo to build the gate-rust helper: {e}"))?;
-    if !built.status.success() {
-        let why = String::from_utf8_lossy(&built.stderr);
-        return Err(format!("cargo could not build the gate-rust helper: {why}"));
+/// The finished run of `command`, its output captured, whatever its exit status; errs when it cannot start, naming
+/// it as `what`.
+fn run(command: &mut Command, what: &str) -> Result<Output, String> {
+    command.output().map_err(|e| format!("cannot start {what}: {e}"))
+}
+
+/// What a finished process said: its standard error, or its standard output when that is empty, trimmed.
+fn said(done: &Output) -> String {
+    let stream = if done.stderr.is_empty() { &done.stdout } else { &done.stderr };
+    String::from_utf8_lossy(stream).trim().to_string()
+}
+
+/// Unpacks `tarball` into the directory `release`.
+fn unpack(tarball: &Path, release: &Path) -> Result<(), String> {
+    let done = run(Command::new("tar").arg("-xzf").arg(tarball).arg("-C").arg(release), "tar")?;
+    match done.status.success() {
+        true => Ok(()),
+        false => Err(format!("cannot unpack {}: {}", tarball.display(), said(&done))),
     }
-    // The executable's path from cargo's own report, wherever CARGO_TARGET_DIR puts it.
-    let messages = built.stdout.split(|&b| b == b'\n').filter_map(|line| serde_json::from_slice::<Value>(line).ok());
-    let mut executables = messages
-        .filter(|m| m["reason"] == "compiler-artifact")
-        .filter_map(|m| m["executable"].as_str().map(PathBuf::from));
-    executables.next().ok_or_else(|| "cargo built no gate-rust helper executable".into())
+}
+
+/// Errs unless the gate of the release unpacked at `release` answers `--help` with exit status 0.
+fn check_help(release: &Path) -> Result<(), String> {
+    let done = run(Command::new(release.join("gate")).arg("--help"), "`gate --help`")?;
+    match done.status.success() {
+        true => Ok(()),
+        false => Err(format!("`gate --help` ended with {}: {}", done.status, said(&done))),
+    }
+}
+
+/// Makes `project`, an empty directory, a git repository whose one commit holds [`GATE_TOML`], and whose working
+/// tree adds tangled.rs, [`TANGLED_RS`]; gives back that commit.
+fn make_fixture_project(project: &Path) -> Result<String, String> {
+    let git = |args: &[&str]| -> Result<String, String> {
+        let mut git = Command::new("git");
+        git.current_dir(project).args(["-c", "user.name=smoke", "-c", "user.email=smoke@localhost"]);
+        let done = run(git.args(["-c", "commit.gpgSign=false"]).args(args), "git")?;
+        match done.status.success() {
+            true => Ok(String::from_utf8_lossy(&done.stdout).trim().to_string()),
+            false => Err(format!("`git {}` failed in the fixture project: {}", args.join(" "), said(&done))),
+        }
+    };
+    let put = |name: &str, text: &str| {
+        std::fs::write(project.join(name), text).map_err(|e| format!("cannot write the fixture project's {name}: {e}"))
+    };
+    git(&["init", "--quiet", "--initial-branch=main"])?;
+    put("gate.toml", GATE_TOML)?;
+    put(".gitignore", "junit.xml\nquality*\n")?;
+    git(&["add", "."])?;
+    git(&["commit", "--quiet", "-m", "base"])?;
+    put("tangled.rs", TANGLED_RS)?;
+    git(&["add", "tangled.rs"])?;
+    git(&["rev-parse", "HEAD"])
+}
+
+/// Errs unless the gate of the release at `release` judges [`make_fixture_project`]'s change, made in `project`,
+/// GATE: ERROR for tangled.rs's function alone, with no failing test read from the test command's report, and
+/// writes a quality.json that the release's schema accepts.
+fn check_fixture_project(release: &Path, project: &Path) -> Result<(), String> {
+    let base = make_fixture_project(project)?;
+    let mut gate = Command::new(release.join("gate"));
+    let done = run(gate.current_dir(project).args(["--base", &base, "--out", "quality.md"]), "the release's gate")?;
+    let said = said(&done);
+    if done.status.code() != Some(1) {
+        return Err(format!("the fixture project was judged with {}, not 1 for GATE: ERROR: {said}", done.status));
+    }
+    let read = |path: &Path, what: &str| -> Result<Value, String> {
+        let text =
+            std::fs::read_to_string(path).map_err(|e| format!("cannot read {what}: {e}; the gate said: {said}"))?;
+        serde_json::from_str(&text).map_err(|e| format!("{what} is not JSON: {e}"))
+    };
+    let report = read(&project.join("quality.json"), "the fixture project's quality.json")?;
+    let schema = read(&release.join("schema/quality-v1.json"), "the release's schema/quality-v1.json")?;
+    let validator = jsonschema::validator_for(&schema)
+        .map_err(|e| format!("the release's schema/quality-v1.json is no JSON Schema: {e}"))?;
+    validator
+        .validate(&report)
+        .map_err(|e| format!("the fixture project's quality.json does not follow schema/quality-v1.json: {e}"))?;
+    // Of each finding, what places it; its message is the check's to word.
+    let placed = |f: &Value| json!({"path": f["path"], "line": f["line"], "check": f["check"]});
+    let findings = report["findings"].as_array();
+    let found = Value::Array(findings.map(|all| all.iter().map(placed).collect()).unwrap_or_default());
+    let expected = json!([{"path": "tangled.rs", "line": 1, "check": "cognitive-complexity"}]);
+    if found != expected {
+        return Err(format!("the fixture project's findings are {found}, not {expected}"));
+    }
+    let failing = &report["failing_tests"];
+    if *failing != json!([]) {
+        return Err(format!("the fixture project's test report was not read: failing_tests is {failing}, not []"));
+    }
+    let conditions = &report["failed_conditions"];
+    if *conditions != json!([EXPECTED_CONDITION]) {
+        return Err(format!("the fixture project's failed conditions are {conditions}, not [\"{EXPECTED_CONDITION}\"]"));
+    }
+    Ok(())
 }

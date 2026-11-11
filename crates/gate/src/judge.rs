@@ -1,5 +1,5 @@
-//! The gate's judgement of one change: what it reads of the change, and the report it gives on it, as gate.py's
-//! judge_change does: the linters, and the checks beside them, over Python and Rust.
+//! The gate's judgement of one change: what it reads of the change, and the report it gives on it, from the linters
+//! and the checks beside them, over Python and Rust.
 
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
@@ -16,7 +16,7 @@ use crate::passes_at_base::passes_at_base;
 use crate::process::tool_env;
 use crate::python_mutants::Mutmut;
 use crate::report::{Finding, QualityReport};
-use crate::settings::{tree_s_own, Settings};
+use crate::settings::{JudgedBy, Settings};
 use crate::suppressions::{added_suppressions, stray_line_end_condition, stray_line_ends};
 use crate::test_commands::test_results;
 use crate::text::{self, series};
@@ -33,9 +33,7 @@ const INSIDE_MUTMUT_STATE: &str = ":(top,literal)mutants";
 /// What the command line names for the judgement beside the base; each left empty means the tree's own, or none.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Given {
-    /// The pyproject.toml whose rules the linters take, as given: absolute or relative to the current directory.
-    pub rules: Option<PathBuf>,
-    /// The gate.toml to read settings from, as [`Settings::for_tree`] takes it.
+    /// `--config`: the gate.toml to judge by, as [`JudgedBy::for_tree`] takes it.
     pub settings: Option<PathBuf>,
     /// JUnit and coverage reports of the tree's tests, which replace gate.toml's `[[test]]` commands when either is
     /// given (test_commands::test_results).
@@ -124,10 +122,10 @@ pub fn under_mutmut_state(path: &OsStr) -> bool {
 
 /// The gate's report on the change from `base` to the working tree of the git repository at `cwd`.
 ///
-/// The change is [`Change::from_tree`]'s, read by the settings [`Settings::for_tree`] gives for `given.settings`
-/// and the rules file. Runs each of [`LINTERS`] whose files the repository tracks outside [`MUTMUT_STATE`] over
-/// those files, with the rules of the pyproject.toml at `given.rules`, or the tree's own, and lists the findings on
-/// lines the change added and the lineless ones on files it touched.
+/// The change is [`Change::from_tree`]'s, read by the settings [`JudgedBy::for_tree`] gives for `given.settings`.
+/// Runs each of [`LINTERS`] whose files the repository tracks outside [`MUTMUT_STATE`] over those files, with the
+/// rules that go with those settings, and lists the findings on lines the change added and the lineless ones on
+/// files it touched.
 ///
 /// The gate is ERROR when the change adds or edits files under [`MUTMUT_STATE`], which is always mutmut's scratch
 /// state committed by accident; when there is such a linter finding; when a linter is missing, fails or prints
@@ -138,8 +136,8 @@ pub fn under_mutmut_state(path: &OsStr) -> bool {
 /// (coverage::NewCoverage::condition). The tests are those test_commands::test_results gives, run before the
 /// linters. Suppressions the change added are listed, not counted against it.
 ///
-/// Errs when it cannot judge: `cwd` is not in a git work tree, `base` names no commit, there is no rules file, the
-/// settings cannot be read, a test or coverage report cannot be read, a report a test command names cannot be
+/// Errs when it cannot judge: `cwd` is not in a git work tree, `base` names no commit, the settings cannot be read
+/// or the rules are no file, a test or coverage report cannot be read, a report a test command names cannot be
 /// removed before it runs, a file the change adds lines to cannot be read, or a source file the parser checks read
 /// cannot be shown at the base or read in the working tree. Ctrl-C during a process it runs ends the gate
 /// (process::run).
@@ -154,14 +152,9 @@ pub fn judge_change(cwd: &Path, base: &str, given: &Given) -> Result<QualityRepo
         return Err(Unjudged(format!("{base} names no commit in {}", text::path(root.as_os_str()))));
     }
     let base_sha = text::lossless(&first_line(done.stdout));
-    let rules = match &given.rules {
-        Some(rules) => crate::paths::abs_path(rules),
-        None => root.join("pyproject.toml"),
-    };
-    if !rules.is_file() {
-        return Err(Unjudged(format!("no rules: {} is not a file", text::path(rules.as_os_str()))));
-    }
-    let (settings, settings_from) = Settings::for_tree(&root, &rules, given.settings.as_deref())?;
+    let JudgedBy { settings, settings_from, rules, rules_from } =
+        JudgedBy::for_tree(&root, given.settings.as_deref())?;
+    let rules = rules.as_deref();
     let change = Change::from_tree(&root, &base_sha, settings, given.python.as_deref())?;
     let changed = &change.changed;
     let tests = test_results(&root, &change.settings.test_commands, &given.tests, &given.coverage)?;
@@ -173,7 +166,7 @@ pub fn judge_change(cwd: &Path, base: &str, given: &Given) -> Result<QualityRepo
     for linter in &LINTERS {
         let files = linter.files(&tracked, &change.settings);
         if !files.is_empty() {
-            let (found, problems) = linter.run(&root, &rules, &files, &tracked);
+            let (found, problems) = linter.run(&root, rules, &files, &tracked);
             findings.extend(found);
             conditions.extend(problems);
         }
@@ -193,7 +186,7 @@ pub fn judge_change(cwd: &Path, base: &str, given: &Given) -> Result<QualityRepo
         given.base_run_budget.unwrap_or(change.settings.base_run_budget),
     );
     let test_contexts = given.test_contexts.as_deref().map(crate::paths::abs_path);
-    let mutmut = Mutmut { rules: &rules, test_contexts: test_contexts.as_deref() };
+    let mutmut = Mutmut { rules, test_contexts: test_contexts.as_deref() };
     let to_weigh = judge_checks(&change, &mutmut, budgets, &mut conditions, &mut issues)?;
 
     conditions.extend(tests.problems);
@@ -215,22 +208,16 @@ pub fn judge_change(cwd: &Path, base: &str, given: &Given) -> Result<QualityRepo
         suppressions: added_suppressions(&root, changed)?,
         edited_config: edited_config(&change.diff, changed, &change.settings),
         clippy_config: clippy_config_files(&change.diff, changed, cargo_home_in(&root, &tool_env()).as_deref()),
-        rules_from: match &given.rules {
-            Some(given) if !tree_s_own(&root, &rules, "pyproject.toml") => {
-                Some(format!("`{}`", text::path(given.as_os_str())))
-            }
-            _ => None,
-        },
+        rules_from,
         settings_from,
         config_notes: change.settings.build_config.clone(),
     })
 }
 
-/// Runs the checks beside the linters on `change`, in the order gate.py's `gate_checks` runs them: test-integrity,
-/// cognitive-complexity, flaky-tests, surviving-mutants and passes-at-base, the last two's runs within the seconds
-/// `budgets` gives, (mutation, base run), mutmut set up as `mutmut` says, and vague-names. Appends to `conditions`
-/// a failed condition for each check with findings of severity "error", in that order, and to `issues` those
-/// findings; returns the others, to weigh.
+/// Runs the checks beside the linters on `change`, in this order: test-integrity, cognitive-complexity, flaky-tests,
+/// surviving-mutants and passes-at-base, the last two's runs within the seconds `budgets` gives, (mutation, base
+/// run), mutmut set up as `mutmut` says, and vague-names. Appends to `conditions` a failed condition for each check
+/// with findings of severity "error", in that order, and to `issues` those findings; returns the others, to weigh.
 /// Errs as [`Sources::read`] does, having appended nothing.
 fn judge_checks(
     change: &Change,
@@ -261,7 +248,8 @@ fn judge_checks(
 }
 
 /// `findings` of the check named `check`, as its find gives them (copies::finding), with the check's name before
-/// each rule: gate.py's `GateCheck.judged`, for a check whose findings never fail the gate.
+/// each rule, or as the whole rule of a finding that has none of its own. Their severity stays "warning": this is
+/// for a check whose findings never fail the gate.
 fn named(check: &str, findings: Vec<Finding>) -> Vec<Finding> {
     let rule = |own: String| if own.is_empty() { check.to_string() } else { format!("{check} {own}") };
     findings.into_iter().map(|f| Finding { rule: rule(f.rule), ..f }).collect()

@@ -23,8 +23,7 @@ fn pin(version: &str) -> String {
 const GATE_TOML: &str = "[[test]]\nname = \"t\"\ncommand = [\"true\"]\n";
 
 /// A released gate, as [`fetching`] unpacks it. It refuses a gate.toml that sets `new_key`, as a gate refuses a key
-/// it does not know, unless the pin it was fetched by names 0.8.0; and, fetched by a pin of 0.6.0, a tree without a
-/// pyproject.toml, as 0.6.0 does, which takes the linters' rules from the tree's own. Asked to write a quality file, it writes its
+/// it does not know, unless the pin it was fetched by names 0.8.0. Asked to write a quality file, it writes its
 /// arguments, a line each, to GATE_ARGS and the gate.toml it judges by to GATE_SETTINGS, and exits FAKE_GATE_EXIT.
 const GATE_STUB: &str = r#"#!/bin/sh
 args=$(printf '%s\n' "$@")
@@ -36,10 +35,6 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
-if grep -q '^0\.6\.0 ' "$(dirname "$0")/pin" && [ ! -f pyproject.toml ]; then
-    echo "error: no rules: $PWD/pyproject.toml is not a file" >&2
-    exit 2
-fi
 if grep -q '^new_key' "$config" && ! grep -q '^0\.8\.0 ' "$(dirname "$0")/pin"; then
     echo "error: unknown field new_key" >&2
     exit 2
@@ -50,12 +45,12 @@ cp "$config" "$GATE_SETTINGS"
 exit "$FAKE_GATE_EXIT"
 "#;
 
-/// A ci/fetch-gate.sh that unpacks no download but [`GATE_STUB`], as the release's file `gate_name`, and the pin it
-/// was given beside it.
-fn fetching(gate_name: &str) -> String {
+/// A ci/fetch-gate.sh that unpacks no download but [`GATE_STUB`], as the release's `gate`, and the pin it was given
+/// beside it.
+fn fetching() -> String {
     format!(
-        "#!/bin/sh\nmkdir -p \"$2\"\ncp \"$1\" \"$2/pin\"\ncat > \"$2/{gate_name}\" <<'EOF'\n{GATE_STUB}EOF\n\
-         chmod +x \"$2/{gate_name}\"\ncut -d' ' -f1 \"$1\"\n"
+        "#!/bin/sh\nmkdir -p \"$2\"\ncp \"$1\" \"$2/pin\"\ncat > \"$2/gate\" <<'EOF'\n{GATE_STUB}EOF\n\
+         chmod +x \"$2/gate\"\ncut -d' ' -f1 \"$1\"\n"
     )
 }
 
@@ -166,7 +161,7 @@ fn the_release_is_fetched_by_the_judge_s_script_not_the_change_s() {
 #[test]
 fn the_gate_judges_by_the_judge_s_settings_and_its_verdict_is_the_script_s() {
     let repo = script_repo();
-    commit_judge(&repo, "0.7.0", &fetching("gate"));
+    commit_judge(&repo, "0.7.0", &fetching());
     repo.put("gate.toml", format!("# The change's own.\n{GATE_TOML}").as_bytes());
     let judged = run_gate(&repo, 1);
     assert_eq!(judged.status, Some(1), "{}", judged.stderr);
@@ -183,26 +178,11 @@ fn the_gate_judges_by_the_judge_s_settings_and_its_verdict_is_the_script_s() {
 }
 
 #[test]
-fn a_release_from_before_the_cutover_names_its_gate_for_its_platform() {
-    let repo = script_repo();
-    commit_judge(&repo, "0.6.0", &fetching("gate-linux-x86_64"));
-    repo.put("pyproject.toml", b"# The change's own rules, which 0.6.0 would take for want of the judge's.\n");
-    let judged = run_gate(&repo, 0);
-    assert_eq!(judged.status, Some(0), "{}", judged.stderr);
-    // 0.6.0 takes the rules from a --config that names a pyproject.toml, else from the tree's own.
-    let args = judged.gate_args.unwrap();
-    let rules = args.iter().position(|a| a.ends_with("/pyproject.toml")).expect("the judge's rules given");
-    assert_eq!(args[rules - 1], "--config");
-    assert!(!Path::new(&args[rules]).starts_with(&repo.repo), "{}", args[rules]);
-    assert_eq!(judged.settings.as_deref(), Some(GATE_TOML));
-}
-
-#[test]
 fn a_change_whose_gate_toml_its_pinned_release_refuses_is_not_judged() {
     // Merged, it would be read by that release's gate, which refuses a key it does not know: every later change, the
     // one raising the pin included, would then go unjudged.
     let repo = script_repo();
-    commit_judge(&repo, "0.7.0", &fetching("gate"));
+    commit_judge(&repo, "0.7.0", &fetching());
     repo.put("gate.toml", format!("new_key = 1\n{GATE_TOML}").as_bytes());
     let judged = run_gate(&repo, 0);
     assert_eq!(judged.status, Some(2));
@@ -216,7 +196,7 @@ fn a_change_whose_gate_toml_its_pinned_release_refuses_is_not_judged() {
 #[test]
 fn a_change_that_raises_the_pin_may_use_what_the_new_release_reads() {
     let repo = script_repo();
-    commit_judge(&repo, "0.7.0", &fetching("gate"));
+    commit_judge(&repo, "0.7.0", &fetching());
     repo.put("gate.toml", format!("new_key = 1\n{GATE_TOML}").as_bytes());
     repo.put("ci/gate.pin", pin("0.8.0").as_bytes());
     let judged = run_gate(&repo, 0);

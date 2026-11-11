@@ -518,15 +518,6 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   - F12, `crates/gate/src/glob.rs`: "`fnmatch` arrives as an `across_slashes` flag through `translate_name` and
     `bracket` with two added match arms, the bolted-on flag the user's CLAUDE.md design rule names; it also compiles a
     Regex on each call." Closes with fnmatch's translation a function of its own, compiled once a pattern.
-- **`scripts/gate` still knows release 0.6.0's tarball and how its gate takes rules.** `ci/gate.pin` may still name
-  0.6.0, the one release before the cutover that ships the Rust gate, so `scripts/gate` keeps three things for it:
-  `released_gate` falls back to `gate-linux-x86_64` where a release has no `gate`, since 0.6.0 names it for its
-  platform; a 0.6.0 gate is also given `--config` the judge's `pyproject.toml`, since it takes its rules from that or
-  else from the change's own; and the repository in which the change's gate.toml is checked holds an empty
-  `pyproject.toml`, since 0.6.0 refuses a tree without one. Found with gate-standalone/18 (2026-11-11; the last two
-  after cross-review 17). Closes once `main`'s `ci/gate.pin` is 0.7.0 or later and no rollback to 0.6.0 is wanted,
-  with the three deleted, and `a_release_from_before_the_cutover_names_its_gate_for_its_platform`
-  (`crates/gate/tests/repo_scripts.rs`) and the stub's 0.6.0 refusal with them.
 - **A linter learns where it runs from a flag.** As cross-review 17 put it (R1-6): "Five entries and a test carry
   `apart: false` so that pymarkdown can take a second path in `run`": `Kind::Lines`'s `apart`
   (`crates/gate/src/linters.rs`). Closes with the linter's command saying where it runs, should a second linter need

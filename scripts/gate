@@ -107,22 +107,10 @@ git archive "$judge" "${judge_paths[@]}" | tar -x -C "$judge_dir"
 version=$("$judge_dir/ci/fetch-gate.sh" "$judge_dir/ci/gate.pin" "$judge_dir/release")
 echo "gate: judging with octoflow-gate $version, the release $judge_rev's ci/gate.pin pins" >&2
 
-# released_gate DIR: the path of the gate in the release unpacked into DIR. 0.6.0, the one
-# release before the cutover that ships it, names it for its platform.
-released_gate() {
-	if [[ -e $1/gate ]]; then
-		echo "$1/gate"
-	else
-		echo "$1/gate-linux-x86_64"
-	fi
-}
-gate=$(released_gate "$judge_dir/release")
+gate=$judge_dir/release/gate
 # Given the judge's gate.toml, the gate takes its rules from the pyproject.toml beside it, never
-# from the change's own; 0.6.0 takes them from a --config that names a pyproject.toml, and
-# else from the tree's own, the change's.
-gate_args=(--base "$base")
-[[ $gate == */gate-linux-x86_64 ]] && gate_args+=(--config "$judge_dir/pyproject.toml")
-gate_args+=(--config "$judge_dir/gate.toml")
+# from the change's own.
+gate_args=(--base "$base" --config "$judge_dir/gate.toml")
 
 # Once merged, the change's gate.toml is read by the gate the change pins, which refuses a key
 # it does not know: a gate.toml ahead of its pin would leave every later change unjudgeable,
@@ -138,16 +126,12 @@ elif cmp -s ci/gate.pin "$judge_dir/ci/gate.pin"; then
 	next_gate=$gate
 else
 	"$judge_dir/ci/fetch-gate.sh" ci/gate.pin "$judge_dir/next-release" >/dev/null
-	next_gate=$(released_gate "$judge_dir/next-release")
+	next_gate=$judge_dir/next-release/gate
 fi
 empty=$judge_dir/empty
 git init --quiet --initial-branch=main "$empty"
-# 0.6.0 takes the linters' rules from the tree's own pyproject.toml and refuses a tree without
-# one; later releases take them from beside --config's gate.toml and leave this one unread.
-: >"$empty/pyproject.toml"
-git -C "$empty" add pyproject.toml
 git -C "$empty" -c user.name=gate -c user.email=gate@localhost -c commit.gpgSign=false \
-	commit --quiet -m empty
+	commit --quiet --allow-empty -m empty
 echo '<testsuites/>' >"$judge_dir/no-tests.xml"
 next_gate_args=(--base HEAD --config "$top/gate.toml" --tests "$judge_dir/no-tests.xml")
 if ! (cd "$empty" && "$next_gate" "${next_gate_args[@]}" >/dev/null); then

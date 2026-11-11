@@ -23,7 +23,8 @@ fn pin(version: &str) -> String {
 const GATE_TOML: &str = "[[test]]\nname = \"t\"\ncommand = [\"true\"]\n";
 
 /// A released gate, as [`fetching`] unpacks it. It refuses a gate.toml that sets `new_key`, as a gate refuses a key
-/// it does not know, unless the pin it was fetched by names 0.8.0. Asked to write a quality file, it writes its
+/// it does not know, unless the pin it was fetched by names 0.8.0; and, fetched by a pin of 0.6.0, a tree without a
+/// pyproject.toml, as 0.6.0 does, which takes the linters' rules from the tree's own. Asked to write a quality file, it writes its
 /// arguments, a line each, to GATE_ARGS and the gate.toml it judges by to GATE_SETTINGS, and exits FAKE_GATE_EXIT.
 const GATE_STUB: &str = r#"#!/bin/sh
 args=$(printf '%s\n' "$@")
@@ -35,6 +36,10 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+if grep -q '^0\.6\.0 ' "$(dirname "$0")/pin" && [ ! -f pyproject.toml ]; then
+    echo "error: no rules: $PWD/pyproject.toml is not a file" >&2
+    exit 2
+fi
 if grep -q '^new_key' "$config" && ! grep -q '^0\.8\.0 ' "$(dirname "$0")/pin"; then
     echo "error: unknown field new_key" >&2
     exit 2

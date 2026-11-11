@@ -134,8 +134,12 @@ else
 fi
 empty=$judge_dir/empty
 git init --quiet --initial-branch=main "$empty"
+# 0.6.0 takes the linters' rules from the tree's own pyproject.toml and refuses a tree without
+# one; later releases take them from beside --config's gate.toml and leave this one unread.
+: >"$empty/pyproject.toml"
+git -C "$empty" add pyproject.toml
 git -C "$empty" -c user.name=gate -c user.email=gate@localhost -c commit.gpgSign=false \
-	commit --quiet --allow-empty -m empty
+	commit --quiet -m empty
 echo '<testsuites/>' >"$judge_dir/no-tests.xml"
 next_gate_args=(--base HEAD --config "$top/gate.toml" --tests "$judge_dir/no-tests.xml")
 if ! (cd "$empty" && "$next_gate" "${next_gate_args[@]}" >/dev/null); then

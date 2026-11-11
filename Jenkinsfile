@@ -141,7 +141,10 @@ pipeline {
 
     post {
         always {
-            archiveArtifacts artifacts: 'quality.md, quality.json', allowEmptyArchive: true
+            // quality-rust.* and quality-diff.txt are the shadow run's (scripts/gate), there once the pinned
+            // release ships the Rust gate.
+            archiveArtifacts allowEmptyArchive: true,
+                             artifacts: 'quality.md, quality.json, quality-rust.md, quality-rust.json, quality-diff.txt'
             // The JUnit reports the gate's test commands wrote (gate.toml's [[test]]), shown as the
             // build's test results and never judged: neither the build's result nor a GitHub check
             // (skipPublishingChecks) comes from them, so a failing test leaves the result to the

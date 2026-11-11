@@ -8,6 +8,20 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
 
 ## Open issues
 
+- **Until the cutover (gate-standalone/18) merges, main runs one test command and says it runs three.** gate.toml
+  keeps only `cargo-nextest-gate`, the `crates/` workspace's tests (the cutover is judged by main's gate.toml and
+  deletes what the other two ran), so in that window:
+  - a change to `gate.py`, `gate-rust/` or `tests/*.py` is judged without those tests' coverage, and `scripts/gate`
+    still passes `--test-contexts .coverage`, which nothing writes, so mutmut is not narrowed (a `not-narrowed`
+    finding, and up to its whole budget);
+  - `docs/quality-gate.md` (the two `[[test]]` commands, `gate-rust/`'s command and report, `.coverage`),
+    `ci/install-tools.sh`, `ci/nextest.toml`, `tests/conftest.py` (the `ci` profile no command selects), `.gitignore`'s
+    test-report block, this file's Jenkinsfile and coverage-context entries, `scripts/gate`'s `COVERAGE_FILE` comment
+    and the Jenkinsfile's `junit` paths still describe the commands removed;
+  - the name `cargo-nextest-gate` keeps a suffix that no longer tells it from another command.
+  Found by cross-review 16 (R1-1 to R1-6). Closes when the cutover merges: it rewrites or deletes each of these and
+  drops this entry.
+
 - **`scripts/gate` checks a change's `gate.toml` through a private class of the released `gate.py`.** It loads the
   release the change pins and calls `GateSettings.read`, since no release has a public way to check settings; a
   release that renames or reshapes it makes every change that pins it fail the check (exit 2). Chosen by the user
@@ -561,6 +575,25 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   pyproject.toml as the link." And `own_pyproject` "reads what the tree's link names with `std::fs::read`, whole
   and whatever it is (a FIFO, a device)". Not seen in a project. Closes with every copy the Python checks make
   holding the configuration files pytest reads as regular files, read as the rules' own file is.
+- **`scripts/gate`'s shadow run reads gate.toml with a reader of its own.** As cross-review 15 put it (finding 8,
+  2026-11-10): "A second inline Python program reads gate.toml with `tomllib` and its own knowledge of `test`,
+  `junit` and `coverage`, where [the check of the change's gate.toml] already load[s] the release's gate.py and
+  call[s] `GateSettings.read`: the `[[test]]` format now has a third reader, beside gate.py and
+  `crates/gate/src/settings.rs`." Left: the released gate.py has no public reader, and its `GateSettings` fields
+  are no contract. Closes with the cutover (gate-standalone/18), which removes `shadow_run`.
+- **A Rust gate that hangs in a shadow run takes the build past its timeout.** As cross-review 15 put it (finding
+  1, 2026-11-10): "The shadow run has no time limit and runs inside the Gate stage, under the build's
+  `timeout(time: 60, unit: 'MINUTES')`. [...] A Rust gate that hangs, or that repeats clippy, flaky-tests,
+  passes-at-base and surviving-mutants slowly enough after gate.py did them, takes the build past the timeout: the
+  build is aborted, the pull request's status fails and automerge does not merge, though gate.py said GATE: OK.
+  Nothing bounds the run (a `timeout` around `shadow-run.sh`, say)." A limit in `ci/shadow-run.sh` (`timeout`,
+  with the gate's standard error still coming through as printed and signals still reaching the gate) was written
+  and taken out again, the user's choice of 2026-11-11: over rounds 2 to 5 the review found each form of it wrong
+  for some signal, and the last for coreutils 9.10 on, whose `timeout` "honors ignored signals and will not
+  propagate them". Under those lies that the Rust gate stops what it started on SIGINT alone (`catch_interrupt`,
+  `crates/gate/src/process.rs`), so one stopped with SIGTERM leaves its tools running. Closes with the cutover
+  (gate-standalone/18), which removes the shadow run, or with a Rust gate that stops what it started on SIGTERM
+  too, which a plain `timeout` in the script could then bound.
 - **The Rust gate's Python checks: six design nits of cross-review 14 (2026-11-10), in its words.**
   - F7, `crates/gate/src/python_mutants.rs`: "`mark_for_mutmut` reads, parses and rewrites every regular `*.py` in
     the copy, though mutmut makes mutants only under `[tool.mutmut]` source_paths, which `outside_mutmut` already

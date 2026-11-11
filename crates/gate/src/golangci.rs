@@ -88,13 +88,13 @@ fn lint_module(name: &str, root: &Path, manifest: &Path, tracked: &Tracked) -> (
     // last line, after anything a linter printed.
     let report = done.stdout.split(|&b| b == b'\n').rev().find_map(|line| serde_json::from_slice::<Value>(line).ok());
     let issues = report.as_ref().and_then(|r| r.get("Issues")).and_then(Value::as_array);
-    let (status, issues) = match (done.status, issues) {
+    let (exit, issues) = match (done.status, issues) {
         (0 | 1, Some(issues)) => (done.status, issues),
         (0, None) if done.stdout.trim_ascii().is_empty() => return (vec![], None),
         (NO_GO_FILES, _) => return (vec![], None),
-        (status, _) => {
+        (exit, _) => {
             let said = done.said();
-            return (vec![], Some(format!("`{name}` failed with exit status {status} in `{named}`: {said}")));
+            return (vec![], Some(format!("`{name}` failed with exit status {exit} in `{named}`: {said}")));
         }
     };
     let (mut lints, mut compile_errors) = (vec![], vec![]);
@@ -110,7 +110,7 @@ fn lint_module(name: &str, root: &Path, manifest: &Path, tracked: &Tracked) -> (
         let what = format!("`{at}` {}: {}", error.rule, error.message);
         return (lints, Some(format!("`{name}` could not compile the module of `{named}`: {what}")));
     }
-    if status == 1 && lints.is_empty() {
+    if exit == 1 && lints.is_empty() {
         let said = done.said();
         return (vec![], Some(format!("`{name}` reported findings, but none the gate could read: {said}")));
     }

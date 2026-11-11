@@ -1,7 +1,7 @@
 //! The surviving-mutants check's Go half: gremlins (<https://gremlins.dev>) mutates the Go functions a change edits
 //! and runs each mutant against the tests of its package. The check itself, and its Rust half, are mutants.rs.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::PermissionsExt;
@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::Instant;
 
-use checks::{ChangedFile, Finding};
+use checks::{ChangedFile, Finding, Side};
 use regex::bytes::Regex;
 
 use crate::copies::{copy_tracked, finding, in_scratch_directory, Budget};
@@ -60,45 +60,53 @@ pub(crate) struct Edited {
 pub(crate) fn edited_functions(go: &GoChange) -> (Vec<Edited>, Vec<Finding>) {
     let removals = removal_points(&go.change.diff);
     let (mut edited, mut unread) = (vec![], vec![]);
+    let none = BTreeSet::new();
     for file in &go.files {
         let Some(after) = file.after.as_ref().filter(|side| !side.among_tests && go.is_code(&side.path)) else {
             continue;
         };
-        let removed = removals.get(&after.path).cloned().unwrap_or_default();
-        if file.added.is_empty() && removed.is_empty() {
-            continue;
-        }
-        let source = match &after.source {
-            Ok(source) => source,
-            Err(unreadable) => {
-                let message = format!("{}, so its functions were not mutation-tested.", unreadable.why);
-                unread.push(finding(Some(&after.path), unreadable.line, "not-run", message));
-                continue;
-            }
-        };
-        let touched: Vec<(usize, &model::Function)> = (source.functions.iter().enumerate())
-            .filter(|(_, f)| {
-                let added = file.added.range(f.line..=f.lines.last).next().is_some();
-                added || removed.iter().any(|&n| f.line <= n && n < f.lines.last)
-            })
-            .collect();
-        // A body unchanged is the rare case, and only it needs the declarations, which are read anew.
-        let base = file.before.as_ref().and_then(|side| side.source.as_ref().ok());
-        let same_body = |f: &model::Function| {
-            base.is_some_and(|base| base.functions.iter().any(|b| b.name == f.name && b.body == f.body))
-        };
-        let unchanged = match touched.iter().any(|(_, f)| same_body(f)) {
-            true => unchanged_declarations(go.change, file),
-            false => vec![],
-        };
-        for (k, f) in touched {
-            if !unchanged.get(k).copied().unwrap_or(false) {
-                let (line, last) = (f.line, f.lines.last);
-                edited.push(Edited { path: after.path.clone(), name: f.name.clone(), line, last });
-            }
+        let removed = removals.get(&after.path).unwrap_or(&none);
+        match edited_in(go.change, file, after, removed) {
+            Ok(functions) => edited.extend(functions),
+            Err(not_run) => unread.push(not_run),
         }
     }
     (edited, unread)
+}
+
+/// The functions of `file`, whose working-tree side is `after`, that the change edits, as [`edited_functions`] counts
+/// them, in line order; `removed` is the lines of `after` that lines removed from the base lay between, as
+/// [`removal_points`] gives them. Errs with the `not-run` finding for `after` where it cannot be read as Go.
+fn edited_in(
+    change: &Change,
+    file: &ChangedFile,
+    after: &Side,
+    removed: &BTreeSet<u32>,
+) -> Result<Vec<Edited>, Finding> {
+    if file.added.is_empty() && removed.is_empty() {
+        return Ok(vec![]);
+    }
+    let source = after.source.as_ref().map_err(|unreadable| {
+        let message = format!("{}, so its functions were not mutation-tested.", unreadable.why);
+        finding(Some(&after.path), unreadable.line, "not-run", message)
+    })?;
+    let touched: Vec<(usize, &model::Function)> = (source.functions.iter().enumerate())
+        .filter(|(_, f)| {
+            let added = file.added.range(f.line..=f.lines.last).next().is_some();
+            added || removed.iter().any(|&n| f.line <= n && n < f.lines.last)
+        })
+        .collect();
+    // A body unchanged is the rare case, and only it needs the declarations, which are read anew.
+    let base = file.before.as_ref().and_then(|side| side.source.as_ref().ok());
+    let same_body = |f: &model::Function| {
+        base.is_some_and(|base| base.functions.iter().any(|b| b.name == f.name && b.body == f.body))
+    };
+    let unchanged =
+        if touched.iter().any(|(_, f)| same_body(f)) { unchanged_declarations(change, file) } else { vec![] };
+    let edited = touched.into_iter().filter(|(k, _)| !unchanged.get(*k).copied().unwrap_or(false));
+    Ok(edited
+        .map(|(_, f)| Edited { path: after.path.clone(), name: f.name.clone(), line: f.line, last: f.lines.last })
+        .collect())
 }
 
 /// For each function of `file`'s working-tree side, in the order lang_go::read gives them, whether its base side has
@@ -430,8 +438,8 @@ mod tests {
                         \x20      LIVED CONDITIONALS_BOUNDARY at sub/a b.go:13:11\n\
                         \x20NOT COVERED INVERT_NEGATIVES at calc.go:20:2\n\
                         Killed: 0, Lived: 1, Not covered: 1\n";
-        let mutant = |status: &str, kind: &str, path: &str, line, column| Mutant {
-            status: status.into(),
+        let mutant = |outcome: &str, kind: &str, path: &str, line, column| Mutant {
+            status: outcome.into(),
             kind: kind.into(),
             path: path.into(),
             line,

@@ -39,7 +39,7 @@
 # and how that differs from gate.py's report (the release's shadow-run.sh says what each
 # holds). Jenkins archives them for a person to read. It never changes the exit status: when
 # gate.py gave no verdict, or could not judge a test command, it does not run; when it fails
-# that is a line on standard error; and shadow-run.sh stops a Rust gate that takes too long.
+# that is a line on standard error.
 #
 # In a Jenkins build (WORKSPACE set), crates are fetched into the workspace (CARGO_HOME), so
 # no build compiles sources an earlier one left, and temporary files go under WORKSPACE_TMP

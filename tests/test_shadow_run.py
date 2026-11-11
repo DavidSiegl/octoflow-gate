@@ -3,8 +3,8 @@
 A stub stands in for the Rust gate: it records its arguments and writes the reports the test gives it.
 """
 
+import contextlib
 import os
-import re
 import shutil
 import signal
 import subprocess
@@ -58,16 +58,6 @@ class TestShadowRun(unittest.TestCase):
             f.write(text)
         os.chmod(gate, 0o755)  # noqa: S103
 
-    def shorten(self, constant, to):
-        """Give the release's shadow-run.sh `to` as its GATE_MINUTES, KILL_AFTER or SAID_WAIT, whichever `constant`
-        names."""
-        with open(self.script) as f:
-            text = f.read()
-        shortened = re.sub(rf"^{constant}=\d+$", f"{constant}={to}", text, flags=re.MULTILINE)
-        self.assertNotEqual(shortened, text)
-        with open(self.script, "w") as f:
-            f.write(shortened)
-
     def start_in_a_session(self, sigint):
         """Start shadow-run.sh on the reports' directory in a session of its own, so that a signal to its process
         group is what a terminal's would be, with sigint as what SIGINT does to it and self.scratch, a new directory,
@@ -77,11 +67,16 @@ class TestShadowRun(unittest.TestCase):
                                env={**os.environ, "GATE_LOG": self.log, "TMPDIR": self.scratch},
                                preexec_fn=lambda: signal.signal(signal.SIGINT, sigint),  # noqa: PLW1509
                                start_new_session=True, stderr=subprocess.DEVNULL)
-        # timeout and the gate are in a process group of their own, in the script's session.
         self.addCleanup(run.wait)
-        self.addCleanup(subprocess.run, ["pkill", "-KILL", "-s", str(run.pid)], check=False)
+        self.addCleanup(self.kill_group, run.pid)
         self.wait_for(lambda: os.path.exists(self.log), run)
         return run
+
+    @staticmethod
+    def kill_group(pgid):
+        """Kill what is left of the process group pgid, if anything."""
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(pgid, signal.SIGKILL)
 
     def wait_for(self, happened, run=None):
         """Wait until happened() is true, failing after 10 seconds, or when the process run has ended before."""
@@ -107,15 +102,12 @@ class TestShadowRun(unittest.TestCase):
         with open(os.path.join(self.dir, name)) as f:
             return f.read()
 
-    def shadow(self, *args, gate_exit=0, md="GATE: OK\n", json='{\n  "gate": "OK"\n}\n', said="", path=None,
-               sigint=signal.SIG_DFL):
+    def shadow(self, *args, gate_exit=0, md="GATE: OK\n", json='{\n  "gate": "OK"\n}\n', said=""):
         """Run shadow-run.sh on the reports' directory with args, the stub gate exiting gate_exit after writing md and
-        json and printing said, with path as PATH when given and sigint as what SIGINT does to the script (the tests
-        themselves may run with it ignored, as in a Jenkins build); returns (exit status, standard error)."""
+        json and printing said; returns (exit status, standard error)."""
         env = {**os.environ, "GATE_LOG": self.log, "FAKE_STATUS": str(gate_exit), "FAKE_MD": md, "FAKE_JSON": json,
-               "FAKE_SAID": said, "PATH": path or os.environ["PATH"]}
+               "FAKE_SAID": said}
         run = subprocess.run([self.script, self.dir, *args], env=env,  # noqa: S603
-                             preexec_fn=lambda: signal.signal(signal.SIGINT, sigint),
                              capture_output=True, text=True, check=False)
         return run.returncode, run.stderr
 
@@ -155,47 +147,11 @@ class TestShadowRun(unittest.TestCase):
                          "gate: main names no commit\n")
         self.assertFalse(os.path.exists(os.path.join(self.dir, "quality-rust.md")))
 
-    def test_a_gate_stopped_at_its_time_limit_is_said_with_what_it_had_printed(self):
-        # A timeout that prints for the gate and reports it stopped, in place of waiting out the limit.
-        bin_dir = os.path.join(self.tmp.name, "bin")
-        os.mkdir(bin_dir)
-        stopper = os.path.join(bin_dir, "timeout")
-        with open(stopper, "w") as f:
-            f.write("#!/bin/sh\necho 'gate: running mutmut' >&2\nexit 124\n")
-        os.chmod(stopper, 0o755)  # noqa: S103
-        shadow_exit, stderr = self.shadow(path=bin_dir + os.pathsep + os.environ["PATH"])
-        self.assertEqual((shadow_exit, stderr), (0, "gate: running mutmut\n"))
-        self.assertEqual(self.read("quality-diff.txt"),
-                         "The Rust gate was stopped after 20 minutes without a verdict. It said:\n"
-                         "gate: running mutmut\n")
-
-    def test_a_gate_past_its_time_limit_is_stopped_though_what_it_started_runs_on(self):
-        # What the gate started is in a session of its own, as the Rust gate's tools are, and holds its standard error.
-        self.shorten("GATE_MINUTES", "0.02")
-        self.shorten("SAID_WAIT", "1")
-        self.put_gate("#!/bin/sh\necho 'gate: running the tests' >&2\nsetsid sleep 20 >&2 &\nexec sleep 20\n")
-        for sigint in (signal.SIG_DFL, signal.SIG_IGN):
-            with self.subTest(sigint=sigint):
-                started = time.monotonic()
-                shadow_exit, stderr = self.shadow(sigint=sigint)
-                self.assertLess(time.monotonic() - started, 15)
-                self.assertEqual((shadow_exit, stderr), (0, "gate: running the tests\n"))
-                self.assertEqual(self.read("quality-diff.txt"),
-                                 "The Rust gate was stopped after 0.02 minutes without a verdict. It said:\n"
-                                 "gate: running the tests\n")
-
-    def test_a_gate_that_was_killed_is_not_said_to_have_been_stopped_at_the_limit(self):
+    def test_a_gate_that_was_killed_is_said_with_the_exit_status_a_shell_gives_it(self):
         self.put_gate("#!/bin/sh\nkill -KILL $$\n")
         self.assertEqual(self.shadow()[0], 0)
         self.assertIn("The Rust gate could not judge the change (exit status 137). It said:\n",
                       self.read("quality-diff.txt"))
-
-    def test_the_gate_has_sigint_ignored_only_when_the_script_was_started_so(self):
-        # The second bit of the last hexadecimal digit of SigIgn is SIGINT's.
-        self.put_gate("#!/bin/sh\nawk '/^SigIgn:/ { print substr($2, length($2)) }' /proc/$$/status >&2\nexit 2\n")
-        _, as_a_jenkins_step = self.shadow(sigint=signal.SIG_IGN)
-        _, at_a_terminal = self.shadow()
-        self.assertEqual((int(as_a_jenkins_step, 16) & 2, int(at_a_terminal, 16) & 2), (2, 0))
 
     @pytest.mark.real_sleep
     def test_ctrl_c_reaches_the_gate_and_ends_the_script(self):
@@ -208,37 +164,20 @@ class TestShadowRun(unittest.TestCase):
         self.assertEqual(os.listdir(self.scratch), [])
 
     @pytest.mark.real_sleep
-    def test_a_gate_started_with_sigint_ignored_judges_on_through_one(self):
-        # timeout would pass the signal on and, the gate ignoring it, kill the gate KILL_AFTER seconds later.
-        self.shorten("KILL_AFTER", "1")
-        self.put_gate("#!/bin/sh\necho started >> \"$GATE_LOG\"\nsleep 3\necho 'gate: judged on' >&2\nexit 2\n")
-        run = self.start_in_a_session(signal.SIG_IGN)
-        os.killpg(run.pid, signal.SIGINT)
-        self.assertEqual(run.wait(timeout=10), 0)
-        self.assertEqual(self.read("quality-diff.txt"),
-                         "The Rust gate could not judge the change (exit status 2). It said:\ngate: judged on\n")
-
-    @pytest.mark.real_sleep
-    def test_told_to_stop_the_script_stops_the_gate_and_leaves_no_temporary_file(self):
-        # A Jenkins step has SIGINT ignored; a build that is aborted signals the group, a `kill` the script alone.
+    def test_told_to_stop_with_its_gate_the_script_leaves_no_temporary_file(self):
+        # A Jenkins step has SIGINT ignored, and a build that is aborted signals the script and the gate.
         self.put_gate("#!/bin/sh\ntrap 'echo stopped >> \"$GATE_LOG\"; exit 143' HUP TERM\n"
                       "echo started >> \"$GATE_LOG\"\nsleep 20 &\nwait\n")
-        for told, to_the_group in ((signal.SIGTERM, True), (signal.SIGTERM, False), (signal.SIGHUP, True)):
+        for told in (signal.SIGTERM, signal.SIGHUP):
             for sigint in (signal.SIG_IGN, signal.SIG_DFL):
-                with self.subTest(told=told, to_the_group=to_the_group, sigint=sigint):
+                with contextlib.suppress(FileNotFoundError):
+                    os.remove(self.log)
+                with self.subTest(told=told, sigint=sigint):
                     run = self.start_in_a_session(sigint)
-                    (os.killpg if to_the_group else os.kill)(run.pid, told)
+                    os.killpg(run.pid, told)
                     self.assertEqual(run.wait(timeout=10), 143)
                     self.wait_for(lambda: self.logged() == "started\nstopped\n")
                     self.assertEqual(os.listdir(self.scratch), [])
-                    os.remove(self.log)
-
-    def test_a_release_whose_path_holds_an_equals_sign_runs_with_sigint_ignored_too(self):
-        release = os.path.join(self.tmp.name, "a=b")
-        os.rename(self.release, release)
-        self.release, self.script = release, os.path.join(release, "shadow-run.sh")
-        self.assertEqual(self.shadow(sigint=signal.SIG_IGN), (0, ""))
-        self.assertEqual(self.read("quality-rust.md"), "GATE: OK\n")
 
     def test_a_gate_that_cannot_be_started_is_said_too(self):
         os.remove(os.path.join(self.release, "gate-linux-x86_64"))

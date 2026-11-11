@@ -567,6 +567,19 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   call[s] `GateSettings.read`: the `[[test]]` format now has a third reader, beside gate.py and
   `crates/gate/src/settings.rs`." Left: the released gate.py has no public reader, and its `GateSettings` fields
   are no contract. Closes with the cutover (gate-standalone/18), which removes `shadow_run`.
+- **A Rust gate that hangs in a shadow run takes the build past its timeout.** As cross-review 15 put it (finding
+  1, 2026-11-10): "The shadow run has no time limit and runs inside the Gate stage, under the build's
+  `timeout(time: 60, unit: 'MINUTES')`. [...] A Rust gate that hangs, or that repeats clippy, flaky-tests,
+  passes-at-base and surviving-mutants slowly enough after gate.py did them, takes the build past the timeout: the
+  build is aborted, the pull request's status fails and automerge does not merge, though gate.py said GATE: OK.
+  Nothing bounds the run (a `timeout` around `shadow-run.sh`, say)." A limit in `ci/shadow-run.sh` (`timeout`,
+  with the gate's standard error still coming through as printed and signals still reaching the gate) was written
+  and taken out again, the user's choice of 2026-11-11: over rounds 2 to 5 the review found each form of it wrong
+  for some signal, and the last for coreutils 9.10 on, whose `timeout` "honors ignored signals and will not
+  propagate them". Under those lies that the Rust gate stops what it started on SIGINT alone (`catch_interrupt`,
+  `crates/gate/src/process.rs`), so one stopped with SIGTERM leaves its tools running. Closes with the cutover
+  (gate-standalone/18), which removes the shadow run, or with a Rust gate that stops what it started on SIGTERM
+  too, which a plain `timeout` in the script could then bound.
 - **The Rust gate's Python checks: six design nits of cross-review 14 (2026-11-10), in its words.**
   - F7, `crates/gate/src/python_mutants.rs`: "`mark_for_mutmut` reads, parses and rewrites every regular `*.py` in
     the copy, though mutmut makes mutants only under `[tool.mutmut]` source_paths, which `outside_mutmut` already

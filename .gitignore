@@ -20,9 +20,6 @@ quality.json
 # cargo's build output
 /target/
 
-# mutmut's working copy
-mutants/
-
 # Agent working notes
 .scratch/
 TESTING.md

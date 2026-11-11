@@ -639,6 +639,7 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
 - **A Python function whose edit touches only its comments is mutation-tested.** `python_mutants` counts a function
   when the change adds a line anywhere in it, a comment or a blank line included, so a change that only comments it
   has mutmut report what its tests already missed, which is no news of the change. Go's half leaves out a function
-  whose base, by name, has the same body digest (`edited_functions` in `crates/gate/src/go_mutants.rs`), after the
-  run over spf13/cobra found it so (go-support/01, 2026-11-11). Closes with Python's units compared with their base
-  the same way, as `lang_python::Unit` gains a digest of its body.
+  whose base, by name, has the same declaration but its name, signature and body alike (`unchanged_declarations` in
+  `crates/gate/src/go_mutants.rs`), after the run over spf13/cobra found it so (go-support/01, 2026-11-11); a body
+  digest alone would miss an edit to the signature only. Closes with Python's units compared with their base the
+  same way, as `lang_python::Unit` gains a digest of its signature (parameters, defaults, decorators) and body.

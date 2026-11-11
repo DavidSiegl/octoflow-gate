@@ -1,0 +1,417 @@
+//! The tests of a `_test.go` file, their assertions, and what in the file weakens them.
+
+use std::collections::HashSet;
+
+use model::{first_line, Assertion, Lines, Test, Weakening, WeakeningKind};
+use tree_sitter::Node;
+
+use crate::constraint;
+use crate::syntax::{children, digest, doc_line, end_line, function_name, is_literal, line, named, tokens, Text};
+
+/// The methods of `testing.T`, `B` and `F` that fail the test they are called on.
+const FAILING: &[&str] = &["Error", "Errorf", "Fatal", "Fatalf", "Fail", "FailNow"];
+/// The methods of `testing.T`, `B` and `F` that skip the test they are called on.
+const SKIPPING: &[&str] = &["Skip", "Skipf", "SkipNow"];
+/// The import paths of testify's packages of assertions.
+const TESTIFY: &[&str] = &["github.com/stretchr/testify/assert", "github.com/stretchr/testify/require"];
+
+/// The tests of `root`, a `_test.go` file's tree, in the order they start, and what weakens them, in the order
+/// written.
+///
+/// - A test is a function `TestX(*testing.T)`, `BenchmarkX(*testing.B)` or `FuzzX(*testing.F)`, as `go test` finds
+///   them, X empty or not starting with a lowercase letter; and a subtest, a `t.Run("name", func(...) {...})` whose
+///   name is a string literal, named after the test holding it as `go test` names it, `TestX/name`, a space in the
+///   literal written `_`. A `t.Run` named by any other expression, as a table-driven test's, is part of the test
+///   holding it.
+/// - Its assertions are those in its body but its subtests', in the order written: a call of testify's `assert` or
+///   `require` (`assert.Equal(t, 3, got)`, by the names the file imports them under, `assert.New` not one); and a
+///   call of `Error`, `Errorf`, `Fatal`, `Fatalf`, `Fail` or `FailNow` on a variable that a parameter of type
+///   `*testing.T`, `*testing.B`, `*testing.F` or `testing.TB` names, of a function or a `func` literal. Such a call
+///   that is a statement of an `if`'s block is that `if`'s assertion, the `if` counting once whatever number of them
+///   it holds: its text the `if` to the end of its block, and its literals and shape those of its initializer and
+///   condition and of those calls, so that `if got != 3 { t.Errorf(...) }` changing its 3 is a changed expected
+///   value. A literal is a number, a rune or a string.
+/// - A weakening is a `Skip`, `Skipf` or `SkipNow` called on such a variable anywhere in the file; a `//go:build`
+///   line above its `package` clause ([`constraint::weakening`]); and, anywhere in the file, an error thrown away by
+///   `_ = err` or by an `if err != nil {}` whose block holds no statement, `err` being any name of an error by Go's
+///   habit: `err`, `err` then a capital or a digit, as `errClose`, or a name ending in `Err`. A parser knows no
+///   types, so an error thrown away under any other name, or as `v, _ := f()`, is not seen.
+pub fn read(root: Node, text: Text) -> (Vec<Test>, Vec<Weakening>) {
+    let imports = Imports::of(root, text);
+    let mut walk = Walk {
+        text,
+        imports,
+        tests: vec![],
+        weakenings: vec![],
+        scope: vec![],
+        owner: None,
+        consumed: HashSet::new(),
+        function: String::new(),
+    };
+    for node in named(root) {
+        match node.kind() {
+            "comment" if node.end_byte() <= package_start(root) => {
+                walk.weakenings.extend(constraint::weakening(text.of(node), line(node)));
+            }
+            "function_declaration" | "method_declaration" => walk.function(node),
+            _ => {}
+        }
+    }
+    (walk.tests, walk.weakenings)
+}
+
+/// Where the file's `package` clause starts; the file's end where it has none.
+fn package_start(root: Node) -> usize {
+    named(root).into_iter().find(|n| n.kind() == "package_clause").map_or(root.end_byte(), |p| p.start_byte())
+}
+
+/// The names a file imports the packages a test is written with under.
+struct Imports {
+    /// The name of the `testing` package; None where the file does not import it by a name.
+    testing: Option<String>,
+    /// The names of testify's `assert` and `require` packages.
+    testify: Vec<String>,
+}
+
+impl Imports {
+    fn of(root: Node, text: Text) -> Imports {
+        let mut imports = Imports { testing: None, testify: vec![] };
+        let declarations = named(root).into_iter().filter(|n| n.kind() == "import_declaration");
+        let specs = declarations.flat_map(|d| {
+            named(d).into_iter().flat_map(|s| if s.kind() == "import_spec_list" { named(s) } else { vec![s] })
+        });
+        for spec in specs.filter(|s| s.kind() == "import_spec") {
+            let Some(path) = spec.child_by_field_name("path") else { continue };
+            let path = text.of(path).trim_matches(['"', '`']);
+            let name = match spec.child_by_field_name("name") {
+                Some(n) if n.kind() == "package_identifier" => text.of(n),
+                Some(_) => continue,
+                None => path.rsplit('/').next().unwrap_or(path),
+            };
+            if path == "testing" {
+                imports.testing = Some(name.into());
+            } else if TESTIFY.contains(&path) {
+                imports.testify.push(name.into());
+            }
+        }
+        imports
+    }
+
+    /// The letter of the testing type a parameter's `ty` names: `T`, `B` or `F` for a pointer to `testing.T`, `B` or
+    /// `F`, and `TB` for `testing.TB`; None for any other type.
+    fn testing_type<'t>(&self, ty: Node, text: Text<'t>) -> Option<&'t str> {
+        let (pointer, ty) = match ty.kind() {
+            "pointer_type" => (true, ty.named_child(0)?),
+            _ => (false, ty),
+        };
+        if ty.kind() != "qualified_type" {
+            return None;
+        }
+        let package = text.of(ty.child_by_field_name("package")?);
+        let name = text.of(ty.child_by_field_name("name")?);
+        let fits = if pointer { matches!(name, "T" | "B" | "F") } else { name == "TB" };
+        (fits && Some(package) == self.testing.as_deref()).then_some(name)
+    }
+}
+
+/// The walk [`read`] makes.
+struct Walk<'t> {
+    text: Text<'t>,
+    imports: Imports,
+    tests: Vec<Test>,
+    weakenings: Vec<Weakening>,
+    /// The names of the testing variables in scope, the parameters of a testing type of the functions and `func`
+    /// literals the walk is in.
+    scope: Vec<&'t str>,
+    /// The index in `tests` of the test whose assertions the walk is in; None outside a test.
+    owner: Option<usize>,
+    /// The failing calls already counted as the assertion of the `if` that holds them, by their nodes' ids.
+    consumed: HashSet<usize>,
+    /// The name of the top-level function the walk is in, as a finding names it.
+    function: String,
+}
+
+impl<'t> Walk<'t> {
+    /// A top-level function or method, `node`: a test when it is one, then its body.
+    fn function(&mut self, node: Node<'t>) {
+        let Some(body) = node.child_by_field_name("body") else { return };
+        self.function = function_name(node, self.text);
+        let params = self.testing_params(node);
+        self.owner = None;
+        if node.kind() == "function_declaration" && self.is_test(node) {
+            self.owner = Some(self.tests.len());
+            self.tests.push(Test {
+                name: self.function.clone(),
+                line: line(node),
+                lines: Lines { first: doc_line(node).unwrap_or(line(node)), last: end_line(node) },
+                body: digest(body, self.text),
+                assertions: vec![],
+            });
+        }
+        let depth = self.scope.len();
+        self.scope.extend(params);
+        self.node(body);
+        self.scope.truncate(depth);
+    }
+
+    /// Whether the function declared by `node` is a test `go test` runs: by its name, `TestX`, `BenchmarkX` or
+    /// `FuzzX`, and its one parameter, of the testing type its name asks for.
+    fn is_test(&self, node: Node) -> bool {
+        let text = self.text;
+        let name = node.child_by_field_name("name").map(|n| text.of(n)).unwrap_or_default();
+        let wanted = [("Test", "T"), ("Benchmark", "B"), ("Fuzz", "F")].into_iter().find_map(|(prefix, ty)| {
+            let rest = name.strip_prefix(prefix)?;
+            (!rest.starts_with(char::is_lowercase)).then_some(ty)
+        });
+        let Some(wanted) = wanted else { return false };
+        if node.child_by_field_name("type_parameters").is_some() || node.child_by_field_name("result").is_some() {
+            return false;
+        }
+        let params = node.child_by_field_name("parameters").map(named).unwrap_or_default();
+        let params: Vec<Node> = params.into_iter().filter(|p| p.kind() != "comment").collect();
+        match params.as_slice() {
+            [param]
+                if param.kind() == "parameter_declaration"
+                    && param.children_by_field_name("name", &mut param.walk()).count() <= 1 =>
+            {
+                param.child_by_field_name("type").and_then(|ty| self.imports.testing_type(ty, text)) == Some(wanted)
+            }
+            _ => false,
+        }
+    }
+
+    /// The names of the parameters of a testing type of the function or `func` literal `node`.
+    fn testing_params(&self, node: Node<'t>) -> Vec<&'t str> {
+        let text = self.text;
+        let params = node.child_by_field_name("parameters").map(named).unwrap_or_default();
+        let typed = params
+            .into_iter()
+            .filter(|p| p.child_by_field_name("type").is_some_and(|ty| self.imports.testing_type(ty, text).is_some()));
+        typed
+            .flat_map(|p| p.children_by_field_name("name", &mut p.walk()).map(|n| text.of(n)).collect::<Vec<_>>())
+            .collect()
+    }
+
+    fn node(&mut self, node: Node<'t>) {
+        match node.kind() {
+            "func_literal" => {
+                let depth = self.scope.len();
+                self.scope.extend(self.testing_params(node));
+                self.children(node);
+                self.scope.truncate(depth);
+            }
+            "call_expression" => {
+                if self.subtest(node) {
+                    return;
+                }
+                self.call(node);
+                self.children(node);
+            }
+            "if_statement" => {
+                self.if_statement(node);
+                self.children(node);
+            }
+            "assignment_statement" => {
+                self.discard(node);
+                self.children(node);
+            }
+            _ => self.children(node),
+        }
+    }
+
+    fn children(&mut self, node: Node<'t>) {
+        for child in named(node) {
+            self.node(child);
+        }
+    }
+
+    /// The method a call, `node`, calls on a testing variable in scope, as `Errorf` for `t.Errorf(...)`; None for
+    /// any other call.
+    fn testing_method(&self, node: Node<'t>) -> Option<&'t str> {
+        let callee = node.child_by_field_name("function").filter(|f| f.kind() == "selector_expression")?;
+        let operand = callee.child_by_field_name("operand").filter(|o| o.kind() == "identifier")?;
+        if !self.scope.contains(&self.text.of(operand)) {
+            return None;
+        }
+        Some(self.text.of(callee.child_by_field_name("field")?))
+    }
+
+    /// Whether the call `node` is a testify assertion: a function of a package the file imports testify's `assert`
+    /// or `require` under, but `New`.
+    fn testify(&self, node: Node) -> bool {
+        let Some(callee) = node.child_by_field_name("function").filter(|f| f.kind() == "selector_expression") else {
+            return false;
+        };
+        let operand = callee.child_by_field_name("operand").filter(|o| o.kind() == "identifier");
+        let field = callee.child_by_field_name("field").map(|f| self.text.of(f));
+        operand.is_some_and(|o| self.imports.testify.iter().any(|n| n == self.text.of(o))) && field != Some("New")
+    }
+
+    /// A subtest, when the call `node` starts one, `t.Run("name", func...)` in a test: records it and walks its
+    /// literal with it the owner of the assertions met. Whether it was one.
+    fn subtest(&mut self, node: Node<'t>) -> bool {
+        let Some(parent) = self.owner else { return false };
+        if self.testing_method(node) != Some("Run") {
+            return false;
+        }
+        let args: Vec<Node> = node.child_by_field_name("arguments").map(named).unwrap_or_default();
+        let args: Vec<Node> = args.into_iter().filter(|a| a.kind() != "comment").collect();
+        let [name, literal] = args.as_slice() else { return false };
+        let named_by_literal = matches!(name.kind(), "interpreted_string_literal" | "raw_string_literal");
+        let Some(body) =
+            literal.child_by_field_name("body").filter(|_| named_by_literal && literal.kind() == "func_literal")
+        else {
+            return false;
+        };
+        let written = self.text.of(*name);
+        let own = written.get(1..written.len().saturating_sub(1)).unwrap_or_default().replace(' ', "_");
+        self.owner = Some(self.tests.len());
+        self.tests.push(Test {
+            name: format!("{}/{own}", self.tests[parent].name),
+            line: line(node),
+            lines: Lines { first: line(node), last: end_line(node) },
+            body: digest(body, self.text),
+            assertions: vec![],
+        });
+        self.node(*literal);
+        self.owner = Some(parent);
+        true
+    }
+
+    /// A call, `node`, that is not a subtest: an assertion of the test the walk is in, or a skip.
+    fn call(&mut self, node: Node<'t>) {
+        let method = self.testing_method(node);
+        if method.is_some_and(|m| SKIPPING.contains(&m)) {
+            self.weakenings.push(Weakening {
+                line: line(node),
+                kind: WeakeningKind::Skip,
+                message: format!("`{}` added: it skips a test.", first_line(self.text.of(node))),
+            });
+        }
+        let failing = method.is_some_and(|m| FAILING.contains(&m)) && !self.consumed.contains(&node.id());
+        if failing || self.testify(node) {
+            let assertion = self.assertion(node, &[node], node.end_byte());
+            self.assert(assertion);
+        }
+    }
+
+    fn assert(&mut self, assertion: Assertion) {
+        if let Some(owner) = self.owner {
+            self.tests[owner].assertions.push(assertion);
+        }
+    }
+
+    /// An `if`, `node`: the assertion it is when its block holds failing calls as statements, and a swallowed error
+    /// when it is `if err != nil {}`.
+    fn if_statement(&mut self, node: Node<'t>) {
+        let Some(block) = node.child_by_field_name("consequence") else { return };
+        let statements: Vec<Node> = named(block)
+            .into_iter()
+            .filter(|s| s.kind() == "statement_list")
+            .flat_map(named)
+            .filter(|s| s.kind() != "comment")
+            .collect();
+        if statements.is_empty() && node.child_by_field_name("condition").is_some_and(|c| self.error_not_nil(c)) {
+            self.weakenings.push(Weakening {
+                line: line(node),
+                kind: WeakeningKind::SwallowedError,
+                message: format!(
+                    "`{}` added in `{}`: its empty block throws away the error that would fail the test.",
+                    first_line(self.text.of(node)),
+                    self.function
+                ),
+            });
+        }
+        let calls: Vec<Node> = statements
+            .iter()
+            .filter(|s| s.kind() == "expression_statement")
+            .filter_map(|s| s.named_child(0))
+            .filter(|c| c.kind() == "call_expression" && self.testing_method(*c).is_some_and(|m| FAILING.contains(&m)))
+            .collect();
+        if calls.is_empty() {
+            return;
+        }
+        self.consumed.extend(calls.iter().map(|c| c.id()));
+        let mut parts: Vec<Node> =
+            ["initializer", "condition"].iter().filter_map(|f| node.child_by_field_name(f)).collect();
+        parts.extend(&calls);
+        let assertion = self.assertion(node, &parts, block.end_byte());
+        self.assert(assertion);
+    }
+
+    /// The assertion that starts at `node` and ends at the byte `end`, its literals and shape those of `parts`.
+    fn assertion(&self, node: Node, parts: &[Node], end: usize) -> Assertion {
+        let mut literals = vec![];
+        let mut shape = vec![];
+        for part in parts {
+            blank_literals(*part, self.text, &mut shape, &mut literals);
+            shape.push(";".into());
+        }
+        Assertion {
+            line: line(node),
+            text: self.text.0[node.start_byte()..end].into(),
+            shape: shape.join(" "),
+            literals,
+            reads: vec![],
+        }
+    }
+
+    /// Whether `condition` is `err != nil` or `nil != err`, `err` naming an error ([`names_an_error`]).
+    fn error_not_nil(&self, condition: Node) -> bool {
+        let operator = condition.child_by_field_name("operator").map(|o| self.text.of(o));
+        let (Some(left), Some(right)) = (condition.child_by_field_name("left"), condition.child_by_field_name("right"))
+        else {
+            return false;
+        };
+        let error = |n: Node| n.kind() == "identifier" && names_an_error(self.text.of(n));
+        condition.kind() == "binary_expression"
+            && operator == Some("!=")
+            && ((error(left) && right.kind() == "nil") || (left.kind() == "nil" && error(right)))
+    }
+
+    /// An assignment, `node`: a swallowed error when it is `_ = err`.
+    fn discard(&mut self, node: Node<'t>) {
+        let sides = |field: &str| node.child_by_field_name(field).map(named).unwrap_or_default();
+        let (left, right) = (sides("left"), sides("right"));
+        let operator = children(node).into_iter().find(|c| !c.is_named()).map(|o| self.text.of(o));
+        if let ([blank], [thrown], Some("=")) = (left.as_slice(), right.as_slice(), operator) {
+            if self.text.of(*blank) == "_" && thrown.kind() == "identifier" && names_an_error(self.text.of(*thrown)) {
+                self.weakenings.push(Weakening {
+                    line: line(node),
+                    kind: WeakeningKind::SwallowedError,
+                    message: format!(
+                        "`{}` added in `{}`: it throws away the error that would fail the test.",
+                        first_line(self.text.of(node)),
+                        self.function
+                    ),
+                });
+            }
+        }
+    }
+}
+
+/// Whether `name` names an error by Go's habit: `err`, `err` then a capital or a digit, as `errClose` or `err2`, or a
+/// name ending in `Err`, as `closeErr`.
+fn names_an_error(name: &str) -> bool {
+    let after = name.strip_prefix("err").map(|rest| rest.chars().next());
+    matches!(after, Some(None))
+        || after.flatten().is_some_and(|c| c.is_uppercase() || c.is_ascii_digit())
+        || name.ends_with("Err")
+}
+
+/// Appends the tokens of `node` to `shape`, each literal as `$lit`, and each literal's text to `literals`.
+fn blank_literals(node: Node, text: Text, shape: &mut Vec<String>, literals: &mut Vec<String>) {
+    if node.kind() == "comment" {
+        return;
+    }
+    if is_literal(node) {
+        literals.push(text.of(node).into());
+        shape.push("$lit".into());
+    } else if node.child_count() == 0 {
+        shape.extend(tokens(node, text).into_iter().map(String::from));
+    } else {
+        for child in children(node) {
+            blank_literals(child, text, shape, literals);
+        }
+    }
+}

@@ -9,12 +9,13 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::Instant;
 
-use checks::Finding;
+use checks::{ChangedFile, Finding};
 use regex::bytes::Regex;
 
 use crate::copies::{copy_tracked, finding, in_scratch_directory, Budget};
 use crate::diff::removal_points;
-use crate::git::shell_quote_bytes;
+use crate::git::{self, shell_quote_bytes};
+use crate::judge::Change;
 use crate::mutants::{dir_name, KILL_WAIT, STOP_GRACE, SURVIVOR_EXAMPLES};
 use crate::parser_checks::{project_dir, GoChange, GO_MANIFEST};
 use crate::paths::rel_path;
@@ -53,8 +54,9 @@ pub(crate) struct Edited {
 /// from between two of those, as a deleted guard clause needs a test as much as an added one: a function or method,
 /// with a body, of a Go file that is code under test (GoChange::is_code) and read in the working tree, so not
 /// generated, vendored or a symlink. One whose file's base has a function of its name with the same declaration, its
-/// signature and body (lang_go::read's body digest), whatever its comments and layout, does not count: an edit to its
-/// comments or layout alone changes nothing gremlins mutates.
+/// receiver, parameters, results and body, whatever its comments and layout ([`unchanged_declarations`]), does not
+/// count: an edit to its comments or layout alone changes nothing gremlins mutates, while one to its signature alone
+/// can change what its body does.
 pub(crate) fn edited_functions(go: &GoChange) -> (Vec<Edited>, Vec<Finding>) {
     let removals = removal_points(&go.change.diff);
     let (mut edited, mut unread) = (vec![], vec![]);
@@ -74,19 +76,45 @@ pub(crate) fn edited_functions(go: &GoChange) -> (Vec<Edited>, Vec<Finding>) {
                 continue;
             }
         };
+        let touched: Vec<(usize, &model::Function)> = (source.functions.iter().enumerate())
+            .filter(|(_, f)| {
+                let added = file.added.range(f.line..=f.lines.last).next().is_some();
+                added || removed.iter().any(|&n| f.line <= n && n < f.lines.last)
+            })
+            .collect();
+        // A body unchanged is the rare case, and only it needs the declarations, which are read anew.
         let base = file.before.as_ref().and_then(|side| side.source.as_ref().ok());
-        let unchanged = |f: &model::Function| {
+        let same_body = |f: &model::Function| {
             base.is_some_and(|base| base.functions.iter().any(|b| b.name == f.name && b.body == f.body))
         };
-        for f in &source.functions {
-            let (line, last) = (f.line, f.lines.last);
-            let added = file.added.range(line..=last).next().is_some();
-            if (added || removed.iter().any(|&n| line <= n && n < last)) && !unchanged(f) {
+        let unchanged = match touched.iter().any(|(_, f)| same_body(f)) {
+            true => unchanged_declarations(go.change, file),
+            false => vec![],
+        };
+        for (k, f) in touched {
+            if !unchanged.get(k).copied().unwrap_or(false) {
+                let (line, last) = (f.line, f.lines.last);
                 edited.push(Edited { path: after.path.clone(), name: f.name.clone(), line, last });
             }
         }
     }
     (edited, unread)
+}
+
+/// For each function of `file`'s working-tree side, in the order lang_go::read gives them, whether its base side has
+/// a function of its name with the same declaration (lang_go::declarations): an edit of it, if any, touched only its
+/// comments and layout. Both sides are read anew, the working tree's from `change`'s tree and the base's from git;
+/// where either cannot be read or parsed, as where the file has no base, none is unchanged, so its functions count as
+/// edited.
+fn unchanged_declarations(change: &Change, file: &ChangedFile) -> Vec<bool> {
+    let (Some(before), Some(after)) = (&file.before, &file.after) else { return vec![] };
+    let mut spec = OsString::from(format!("{}:", change.base));
+    spec.push(&before.path);
+    let base = git::output(&change.root, &[OsStr::new("cat-file"), OsStr::new("blob"), &spec]).ok();
+    let base = base.and_then(|bytes| lang_go::declarations(&bytes).ok());
+    let now = std::fs::read(change.root.join(&after.path)).ok().and_then(|bytes| lang_go::declarations(&bytes).ok());
+    let (Some(base), Some(now)) = (base, now) else { return vec![] };
+    now.iter().map(|declared| base.contains(declared)).collect()
 }
 
 /// Go's findings of the surviving-mutants check on `functions`, [`edited_functions`]' of `go`, in no order.

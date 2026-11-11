@@ -246,3 +246,19 @@ fn a_file_that_does_not_parse_as_go_is_not_scored() {
     assert_eq!(found.len(), 1, "{found:?}");
     assert!(found[0].2.starts_with("does not parse as Go ("), "{found:?}");
 }
+
+#[test]
+fn a_method_whose_type_is_renamed_keeps_its_base_score() {
+    // big is over the limit at the base, and the change renames its receiver's type alone.
+    let method = |ty: &str| flat("big", 16).replacen("func big(", &format!("func (s *{ty}) big("), 1);
+    let before = format!("package calc\n\ntype Stack struct{{}}\n\n{}", method("Stack"));
+    let after = format!("package calc\n\ntype Queue struct{{}}\n\n{}", method("Queue"));
+    assert_eq!(found(&[edited(CALC, &before, &after)]), vec![]);
+}
+
+#[test]
+fn a_function_made_a_method_keeps_its_base_score() {
+    let before = format!("package calc\n\ntype Stack struct{{}}\n\n{}", flat("big", 16));
+    let after = before.replacen("func big(", "func (s *Stack) big(", 1);
+    assert_eq!(found(&[edited(CALC, &before, &after)]), vec![]);
+}

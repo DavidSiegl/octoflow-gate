@@ -270,8 +270,7 @@ or a module's `m::f(...)`.
 
 Go is judged the same way too, in the `.go` files of a Go module but its `_test.go` files, which are tests. A function
 is a function or method with a body, a method named by its receiver's type as `Stack.Push`; a `func` literal inside it
-is part of it and nests its body as a closure does. Its lines start at its doc comment; its body, by which it
-pairs with its base below, takes in its receiver, parameters and results. Each `if`, `else if`, `else`,
+is part of it and nests its body as a closure does. Its lines start at its doc comment. Each `if`, `else if`, `else`,
 `for` of any form, expression `switch`, type switch and `select` scores as Python's branches do, a `case` adding
 nothing; a run of `&&` and `||` is a sequence of boolean operators; a labelled `break` or `continue`, and a `goto`, a
 point. Recursion follows calls by name within the file: `f(...)` and `f[T](...)`, and `r.m(...)` on the method's own

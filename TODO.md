@@ -604,3 +604,41 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   numbering, a token digest (FNV-1a) and a `first_error`, and the digests must agree with what the checks compare only
   within a language, so nothing breaks; but a fix to one is a fix to three. Found with go-support/01 (2026-11-11), which
   followed the two front ends before it. Closes with a small crate of the shared helpers that the three depend on.
+- **`NEWEST_RELEASE` is raised by hand with each Go release.** A release tag in a test file's `//go:build` counts as set
+  only up to `NEWEST_RELEASE` in `crates/lang-go/src/constraint.rs`, `go1.27`, so a test file naming a later release's
+  tag is a failing `skip` rather than a `platform-only` finding to weigh. Go 1.28's release candidates already set
+  `go1.28`, so the constant wants raising, in a `patch` release, once the first of them ships, and so on for each
+  release. The user's choice in go-support/01 (2026-11-11), over reading the tag set from the go tool on `PATH`, which
+  would make the finding depend on the machine. Closes only if that choice is revisited.
+- **Go's changed tests are neither rerun for flakiness nor run at the base.** `judge_checks` in
+  `crates/gate/src/judge.rs` gives flaky-tests Python's tests alone and passes-at-base Python's and Rust's, so a Go
+  test that passes by luck of the order, or passes without the change, is not seen. go-support/01 asked for neither
+  (2026-11-11). Closes with a Go half of passes-at-base that runs the changed tests in a copy of the base with the
+  change's `_test.go` files, `go test -run '^TestX$'` for each, as Rust's half runs nextest, and with `go test
+  -shuffle=N` reruns for flaky-tests.
+- **A failing Go test's detail is gotestsum's `Failed`.** gotestsum 1.13 writes each failure's `message` as `Failed`
+  and the test's output as the element's text, and `junit_outcomes` (`crates/gate/src/junit.rs`) prefers a message, so
+  the failing tests list `example.com/calc.TestAdd: Failed` without the `t.Errorf` line that says why; a package that
+  does not compile is a test case named `TestMain`. Found with go-support/01 (2026-11-11). Closes with the reader
+  taking the text, cut to its first lines, where a message says no more than that the test failed.
+- **A comment or blank line inside a Go block of statements is a line to cover.** A Go coverage profile gives a block
+  by where it starts and ends, not by its lines, so `go_profile_lines` (`crates/gate/src/coverage.rs`) counts every
+  line between, covered or not as the block is, as gocover-cobertura and Codecov read profiles too. Found with
+  go-support/01 (2026-11-11). Closes with each such line read from the file and left out when it holds no token.
+- **gremlins tries a Go mutant against its own package's tests only.** It measures coverage with `go test -cover` per
+  package and runs `go test <package>` for each mutant (`go_mutants.rs`), so code that only another package's tests
+  run, as a helper an integration test package drives, is `untested`, and a mutant that only those tests would catch
+  survives. Found with go-support/01 (2026-11-11). Closes with gremlins' `--coverpkg` and `--integration`, which run
+  the whole suite for each mutant, at that cost to the budget, or with the user's word that a package's own tests are
+  the ones that should catch its mutants.
+- **golangci-lint may read a configuration from outside the tree.** It looks for `.golangci.yml` and its kin from the
+  module's directory up to the filesystem's root, then in the home directory, so a file above the tree or in the
+  account's home configures it, and no change shows it. clippy's `CARGO_HOME` and rustup's toolchains sit outside the
+  tree the same way. Found with go-support/01 (2026-11-11). Closes with the gate passing `--config` with the nearest
+  configuration inside the tree, or `--no-config` where there is none.
+- **A Python function whose edit touches only its comments is mutation-tested.** `python_mutants` counts a function
+  when the change adds a line anywhere in it, a comment or a blank line included, so a change that only comments it
+  has mutmut report what its tests already missed, which is no news of the change. Go's half leaves out a function
+  whose base, by name, has the same body digest (`edited_functions` in `crates/gate/src/go_mutants.rs`), after the
+  run over spf13/cobra found it so (go-support/01, 2026-11-11). Closes with Python's units compared with their base
+  the same way, as `lang_python::Unit` gains a digest of its body.

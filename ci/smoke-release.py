@@ -8,12 +8,16 @@ Unpacked into an empty directory, the release must:
 - judge a fixture project as a project runs it, `gate.py --rust-syntax gate-rust-linux-x86_64`: its gate.toml lists
   one `[[test]]` command, and its change adds a Rust function over the cognitive-complexity limit. The gate must find
   that function, which it can only through the helper's documents, read in full, and fail on that alone; read the
-  command's JUnit report; and write a quality.json that the release's schema/quality-v1.json accepts.
+  command's JUnit report; and write a quality.json that the release's schema/quality-v1.json accepts;
+- answer `gate-linux-x86_64 --help` with exit status 0;
+- judge that change a second time with the Rust gate, as a project's shadow run does, `shadow-run.sh` with gate.py's
+  arguments and the report its test command wrote, and find no difference between the two gates' reports.
 
 The helper's output is checked only as gate.py reads it; its structure field by field is gate-rust/tests/schema.rs's,
 run on the same source by the build's Gate stage. Exits 0 when all hold; otherwise names the first that does not on
-standard error and exits 1. It runs gate.py with the Python that runs it, and needs jsonschema, a dev dependency,
-git, and cargo with clippy on PATH: without clippy the gate raises a condition for it, which fails the check.
+standard error and exits 1. It runs gate.py with the Python that runs it, which is also the Rust gate's `--python`,
+and needs jsonschema, a dev dependency, git, diff, and cargo with clippy on PATH: without clippy the gates raise a
+condition for it, which fails the check.
 """
 
 import json
@@ -67,10 +71,14 @@ def run(args, cwd):
 
 
 def check_help(release: Path) -> None:
-    """Fail unless the unpacked release at release answers `gate.py --help` with exit status 0."""
-    proc = run([sys.executable, str(release / "gate.py"), "--help"], release)
-    if proc.returncode != 0:
-        raise SmokeFailure(f"`gate.py --help` exited {proc.returncode}: {proc.stderr.strip()}")
+    """Fail unless each gate of the unpacked release at release answers `--help` with exit status 0."""
+    for gate in ([sys.executable, str(release / "gate.py")], [str(release / "gate-linux-x86_64")]):
+        try:
+            proc = run([*gate, "--help"], release)
+        except OSError as e:
+            raise SmokeFailure(f"cannot start `{Path(gate[-1]).name} --help`: {e}") from e
+        if proc.returncode != 0:
+            raise SmokeFailure(f"`{Path(gate[-1]).name} --help` exited {proc.returncode}: {proc.stderr.strip()}")
 
 
 def make_fixture_project(project: Path) -> str:
@@ -87,7 +95,7 @@ def make_fixture_project(project: Path) -> str:
     (project / "pyproject.toml").write_text('[project]\nname = "smoke"\nversion = "0"\n')
     (project / "gate.toml").write_text(f'[[test]]\nname = "smoke"\ncommand = [{json.dumps(sys.executable)}, "-c", '
                                        f'{json.dumps(TEST_COMMAND)}]\njunit = ["junit.xml"]\n')
-    (project / ".gitignore").write_text("junit.xml\nquality.md\nquality.json\n")
+    (project / ".gitignore").write_text("junit.xml\nquality*\n")
     git("add", ".")
     git("commit", "--quiet", "-m", "base")
     (project / "tangled.rs").write_text(TANGLED_RS)
@@ -98,10 +106,9 @@ def make_fixture_project(project: Path) -> str:
 def check_fixture_project(release: Path, project: Path) -> None:
     """Fail unless the release's gate.py, with its helper, judges make_fixture_project's change GATE: ERROR for
     EXPECTED_FINDING alone, with no failing test read from the test command's report, and writes a quality.json that
-    the release's schema accepts."""
-    base = make_fixture_project(project)
-    proc = run([sys.executable, str(release / "gate.py"), "--base", base,
-                "--rust-syntax", str(release / "gate-rust-linux-x86_64"), "--out", "quality.md"], project)
+    the release's schema accepts; and unless the release's shadow run of the Rust gate then reports as gate.py did."""
+    gate_args = ["--base", make_fixture_project(project), "--rust-syntax", str(release / "gate-rust-linux-x86_64")]
+    proc = run([sys.executable, str(release / "gate.py"), *gate_args, "--out", "quality.md"], project)
     said = proc.stderr.strip() or proc.stdout.strip()
     if proc.returncode != 1:
         raise SmokeFailure(f"the fixture project was judged with exit status {proc.returncode}, not 1 for GATE: ERROR: "
@@ -127,6 +134,28 @@ def check_fixture_project(release: Path, project: Path) -> None:
     if report["failed_conditions"] != [EXPECTED_CONDITION]:
         raise SmokeFailure(f"the fixture project's failed conditions are {json.dumps(report['failed_conditions'])}, "
                            f"not [{json.dumps(EXPECTED_CONDITION)}]")
+    check_shadow_run(release, project, gate_args)
+
+
+def check_shadow_run(release: Path, project: Path, gate_args: list[str]) -> None:
+    """Fail unless the release's shadow-run.sh, given gate_args, the arguments gate.py judged project's change with
+    into quality.md there, and the JUnit report make_fixture_project's test command wrote for it, finds the Rust
+    gate's reports the same as gate.py's."""
+    try:
+        proc = run([str(release / "shadow-run.sh"), ".", *gate_args, "--python", sys.executable,
+                    "--tests", "junit.xml"], project)
+    except OSError as e:
+        raise SmokeFailure(f"cannot start the release's shadow-run.sh: {e}") from e
+    if proc.returncode != 0:
+        raise SmokeFailure(f"shadow-run.sh exited {proc.returncode}: {proc.stderr.strip()}")
+    try:
+        difference = (project / "quality-diff.txt").read_text()
+    except OSError as e:
+        raise SmokeFailure(f"cannot read the shadow run's quality-diff.txt: {e}") from e
+    if difference:
+        # The script exits 0 for a Rust gate that could not judge, whose reason is on standard error alone.
+        raise SmokeFailure(f"the Rust gate does not report the fixture project as gate.py does:\n{difference}"
+                           f"shadow-run.sh's standard error: {proc.stderr.strip()}")
 
 
 def smoke(tarball: Path) -> None:

@@ -569,7 +569,7 @@ wheels = [
 
 [[package]]
 name = "octoflow-gate"
-version = "0.5.0"
+version = "0.6.0"
 source = { virtual = "." }
 
 [package.dev-dependencies]

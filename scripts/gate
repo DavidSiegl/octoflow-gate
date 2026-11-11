@@ -33,6 +33,14 @@
 # quality.json, which Jenkins archives; and the reports the judge's test commands write, which
 # Jenkins publishes the JUnit ones of.
 #
+# The shadow run (gate-standalone/17): when the pinned release ships the Rust gate, it judges
+# the same change after gate.py, from the reports the test commands wrote, and
+# quality-rust.md, quality-rust.json and quality-diff.txt at the repo root say what it found
+# and how that differs from gate.py's report (the release's shadow-run.sh says what each
+# holds). Jenkins archives them for a person to read. It never changes the exit status: when
+# gate.py gave no verdict, or could not judge a test command, it does not run; when it fails
+# that is a line on standard error.
+#
 # In a Jenkins build (WORKSPACE set), crates are fetched into the workspace (CARGO_HOME), so
 # no build compiles sources an earlier one left, and temporary files go under WORKSPACE_TMP
 # rather than /tmp: the tests and the gate build Rust in temporary directories and run what
@@ -93,7 +101,7 @@ fi
 # The verdict and the test contexts are gitignored and outlive a run: removed, so a run that
 # ends early cannot leave the last verdict, nor a pytest that writes none the last contexts.
 # gate.py removes each test command's reports before it runs it.
-rm -f quality.md quality.json "$COVERAGE_FILE"
+rm -f quality.md quality.json quality-rust.md quality-rust.json quality-diff.txt "$COVERAGE_FILE"
 
 if [[ -n ${WORKSPACE:-} ]]; then
 	export CARGO_HOME="$WORKSPACE/.cargo-home"
@@ -186,11 +194,44 @@ for tool in cargo-llvm-cov cargo-nextest cargo-mutants; do
 done
 uv sync --frozen
 
+# Judge the change once more with the Rust gate of the pinned release, as the header says. The
+# reports of the judge's test commands stand in for the commands, which gate.py has run. That
+# holds only while gate.py judged every command: one it could not judge (a report not written,
+# an exit status no failing test explains) is a failed condition of its report that the Rust
+# gate, given the reports alone, would not reach, so no shadow run is made then. `python` is
+# the environment's, in which gate.py ran.
+shadow_run() {
+	local listed reports=() read_status=0
+	# Prints the flags that name the reports of gate.toml's test commands, a flag or a path a
+	# line; exits 3, printing nothing, when quality.json's failed conditions hold the one
+	# gate.py's run_test_commands words for a command it could not judge.
+	listed=$(
+		uv run --frozen python -I - "$judge_dir/gate.toml" quality.json <<-'EOF'
+		import json, sys, tomllib
+		with open(sys.argv[2]) as f:
+		    if any(c.startswith("The test command `") for c in json.load(f)["failed_conditions"]):
+		        sys.exit(3)
+		with open(sys.argv[1], "rb") as f:
+		    for command in tomllib.load(f).get("test", []):
+		        for flag, key in (("--tests", "junit"), ("--coverage", "coverage")):
+		            for report in command.get(key, []):
+		                print(flag, report, sep="\n")
+		EOF
+	) || read_status=$?
+	if [[ $read_status -eq 3 ]]; then
+		echo "gate: no shadow run of the Rust gate: gate.py could not judge a test command" >&2
+		return 0
+	fi
+	[[ $read_status -eq 0 ]] || return
+	[[ -z $listed ]] || mapfile -t reports <<<"$listed"
+	uv run --frozen "$judge_dir/release/shadow-run.sh" . "${gate_args[@]}" --python python "${reports[@]}"
+}
+
+gate_args=(--base "$base" --config "$judge_dir/pyproject.toml" --test-contexts "$COVERAGE_FILE"
+	--rust-syntax "$helper")
 trap - ERR
 status=0
-uv run --frozen python "$gate_py" --base "$base" --config "$judge_dir/pyproject.toml" \
-	--test-contexts "$COVERAGE_FILE" --rust-syntax "$helper" \
-	--out quality.md || status=$?
+uv run --frozen python "$gate_py" "${gate_args[@]}" --out quality.md || status=$?
 case $status in
 0 | 130) ;;
 1)
@@ -202,4 +243,7 @@ case $status in
 	;;
 *) status=2 ;;
 esac
+if [[ $status -le 1 && -x $judge_dir/release/shadow-run.sh ]]; then
+	shadow_run || echo "gate: the shadow run of the Rust gate failed; gate.py's verdict stands" >&2
+fi
 exit "$status"

@@ -8,7 +8,7 @@ dist/
 # Virtual environments
 .venv
 
-# What the test commands of gate.toml and `gate.py --out` write
+# What the test commands of gate.toml, `gate.py --out` and the shadow run of the Rust gate (scripts/gate) write
 .coverage
 coverage.xml
 coverage-rust.xml
@@ -16,6 +16,9 @@ coverage-gate.xml
 test-results.xml
 quality.md
 quality.json
+quality-rust.md
+quality-rust.json
+quality-diff.txt
 
 # The tools scripts/gate downloads when PATH lacks them, and its CARGO_HOME in a Jenkins build
 .tools/

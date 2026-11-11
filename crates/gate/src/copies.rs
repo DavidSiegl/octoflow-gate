@@ -62,8 +62,8 @@ pub fn finding(path: Option<&OsStr>, line: Option<u32>, rule: &str, message: Str
     Finding { path: path.map(OsStr::to_os_string), line, severity: "warning".into(), rule: rule.into(), message }
 }
 
-/// A new directory, mode 0700, in `parent`, named for the gate's process.
-fn scratch_directory(parent: &Path) -> std::io::Result<PathBuf> {
+/// A new directory, mode 0700, in `parent`, named for the gate's process. Whoever makes it removes it.
+pub(crate) fn scratch_directory(parent: &Path) -> std::io::Result<PathBuf> {
     use std::os::unix::fs::DirBuilderExt;
     use std::sync::atomic::{AtomicU32, Ordering};
     static MADE: AtomicU32 = AtomicU32::new(0);

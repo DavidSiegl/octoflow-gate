@@ -89,7 +89,7 @@ fn change_the_functions(repo: &Repo, names: &[&str]) {
     repo.put("calc.py", changed(names).as_bytes());
 }
 
-/// A rules file outside the tree, as `gate --config` names one, with the TOML `table` as its `[tool.mutmut]`.
+/// A rules file outside the tree, for [`Gate`]'s `rules`, with the TOML `table` as its `[tool.mutmut]`.
 fn rules(repo: &Repo, table: &str) -> PathBuf {
     let path = repo.outside.join("pyproject.toml");
     std::fs::write(&path, format!("[tool.mutmut]\n{table}")).unwrap();
@@ -106,7 +106,8 @@ struct Gate {
     budget: Option<u64>,
     /// The project's Python; None for the workspace's.
     python: Option<PathBuf>,
-    /// `--config`: the pyproject.toml whose `[tool.mutmut]` judges the change; None for the tree's own.
+    /// The pyproject.toml whose `[tool.mutmut]` judges the change, in a directory outside the tree: `--config` then
+    /// names a copy of the tree's gate.toml beside it. None for the tree's own.
     rules: Option<PathBuf>,
     /// `--test-contexts`.
     test_contexts: Option<PathBuf>,
@@ -129,7 +130,9 @@ fn findings(repo: &Repo, how: Gate) -> Vec<Found> {
     command.arg("--python").arg(how.python.unwrap_or_else(common::python)).arg("--json").arg(&json);
     command.args(["--base-run-budget", "1", "--mutation-budget", &how.budget.unwrap_or(60).to_string()]);
     if let Some(rules) = how.rules {
-        command.arg("--config").arg(rules);
+        let settings = rules.with_file_name("gate.toml");
+        std::fs::copy(repo.repo.join("gate.toml"), &settings).unwrap();
+        command.arg("--config").arg(settings);
     }
     if let Some(test_contexts) = how.test_contexts {
         command.arg("--test-contexts").arg(test_contexts);

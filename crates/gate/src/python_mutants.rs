@@ -71,8 +71,9 @@ const EVERY_CAUSE: &str = "either it has nothing mutmut mutates, the rules' do_n
 /// How mutmut is set up for a change, beyond the change itself.
 #[derive(Clone, Copy, Debug)]
 pub struct Mutmut<'a> {
-    /// The pyproject.toml whose `[tool.mutmut]` mutmut runs by, whatever the tree's own says. Absolute.
-    pub rules: &'a Path,
+    /// The pyproject.toml whose `[tool.mutmut]` mutmut runs by, whatever the tree's own says. Absolute. None for no
+    /// rules, under which mutmut mutates nothing.
+    pub rules: Option<&'a Path>,
     /// `--test-contexts`: a coverage.py data file of the tree's test run with a context per test, as
     /// `pytest --cov-context=test` writes it, by which mutmut's tests are narrowed. Absolute.
     pub test_contexts: Option<&'a Path>,
@@ -103,7 +104,8 @@ pub struct Mutmut<'a> {
 /// and each mutated function is an `untested` finding. A file unfit to tell them, or a collection that fails, is a
 /// `not-narrowed` finding saying why, and mutmut runs the whole selection.
 ///
-/// A mutmut that cannot start, fails, or whose results cannot be listed, rules that name no source_paths, a changed
+/// A mutmut that cannot start, fails, or whose results cannot be listed, rules that name no source_paths or no rules
+/// at all, a changed
 /// file that cannot be read or parsed, and a copy that cannot be made are `not-run` findings saying so; a copy that
 /// cannot be removed afterwards is a `not-removed` one.
 pub fn python_mutants(python: &PythonChange, mutmut: &Mutmut, seconds: f64) -> Vec<Finding> {
@@ -140,9 +142,15 @@ impl Function {
 /// [`python_mutants`]'s findings on `functions`, the change's changed functions: those mutmut does not mutate, then
 /// what a run of mutmut of `seconds` found of the others.
 fn mutation_test(python: &PythonChange, functions: &[Function], mutmut: &Mutmut, seconds: f64) -> Vec<Finding> {
-    let table = match mutmut_table(mutmut.rules) {
-        Ok(table) => table,
-        Err(problem) => return vec![not_run(&problem)],
+    let table = match mutmut.rules.map(mutmut_table) {
+        Some(Ok(table)) => table,
+        Some(Err(problem)) => return vec![not_run(&problem)],
+        None => {
+            return vec![not_run(
+                "there is no pyproject.toml beside the gate's settings, so no [tool.mutmut] names source_paths and \
+                 what mutmut mutates is unknown",
+            )]
+        }
     };
     let (mut out, mut mutated) = (vec![], vec![]);
     for f in functions {

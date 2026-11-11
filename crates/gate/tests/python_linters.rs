@@ -49,6 +49,82 @@ fn ruff_is_given_the_rules_and_every_python_file_and_mypy_the_rules_alone() {
 }
 
 #[test]
+fn without_a_pyproject_toml_ruff_and_mypy_run_on_their_defaults_whatever_the_tree_configures() {
+    // ruff.toml and mypy.ini are what each would read by itself.
+    let repo = Repo::with(&[("f.py", b"line1 = 1\n"), ("ruff.toml", b"lint.ignore = [\"F401\"]\n"), ("mypy.ini", b"")]);
+    repo.put("f.py", b"line1 = 1\nnew2 = 2\n");
+    let (status, file) = gate(&repo, &[]);
+    assert_eq!(status, Some(0), "{file}");
+    assert_eq!(repo.argv("ruff"), ["check", "--isolated", "--output-format", "concise", "--no-cache", "f.py"]);
+    let given = ["--config-file", "", "--show-column-numbers", "--no-error-summary", "--cache-dir", "/dev/null", "f.py"];
+    assert_eq!(repo.argv("mypy"), given);
+    assert!(file.contains("judged the working tree at"), "{file}");
+    assert!(!file.contains("by the rules from"), "{file}");
+}
+
+#[test]
+fn the_rules_are_those_beside_the_gate_toml_config_names_and_none_when_none_is_there() {
+    let repo = repo();
+    repo.put("f.py", &appended(b"new4 = 4\n"));
+    let settings = repo.outside.join("gate.toml");
+    std::fs::write(&settings, "").unwrap();
+    let rules = repo.outside.join("pyproject.toml");
+    let judged = |repo: &Repo| {
+        let mut command = repo.gate_command("HEAD");
+        command.arg("--config").arg(&settings).env("PATH", repo.stub_linters());
+        let done = command.output().unwrap();
+        assert_eq!(done.status.code(), Some(0), "{}", String::from_utf8_lossy(&done.stderr));
+        String::from_utf8(done.stdout).unwrap()
+    };
+    // The tree's own pyproject.toml is not beside the settings, so it rules nothing.
+    let file = judged(&repo);
+    assert_eq!(repo.argv("ruff")[..2], ["check", "--isolated"]);
+    let intro = format!(
+        ", by the rules from the defaults (there is no `{}`), with the settings from `{}`.",
+        rules.display(),
+        settings.display()
+    );
+    assert!(file.contains(&intro), "{file}");
+    std::fs::write(&rules, "[tool.ruff]\n").unwrap();
+    let file = judged(&repo);
+    assert_eq!(repo.argv("ruff")[..3], ["check", "--config", rules.to_str().unwrap()]);
+    assert_eq!(repo.argv("mypy")[..2], ["--config-file", rules.to_str().unwrap()]);
+    let intro = format!(", by the rules from `{}`, with the settings from `{}`.", rules.display(), settings.display());
+    assert!(file.contains(&intro), "{file}");
+}
+
+#[test]
+fn pymarkdown_runs_in_a_directory_of_its_own_on_absolute_paths() {
+    // It would read the tree's pyproject.toml from its current directory beside the rules it is given.
+    let repo = repo();
+    repo.put("README.md", b"# Title\n");
+    repo.git(&["add", "README.md"]);
+    repo.git(&["commit", "--quiet", "-m", "readme"]);
+    repo.put("README.md", b"# Title\n\nnew\n");
+    let readme = repo.repo.join("README.md");
+    let readme = readme.to_str().unwrap();
+    repo.says("pymarkdown", format!("{readme}:3:1: MD047: Each file should end with a single newline\n").as_bytes());
+    let path = repo.stub_linters();
+    let cwd = repo.outside.join("pymarkdown.cwd");
+    let stubs = repo.outside.join("stubs/pymarkdown");
+    let script = format!(
+        "pwd > '{}'\nprintf '%s\\n' \"$@\" > '{stubs}.argv'\ncat '{stubs}.out'\nexit 1",
+        cwd.display(),
+        stubs = stubs.display()
+    );
+    repo.stub("pymarkdown", &script);
+    let done = repo.gate_command("HEAD").env("PATH", path).output().unwrap();
+    let file = String::from_utf8(done.stdout).unwrap();
+    assert_eq!(done.status.code(), Some(1), "{file}");
+    assert!(file.contains("1. `README.md:3` error pymarkdown MD047: Each file should end"), "{file}");
+    let rules = repo.repo.join("pyproject.toml");
+    assert_eq!(repo.argv("pymarkdown"), ["--config", rules.to_str().unwrap(), "--strict-config", "scan", readme]);
+    let ran_in = std::fs::read_to_string(cwd).unwrap();
+    let ran_in = std::path::Path::new(ran_in.trim_end());
+    assert!(!ran_in.starts_with(&repo.repo) && !ran_in.exists(), "{}", ran_in.display());
+}
+
+#[test]
 fn mypy_s_error_on_an_added_line_fails_the_gate_and_its_note_does_not() {
     let repo = repo();
     repo.put("f.py", &appended(b"tokens = []\n"));

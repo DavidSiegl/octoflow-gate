@@ -151,8 +151,13 @@ fn a_finding_on_an_added_line_fails_the_gate_and_the_report_goes_to_standard_out
 fn a_change_it_cannot_judge_writes_nothing_and_exits_2() {
     let repo = test_gate_repo();
     let out = repo.outside.join("quality.md");
+    // A pyproject.toml that is there, beside the settings, but is no file to read rules from.
+    std::os::unix::fs::symlink("nowhere.toml", repo.outside.join("pyproject.toml")).unwrap();
+    std::fs::write(repo.outside.join("gate.toml"), "").unwrap();
+    let unruled = repo.outside.join("gate.toml");
     for (args, said) in [
-        (&["--config", "missing/pyproject.toml"][..], "is not a file"),
+        (&["--config", "missing/gate.toml"][..], "cannot read the gate's settings"),
+        (&["--config", unruled.to_str().unwrap()][..], "pyproject.toml is not a file"),
         (&["--base", "no-such-rev"][..], "no-such-rev names no commit in"),
     ] {
         let done = repo.gate("HEAD", &[args, &["--out", out.to_str().unwrap()]].concat().iter().map(OsStr::new)
@@ -165,6 +170,9 @@ fn a_change_it_cannot_judge_writes_nothing_and_exits_2() {
     let done = repo.gate("HEAD", &[OsStr::new("--bogus")]);
     assert_eq!(done.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&done.stderr).contains("gate: error: unrecognized arguments: --bogus"));
+    let done = repo.gate("HEAD", &[OsStr::new("--config"), OsStr::new("pyproject.toml")]);
+    assert_eq!(done.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&done.stderr).contains("gate: error: argument --config: names the gate's settings"));
 }
 
 #[test]

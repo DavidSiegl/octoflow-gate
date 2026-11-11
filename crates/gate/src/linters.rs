@@ -11,6 +11,7 @@ use std::time::Duration;
 use regex::bytes::Regex;
 
 use crate::glob::Globs;
+use crate::copies::scratch_directory;
 use crate::judge::under_mutmut_state;
 use crate::paths::{normpath, rel_path};
 use crate::process;
@@ -36,8 +37,13 @@ pub struct Linter {
 enum Kind {
     /// One run over the files, printing a finding a line as `path:line[:col]: detail`.
     Lines {
-        /// The command line, given the pyproject.toml whose rules decide and the tracked files it reads.
-        command: fn(rules: &Path, files: &[OsString]) -> Vec<OsString>,
+        /// The command line, given the pyproject.toml whose rules decide, None for the linter's defaults, and the
+        /// files it reads. Either way, no other file the tree holds configures the run.
+        command: fn(rules: Option<&Path>, files: &[OsString]) -> Vec<OsString>,
+        /// Where it runs and how its files are named: true for an empty directory of the gate's own and absolute
+        /// paths, for a linter that takes configuration from the directory it runs in whatever it is told; false
+        /// for the tree's top level and paths from there.
+        apart: bool,
         /// What follows the location of a finding, fully matched: groups `rule` and `message`, and `severity` where
         /// the linter grades its findings, else the finding is an error.
         detail: &'static str,
@@ -55,30 +61,47 @@ pub static LINTERS: [Linter; 6] = [
         kind: Kind::Lines {
             command: |rules, files| {
                 let words = ["--output-format", "concise", "--no-cache"];
-                argv(&["ruff", "check", "--config"], Some(rules), &words, files)
+                match rules {
+                    Some(rules) => argv(&["ruff", "check", "--config"], Some(rules), &words, files),
+                    None => argv(&["ruff", "check", "--isolated"], None, &words, files),
+                }
             },
+            apart: false,
             detail: r"(?P<rule>[\w-]+):? (?:\[\*\] )?(?P<message>.+)",
         },
     },
-    // Which files mypy checks is one of its rules, [tool.mypy] files. A note elaborates an error; it is not one.
+    // Which files mypy checks is one of its rules, [tool.mypy] files; without rules, they are the files it reads. A
+    // configuration file named "" is none at all, and keeps mypy from looking for one: observed with mypy 2.4.0,
+    // which has no flag for it. A note elaborates an error; it is not one.
     Linter {
         name: "mypy",
         globs: &["**/*.py"],
         line_ends: &['\r'],
         kind: Kind::Lines {
-            command: |rules, _| {
+            command: |rules, files| {
                 let words = ["--show-column-numbers", "--no-error-summary", "--cache-dir", "/dev/null"];
-                argv(&["mypy", "--config-file"], Some(rules), &words, &[])
+                match rules {
+                    Some(rules) => argv(&["mypy", "--config-file"], Some(rules), &words, &[]),
+                    None => argv(&["mypy", "--config-file", ""], None, &words, files),
+                }
             },
+            apart: false,
             detail: r"(?P<severity>error): (?P<message>.+?)(?:  \[(?P<rule>[\w-]+)\])?",
         },
     },
+    // pymarkdown adds to the configuration it is given what a pyproject.toml, .pymarkdown, .pymarkdown.yml or
+    // .pymarkdown.yaml in its current directory says, and has no flag against it: observed with pymarkdownlnt
+    // 0.9.41, in which a tree's own `[tool.pymarkdown]` turned off a rule that the file --config named left on.
     Linter {
         name: "pymarkdown",
         globs: &["**/*.md"],
         line_ends: &['\r'],
         kind: Kind::Lines {
-            command: |rules, files| argv(&["pymarkdown", "--config"], Some(rules), &["--strict-config", "scan"], files),
+            command: |rules, files| match rules {
+                Some(rules) => argv(&["pymarkdown", "--config"], Some(rules), &["--strict-config", "scan"], files),
+                None => argv(&["pymarkdown", "--strict-config", "scan"], None, &[], files),
+            },
+            apart: true,
             detail: r"(?P<rule>MD\d+): (?P<message>.+)",
         },
     },
@@ -90,6 +113,7 @@ pub static LINTERS: [Linter; 6] = [
         line_ends: &['\r'],
         kind: Kind::Lines {
             command: |_, files| argv(&["shellcheck", "--norc", "-f", "gcc"], None, &[], files),
+            apart: false,
             detail: r"(?P<severity>error|warning|note): (?P<message>.+) \[(?P<rule>SC\d+)\]",
         },
     },
@@ -101,6 +125,7 @@ pub static LINTERS: [Linter; 6] = [
         line_ends: &['\r', '\u{85}', '\u{2028}', '\u{2029}'],
         kind: Kind::Lines {
             command: |_, files| argv(&["actionlint", "-config-file", "/dev/null"], None, &[], files),
+            apart: false,
             detail: r"(?P<message>.+) \[(?P<rule>[\w-]+)\]",
         },
     },
@@ -173,35 +198,67 @@ impl Linter {
     }
 
     /// The linter's findings over `files`, the tracked files it reads ([`Linter::files`]), in the tree whose top
-    /// level is `root`, wherever they are, and the failed conditions it caused, each a sentence; none when it ran as
-    /// it should. `rules` is the pyproject.toml whose rules decide, for a linter that takes them. A linter that is
-    /// missing, fails or does not finish within [`process::TOOL_TIMEOUT`] seconds is a condition.
-    pub fn run(&self, root: &Path, rules: &Path, files: &[OsString], tracked: &Tracked) -> (Vec<Finding>, Vec<String>) {
-        let (command, detail) = match self.kind {
-            Kind::Lines { command, detail } => (command, detail),
+    /// level is `root`, an absolute path, wherever they are, and the failed conditions it caused, each a sentence;
+    /// none when it ran as it should. `rules` is the pyproject.toml whose rules decide, an absolute path, for a
+    /// linter that takes them: with None such a linter runs on its defaults. A linter that is missing, fails or does
+    /// not finish within [`process::TOOL_TIMEOUT`] seconds is a condition, as is a directory to run it in that
+    /// cannot be made or removed.
+    pub fn run(
+        &self,
+        root: &Path,
+        rules: Option<&Path>,
+        files: &[OsString],
+        tracked: &Tracked,
+    ) -> (Vec<Finding>, Vec<String>) {
+        let (command, apart, detail) = match self.kind {
+            Kind::Lines { command, apart, detail } => (command, apart, detail),
             Kind::Clippy => return crate::clippy::run(self.name, root, files, tracked),
         };
-        let argv = command(rules, files);
-        let argv: Vec<&OsStr> = argv.iter().map(OsString::as_os_str).collect();
         let name = self.name;
-        let done = match tool_process(name, &argv, root) {
-            Err(problem) => return (vec![], vec![problem]),
-            Ok(done) => done,
+        if !apart {
+            return read_run(name, detail, &command(rules, files), root, root, tracked);
+        }
+        let dir = match scratch_directory(&std::env::temp_dir()) {
+            Ok(dir) => dir,
+            Err(e) => return (vec![], vec![format!("`{name}` did not run: could not make a directory to run it in: {e}.")]),
         };
-        let found = findings(name, detail, &done.stdout, root, tracked);
-        // Exit status 1 means it found something, any other but 0 that it failed.
-        if done.status == 0 || (done.status == 1 && !found.is_empty()) {
-            return (found, vec![]);
+        let files: Vec<OsString> = files.iter().map(|f| root.join(f).into_os_string()).collect();
+        let (found, mut conditions) = read_run(name, detail, &command(rules, &files), &dir, root, tracked);
+        if let Err(e) = std::fs::remove_dir_all(&dir) {
+            conditions.push(format!("Could not remove the directory `{name}` ran in, `{}`: {e}.", dir.display()));
         }
-        let printed = [done.stderr, done.stdout].concat();
-        let printed = text::lossless(&printed);
-        let said = printed.split('\n').map(text::py_strip).find(|l| !l.is_empty()).unwrap_or("");
-        let said: String = said.chars().take(200).collect();
-        if done.status == 1 {
-            return (vec![], vec![format!("`{name}` reported findings, but none the gate could read: {said}")]);
-        }
-        (vec![], vec![format!("`{name}` failed with exit status {}: {said}", done.status)])
+        (found, conditions)
     }
+}
+
+/// [`Linter::run`]'s findings and failed conditions for the line-printing linter `name`, run as `argv` in `cwd`:
+/// what it printed is read by `detail` as [`findings`] reads it, against `root` and `tracked`.
+fn read_run(
+    name: &str,
+    detail: &str,
+    argv: &[OsString],
+    cwd: &Path,
+    root: &Path,
+    tracked: &Tracked,
+) -> (Vec<Finding>, Vec<String>) {
+    let argv: Vec<&OsStr> = argv.iter().map(OsString::as_os_str).collect();
+    let done = match tool_process(name, &argv, cwd) {
+        Err(problem) => return (vec![], vec![problem]),
+        Ok(done) => done,
+    };
+    let found = findings(name, detail, &done.stdout, root, tracked);
+    // Exit status 1 means it found something, any other but 0 that it failed.
+    if done.status == 0 || (done.status == 1 && !found.is_empty()) {
+        return (found, vec![]);
+    }
+    let printed = [done.stderr, done.stdout].concat();
+    let printed = text::lossless(&printed);
+    let said = printed.split('\n').map(text::py_strip).find(|l| !l.is_empty()).unwrap_or("");
+    let said: String = said.chars().take(200).collect();
+    if done.status == 1 {
+        return (vec![], vec![format!("`{name}` reported findings, but none the gate could read: {said}")]);
+    }
+    (vec![], vec![format!("`{name}` failed with exit status {}: {said}", done.status)])
 }
 
 /// `argv` run in `cwd` for the linter `name`, as [`process::run`] runs it, within [`process::TOOL_TIMEOUT`] seconds:
@@ -371,9 +428,9 @@ mod tests {
     #[test]
     fn a_missing_linter_is_a_condition() {
         let Kind::Lines { detail, .. } = linter("shellcheck").kind else { unreachable!() };
-        let kind = Kind::Lines { command: |_, _| vec!["gate-no-such-program".into()], detail };
+        let kind = Kind::Lines { command: |_, _| vec!["gate-no-such-program".into()], apart: false, detail };
         let missing = Linter { kind, ..*linter("shellcheck") };
-        let (found, conditions) = missing.run(Path::new("."), Path::new("p"), &[], &Tracked::new(vec![]));
+        let (found, conditions) = missing.run(Path::new("."), None, &[], &Tracked::new(vec![]));
         assert!(found.is_empty());
         assert_eq!(conditions, ["`shellcheck` is not installed: `gate-no-such-program` is not on PATH."]);
         let argv = [OsStr::new("gate-no-such-program")];

@@ -83,10 +83,22 @@ fn main() -> ExitCode {
 /// with the first check that fails and why.
 fn smoke_release(tarball: &Path) -> Result<(), String> {
     let tmp = std::env::temp_dir().join(format!("xtask-smoke-release-{}", std::process::id()));
+    // One already there is a killed earlier run's, of the same process id: it goes, so that nothing it unpacked can
+    // stand in for what this tarball lacks.
+    let made = match std::fs::create_dir(&tmp) {
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            std::fs::remove_dir_all(&tmp).and_then(|()| std::fs::create_dir(&tmp))
+        }
+        made => made,
+    };
     let (release, project) = (tmp.join("release"), tmp.join("project"));
-    let checked = [&release, &project]
-        .into_iter()
-        .try_for_each(|dir| std::fs::create_dir_all(dir).map_err(|e| format!("cannot make {}: {e}", dir.display())))
+    let checked = made
+        .map_err(|e| format!("cannot make {}: {e}", tmp.display()))
+        .and_then(|()| {
+            [&release, &project]
+                .into_iter()
+                .try_for_each(|dir| std::fs::create_dir(dir).map_err(|e| format!("cannot make {}: {e}", dir.display())))
+        })
         .and_then(|()| unpack(tarball, &release))
         .and_then(|()| check_help(&release))
         .and_then(|()| check_fixture_project(&release, &project));

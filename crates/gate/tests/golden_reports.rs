@@ -5,7 +5,7 @@ use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
 use std::path::PathBuf;
 
-use gate::config_edits::{tool_config, ToolConfig};
+use gate::config_edits::{tool_config, touched_paths, ToolConfig};
 use gate::coverage::NewCoverage;
 use gate::report::{Finding, QualityReport, GATE_VERSION, QUALITY_ISSUE_LIMIT};
 
@@ -40,7 +40,7 @@ fn issues(n: u32) -> Vec<Finding> {
 /// config_edits::tool_config gives it.
 fn clippy(files: Vec<String>) -> ToolConfig {
     let diff: String = files.iter().map(|f| format!("--- a/{f}\n")).collect();
-    let mut found = tool_config(diff.as_bytes(), &Default::default(), None);
+    let mut found = tool_config(&touched_paths(diff.as_bytes(), &Default::default()), None);
     assert_eq!(found.len(), 1, "{files:?} are clippy's alone");
     found.remove(0)
 }

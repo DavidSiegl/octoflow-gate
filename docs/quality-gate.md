@@ -184,11 +184,13 @@ order. The findings are Python's, read of Rust:
 
 **Go tests** it reads as [reading the source](#reading-the-source) says, in a `_test.go` file of a Go module, which is
 test code whole: the go tool fixes which files are tests, so the settings have no key for them. Go code outside the
-tests is any other `.go` file of a module, and a change that touches one edits it. A test is a function
-`TestX(t *testing.T)`, `BenchmarkX(b *testing.B)` or `FuzzX(f *testing.F)`, as `go test` finds them, and a subtest,
-`t.Run("name", func(t *testing.T) {...})`, named by its string literal after the test holding it, as
-`TestAdd/negative`, with `_` for a space as `go test` writes it. A subtest named by any other expression, as a
-table-driven test's `t.Run(tc.name, ...)`, is part of the test holding it. The findings are Python's, read of Go:
+tests is any other Go file the gate reads, which leaves out vendored and generated files, and a change that touches one
+edits it. A test is a function `TestX(t *testing.T)`, `BenchmarkX(b *testing.B)` or `FuzzX(f *testing.F)`, as `go test`
+finds them, and a subtest, `t.Run("name", func(t *testing.T) {...})`, named by its string literal after the test holding
+it, as `TestAdd/negative`, with `_` for a space as `go test` writes it. A subtest named by any other expression, as a
+table-driven test's `t.Run(tc.name, ...)`, is part of the test holding it. An example, `ExampleX()` with its
+`// Output:` comment, is no test, though `go test` runs it and checks its output, so removing one or changing its
+output is not seen (`TODO.md`). The findings are Python's, read of Go:
 
 - `removed-test`: a test or subtest gone from its file, its body compared by a digest of its tokens as Rust's is; a
   deleted file is one finding. Go has no item that holds tests, so there is no group finding;
@@ -196,14 +198,19 @@ table-driven test's `t.Run(tc.name, ...)`, is part of the test holding it. The f
   `*F` or `testing.TB` of any function or `func` literal of the file, a helper's included; and a `//go:build` line
   added above the file's `package` clause, which builds the file's tests only where its expression holds, as Rust's
   `cfg` does;
-- `platform-only`: such a `//go:build` line whose expression names only platforms (`GOOS` and `GOARCH` values and
-  `unix`, with `!`, `&&`, `||` and parentheses) and holds on at least one, as `//go:build linux || darwin`. It is one
-  to weigh, as Rust's is; a custom tag such as `integration` or `ignore` beside them makes it a `skip`;
-- `fewer-assertions`: a kept test with fewer assertions than at the base. An assertion is a call of testify's
-  `assert` or `require` packages (`assert.Equal(t, 3, got)`, under the names the file imports them by; `assert.New`
-  is none), or a call of `Error`, `Errorf`, `Fatal`, `Fatalf`, `Fail` or `FailNow` on a testing parameter as above.
-  Such a call that is a statement of an `if`'s block makes that `if` one assertion, however many it holds, since the
-  `if` holds the expected value: `if got := Add(1, 2); got != 3 { t.Errorf(...) }` is one;
+- `platform-only`: such a `//go:build` line whose expression names no custom tag, only platforms (`GOOS` and `GOARCH`
+  values and `unix`), release tags (`go1.21`) and the toolchain's tags (`cgo`, `gc`, `gccgo`), with `!`, `&&`, `||` and
+  parentheses, and holds on at least one platform and toolchain, as `//go:build linux || darwin` or `//go:build go1.21`.
+  It is one to weigh, as Rust's is; a custom tag such as `integration` or `ignore` beside them makes it a `skip`, as
+  does an expression that holds nowhere, as `cgo && !cgo`;
+- `fewer-assertions`: a kept test with fewer assertions than at the base. An assertion is a call, in the test's own
+  body or a `func` literal in it, of testify's `assert` or `require` packages (`assert.Equal(t, 3, got)`, under the
+  names the file imports them by; `assert.New` is none, and a package imported with `.` is not followed, so its
+  unqualified `Equal(t, ...)` is none), or of `Error`, `Errorf`, `Fatal`, `Fatalf`, `Fail` or `FailNow` on a testing
+  parameter as above. Such a call that is a statement of an `if`'s block makes that `if` one assertion, however many
+  it holds, since the `if` holds the expected value: `if got := Add(1, 2); got != 3 { t.Errorf(...) }` is one. A
+  helper's calls are not followed into the tests that call it: `check(t, Add(1, 2), 3)`, where `check` holds the
+  `t.Errorf`, is no assertion of the test, so a test that asserts only through helpers has none to lose (`TODO.md`);
 - `swallowed-error`: on an added line anywhere in the file, `_ = err`, or an `if err != nil {}` whose block holds no
   statement, `err` being a name Go gives an error by habit: `err`, `err` then a capital or a digit, or a name ending
   in `Err`. A parser knows no types, so an error thrown away under another name, or as `v, _ := f()`, is not seen;
@@ -617,8 +624,9 @@ as one list, issues first, at most 50 in all, then a count:
   (`Cargo.toml`, `clippy.toml`, `rust-toolchain.toml`, `.cargo/config.toml`; `CLIPPY_CONFIG_NAMES` in
   `crates/gate/src/config_edits.rs`),
   and cargo's `config.toml` in the `CARGO_HOME` clippy runs with when that lies inside the tree, as `scripts/gate`'s
-  `.cargo-home` does in a Jenkins build; and, anywhere in the tree, a `go.mod`, which the go tool builds a module by,
-  or golangci-lint's `.golangci.yml`, `.yaml`, `.toml` or `.json` (`GO_CONFIG_NAMES`, beside clippy's).
+  `.cargo-home` does in a Jenkins build; and, anywhere in the tree, a `go.mod` or a `go.work`, which the go tool builds
+  a module by, its `replace` directives swapping a dependency for other code, or golangci-lint's `.golangci.yml`,
+  `.yaml`, `.toml` or `.json` (`GO_CONFIG_NAMES`, beside clippy's).
 
 ### Rust tests and coverage
 
@@ -664,11 +672,14 @@ whatever the language; another language is another front end.
 **Which files.** The gate reads, once per run, each file of the change that holds Rust, by a `.rs` name, Python, by a
 `.py` name or a first line that is a `#!` naming python, or Go, by a `.go` name in a directory that holds a `go.mod`, or
 below one, a go.mod the change deletes included, outside what the go tool leaves out of a package (a directory named
-`testdata`, a name or directory that starts with `.` or `_`), on each side of the change where it is a regular file: at
-the base as git stores it, and in the working tree. A side that is a symbolic link, a submodule, a directory or a
-special file is not read: a link's change is the name it points to, a submodule's object is a commit, and reading a FIFO
-or a device could block. A file of the working tree that cannot be read, and a base file git cannot show, leave the
-change unjudged (exit 2). Lines are numbered from 1, at `\n` alone, as git numbers them.
+`testdata`, a name or directory that starts with `.` or `_`) and of `./...` (a directory named `vendor`, which holds the
+module's dependencies), and not generated: a Go file with the header [Go's convention](https://go.dev/s/generatedcode)
+fixes, a line `// Code generated ... DO NOT EDIT.` before its `package` clause, is the generator's output, not code
+written to be judged. Each is read on each side of the change where it is a regular file: at the base as git stores it,
+and in the working tree. A side that is a symbolic link, a submodule, a directory or a special file is not read: a
+link's change is the name it points to, a submodule's object is a commit, and reading a FIFO or a device could block. A
+file of the working tree that cannot be read, and a base file git cannot show, leave the change unjudged (exit 2). Lines
+are numbered from 1, at `\n` alone, as git numbers them.
 
 **What cannot be read as its language.** Rust and Go source is UTF-8. Python source is decoded as its byte order mark or
 its coding cookie ([PEP 263](https://peps.python.org/pep-0263/)) says, else as UTF-8; the gate decodes UTF-8, ASCII

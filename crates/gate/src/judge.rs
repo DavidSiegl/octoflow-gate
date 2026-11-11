@@ -5,7 +5,7 @@ use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 
-use crate::config_edits::{cargo_home_in, edited_config, tool_config};
+use crate::config_edits::{cargo_home_in, edited_config, tool_config, touched_paths};
 use crate::coverage::new_coverage;
 use crate::diff::{change_diff, changed_files, changed_lines, ChangedFile, ChangedLines};
 use crate::flaky_tests::flaky_tests;
@@ -195,6 +195,7 @@ pub fn judge_change(cwd: &Path, base: &str, given: &Given) -> Result<QualityRepo
     }
     let coverage = if tests.coverage.is_empty() { None } else { Some(new_coverage(&tests.coverage, &root, changed)?) };
     conditions.extend(coverage.as_ref().and_then(|c| c.condition()));
+    let touched = touched_paths(&change.diff, changed);
 
     Ok(QualityReport {
         head: text::lossless(&first_line(git::output(&root, &["rev-parse", "HEAD"])?)),
@@ -206,8 +207,8 @@ pub fn judge_change(cwd: &Path, base: &str, given: &Given) -> Result<QualityRepo
         failing_tests: tests.failing,
         coverage,
         suppressions: added_suppressions(&root, changed)?,
-        edited_config: edited_config(&change.diff, changed, &change.settings),
-        tool_config: tool_config(&change.diff, changed, cargo_home_in(&root, &tool_env()).as_deref()),
+        edited_config: edited_config(&touched, &change.settings),
+        tool_config: tool_config(&touched, cargo_home_in(&root, &tool_env()).as_deref()),
         rules_from,
         settings_from,
         config_notes: change.settings.build_config.clone(),

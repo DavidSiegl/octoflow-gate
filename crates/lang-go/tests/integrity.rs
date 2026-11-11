@@ -126,6 +126,32 @@ func Test(t *tst.T) {
 }
 
 #[test]
+fn testify_s_assert_and_require_are_assertions_under_the_names_they_are_imported_by() {
+    let source = r#"package calc
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	must "github.com/stretchr/testify/require"
+)
+
+func TestAdd(t *testing.T) {
+	assert.Equal(t, 3, Add(1, 2))
+	must.Equal(t, 4, Add(2, 2))
+	a := assert.New(t)
+	require.Equal(t, 5, Add(2, 3))
+	_ = a
+}
+"#;
+    let file = lang_go::read(source.as_bytes(), true).unwrap();
+    let texts: Vec<&str> = file.tests[0].assertions.iter().map(|a| a.text.as_str()).collect();
+    assert_eq!(texts, ["assert.Equal(t, 3, Add(1, 2))", "must.Equal(t, 4, Add(2, 2))"]);
+    let fewer = edit(source, "\tassert.Equal(t, 3, Add(1, 2))\n", "");
+    assert_eq!(wheres(&check(&[edited(TEST_PATH, source, &fewer)])), [at(10, "fewer-assertions")]);
+}
+
+#[test]
 fn an_edit_beside_the_tests_has_no_findings() {
     let files = [edited(CALC_PATH, CALC, &edit(CALC, "a + b", "b + a"))];
     assert!(code_changed(&files));
@@ -186,9 +212,11 @@ fn a_build_constraint_naming_only_platforms_is_weighed_not_a_skip() {
     assert_eq!(wheres(&found), [at(1, "platform-only")]);
     assert_eq!(
         found[0].message,
-        "`//go:build linux || darwin` added: it turns the file's tests off on the other platforms."
+        "`//go:build linux || darwin` added: it turns the file's tests off on the other platforms and toolchains."
     );
     assert_eq!(found[0].severity, "warning");
+    let test = edit(CALC_TEST, "package calc\n", "//go:build go1.21 && cgo\n\npackage calc\n");
+    assert_eq!(wheres(&check(&[edited(TEST_PATH, CALC_TEST, &test)])), [at(1, "platform-only")]);
 }
 
 #[test]

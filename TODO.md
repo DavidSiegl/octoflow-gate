@@ -565,6 +565,24 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   suite's `s.Equal(...)` are not assertions, so removing them is no fewer-assertions finding. Found with go-support/01
   (2026-11-11). Closes with each read where the file says it: `// +build` beside `//go:build`, the file name's suffix as
   a constraint in `crates/gate/src/parser_checks.rs`, and the variables bound to `assert.New` followed.
+- **A Go test helper's failing call is no assertion of the tests that call it.** `Walk::assert` in
+  `crates/lang-go/src/testing.rs` gives an assertion only to the test whose body holds it, so in
+  `func check(t *testing.T, got, want int) { if got != want { t.Errorf(...) } }`, called as `check(t, Add(1, 2), 3)`
+  from `TestAdd`, neither the helper's `t.Errorf` nor the call is an assertion: deleting the call is no
+  fewer-assertions finding, and changing its 3 beside the code no expected-value-changed. Tests written through
+  helpers are common in Go. As cross-review 22 put it (F3), go-support/01 (2026-11-11). Closes with a call, in a test,
+  of a function of the file that takes the test's testing parameter and holds failing calls read as an assertion of
+  the test, its literals the call's.
+- **A Go example is no test.** `is_test` in `crates/lang-go/src/testing.rs` takes `TestX`, `BenchmarkX` and `FuzzX`,
+  not `ExampleX`, which `go test` also runs, comparing what it prints with its `// Output:` comment; so deleting an
+  example, or changing its `// Output: 3` to `4` beside the code, is not seen. As cross-review 22 put it (F7),
+  go-support/01 (2026-11-11). Closes with an `ExampleX` that has an `// Output:` or `// Unordered output:` comment read
+  as a test whose one assertion is that comment, its text the expected value.
+- **A dot-imported testify package's calls are not assertions.** `Imports::of` in `crates/lang-go/src/testing.rs`
+  skips an import named `.` or `_`, so with `import . "github.com/stretchr/testify/assert"` a test's
+  `Equal(t, 3, Add(1, 2))` is no assertion, and removing it or changing its 3 beside the code is not seen. Rare, and
+  linters warn against dot imports. As cross-review 22 put it (F9), go-support/01 (2026-11-11). Closes with a
+  dot-imported testify package's exported functions, called unqualified, read as its assertions, `New` excepted.
 - **Go's golden files are not golden files by default.** Go keeps a test's expected output in `testdata/`, by habit as
   `*.golden`, which the default `test-files.golden`, `**/tests/**/golden/**` (`crates/gate/src/settings.rs`), does not
   match, so a change that rewrites them with the code gets no expected-value-changed finding unless the project names

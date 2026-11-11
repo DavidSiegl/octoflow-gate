@@ -8,7 +8,7 @@ use std::collections::{BTreeSet, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::io::Read;
 use std::os::unix::ffi::OsStrExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use checks::{complexity, integrity, names, ChangedFile, Finding, Side};
 use lang_python::{Unit, FIRST_LINE_BYTES};
@@ -29,7 +29,7 @@ pub struct Sources<'a> {
     pub change: &'a Change,
     pub python: PythonChange<'a>,
     pub rust: RustChange<'a>,
-    pub go: GoChange<'a>,
+    pub go: GoChange,
 }
 
 impl<'a> Sources<'a> {
@@ -43,8 +43,8 @@ impl<'a> Sources<'a> {
         Ok(Sources {
             change,
             python: PythonChange { change, files: python, bases_not_python },
-            rust: RustChange { change, files: rust, gone: stored.gone.clone() },
-            go: GoChange { change, files: go, gone: stored.gone },
+            rust: RustChange { change, files: rust, gone: stored.gone },
+            go: GoChange { files: go },
         })
     }
 }
@@ -131,7 +131,7 @@ pub struct RustChange<'a> {
     /// [`Sources`] says. A file gate.toml's `test-files.rust` matches is read as test code whole.
     pub files: Vec<ChangedFile>,
     /// The base paths the change deletes or renames, where a Cargo.toml may have stood.
-    gone: Vec<OsString>,
+    gone: HashSet<PathBuf>,
 }
 
 impl RustChange<'_> {
@@ -160,32 +160,22 @@ impl RustChange<'_> {
     }
 }
 
-/// A change's Go: the files, and which of the change's paths are the code under test rather than its tests.
-pub struct GoChange<'a> {
-    pub change: &'a Change,
+/// A change's Go: the files, and whether it edits the code under test rather than its tests.
+pub struct GoChange {
     /// Each file of the change that is Go source of a Go module on a side ([`GO`]), in the change's order, read with
     /// crates/lang-go as [`Sources`] says. A `_test.go` file is read as test code whole.
     pub files: Vec<ChangedFile>,
-    /// The base paths the change deletes or renames, where a go.mod may have stood.
-    gone: Vec<OsString>,
 }
 
-impl GoChange<'_> {
-    /// Whether `path`, on either side of the change, is Go code under test: Go source (lang_go::is_go) of a Go module
-    /// ([`in_project`]) that is not a `_test.go` file. Unlike Rust's ([`RustChange::is_code`]), it does not ask what
-    /// the change edits in the file: Go has no test code inside a file of code.
-    pub fn is_code(&self, path: &OsStr) -> bool {
-        let path_bytes = path.as_bytes();
-        lang_go::is_go(path_bytes)
-            && !lang_go::among_tests(path_bytes)
-            && in_project(self.change, &self.gone, path, GO_MANIFEST)
-    }
-
-    /// Whether the change edits Go code under test: whether a path on a side of one of its files [`is_code`].
+impl GoChange {
+    /// Whether the change edits Go code under test: whether a side of one of [`files`] is not a `_test.go` file. Go
+    /// has no test code inside a file of code, so, unlike Rust's ([`RustChange::is_code`]), it does not ask what the
+    /// change edits in the file; and what is not read as Go, as a symlink or a vendored or generated file, is no Go
+    /// code.
     ///
-    /// [`is_code`]: GoChange::is_code
+    /// [`files`]: GoChange::files
     pub fn edits_code(&self) -> bool {
-        any_path(self.change, |path| self.is_code(path))
+        self.files.iter().flat_map(|f| [&f.before, &f.after]).flatten().any(|side| !side.among_tests)
     }
 }
 
@@ -253,6 +243,9 @@ struct Language {
     /// a file of the language outside every such directory ([`in_project`]) is not read as the language's. None for a
     /// language whose files are read wherever they are.
     project: Option<&'static str>,
+    /// Whether a file that holds the language's source, `source` being all its bytes, is generated, as its generator
+    /// marks it, and so not read as the language's: a generator's output is not code written to be judged.
+    generated: fn(source: &[u8]) -> bool,
     /// Whether a file that holds the language's source in the working tree has its base read as the language's too,
     /// whatever the base's name and first line say, so that a file is compared with its base under any name.
     base_of_any_name: bool,
@@ -267,6 +260,7 @@ const PYTHON: Language = Language {
     among_tests: |settings, path, other| python_test(settings, path) || other.is_some_and(|o| python_test(settings, o)),
     base_of_any_name: true,
     project: None,
+    generated: |_| false,
     read: |source, path, among_tests| lang_python::read(source, Path::new(path), among_tests),
 };
 
@@ -276,6 +270,7 @@ const RUST: Language = Language {
     base_of_any_name: false,
     // Rust outside a Cargo package is still read, though it is no code under test ([`RustChange::is_code`]).
     project: None,
+    generated: |_| false,
     read: |source, _, among_tests| lang_rust::read(source, among_tests),
 };
 
@@ -284,6 +279,7 @@ const GO: Language = Language {
     among_tests: |_, path, _| lang_go::among_tests(path.as_bytes()),
     base_of_any_name: false,
     project: Some(GO_MANIFEST),
+    generated: lang_go::generated,
     read: |source, _, among_tests| lang_go::read(source, among_tests),
 };
 
@@ -299,23 +295,24 @@ struct Stored<'a> {
     /// The lines of its base the change removed from each file, by the file's path in the working tree.
     removed: ChangedLines,
     /// The base paths the change deletes or renames, where a project's file ([`Language::project`]) may have stood.
-    gone: Vec<OsString>,
+    gone: HashSet<PathBuf>,
 }
 
 impl<'a> Stored<'a> {
     /// Errs when git cannot list the base's tree.
     fn of(change: &'a Change) -> Result<Stored<'a>, Unjudged> {
         let base_paths: Vec<OsString> = change.files.iter().filter_map(|f| f.before.clone()).collect();
+        let gone = change.files.iter().filter(|f| f.before != f.after).filter_map(|f| f.before.as_deref());
         Ok(Stored {
             change,
             regular_at_base: regular_files_at_base(change, &base_paths)?,
             removed: removed_lines(&change.diff),
-            gone: change.files.iter().filter(|f| f.before != f.after).filter_map(|f| f.before.clone()).collect(),
+            gone: gone.map(PathBuf::from).collect(),
         })
     }
 
     /// Each file of the change that holds `language`'s source on a side, inside one of its projects where it has them
-    /// ([`Language::project`]), in the change's order, each such side read;
+    /// ([`Language::project`]) and not generated ([`Language::generated`]), in the change's order, each such side read;
     /// and the base paths among them that held none of it by their name or first line, read all the same
     /// ([`Language::base_of_any_name`]). Errs when git cannot show such a file at the base, or one cannot be read in
     /// the working tree.
@@ -325,17 +322,14 @@ impl<'a> Stored<'a> {
             let among_tests = (language.among_tests)(&change.settings, path, other.as_deref());
             Side { source: (language.read)(source, path, among_tests), path: path.clone(), among_tests }
         };
-        let read_here = |path: &&OsString| language.project.is_none_or(|m| in_project(change, &self.gone, path, m));
         let (mut out, mut bases_holding_none) = (vec![], HashSet::new());
         for file in &change.files {
-            let after = file.after.as_ref().filter(read_here);
-            let after = match after.filter(|path| regular_file(&change.root.join(path))) {
+            let after = match file.after.as_ref().filter(|path| regular_file(&change.root.join(path))) {
                 Some(path) => self.in_working_tree(path, language)?.map(|bytes| side(path, &file.before, &bytes)),
                 None => None,
             };
             let whatever_it_holds = language.base_of_any_name && after.is_some();
-            let before = file.before.as_ref().filter(read_here);
-            let before = match before.filter(|path| self.regular_at_base.contains(*path)) {
+            let before = match file.before.as_ref().filter(|path| self.regular_at_base.contains(*path)) {
                 Some(path) => self.at_base(path, language, whatever_it_holds)?.map(|(blob, holds)| {
                     if !holds {
                         bases_holding_none.insert(path.clone());
@@ -354,7 +348,8 @@ impl<'a> Stored<'a> {
         Ok((out, bases_holding_none))
     }
 
-    /// The bytes of the base's regular file at `path`, when it holds `language`'s source or `whatever_it_holds`,
+    /// The bytes of the base's regular file at `path`, when it holds `language`'s source or `whatever_it_holds`, lies
+    /// in one of the language's projects ([`Stored::in_its_project`]) and is not generated ([`Language::generated`]),
     /// with whether it holds that source. A file git cannot show is not the language's when its name would have to
     /// decide and does not, and an error otherwise.
     fn at_base(
@@ -373,14 +368,16 @@ impl<'a> Stored<'a> {
         };
         let head = || show().as_ref().map(|blob| blob[..blob.len().min(FIRST_LINE_BYTES)].to_vec()).unwrap_or_default();
         let holds = (language.holds)(path.as_bytes(), &head);
-        if !whatever_it_holds && !holds {
+        if (!whatever_it_holds && !holds) || !self.in_its_project(path, language) {
             return Ok(None);
         }
         show();
-        Ok(blob.into_inner().transpose()?.map(|bytes| (bytes, holds)))
+        let bytes = blob.into_inner().transpose()?;
+        Ok(bytes.filter(|bytes| !(language.generated)(bytes)).map(|bytes| (bytes, holds)))
     }
 
-    /// The bytes of the working tree's regular file at `path`, when it holds `language`'s source.
+    /// The bytes of the working tree's regular file at `path`, when it holds `language`'s source, lies in one of the
+    /// language's projects ([`Stored::in_its_project`]) and is not generated ([`Language::generated`]).
     fn in_working_tree(&self, path: &OsStr, language: &Language) -> Result<Option<Vec<u8>>, Unjudged> {
         let full = self.change.root.join(path);
         let head = || {
@@ -389,11 +386,20 @@ impl<'a> Stored<'a> {
             let read = std::fs::File::open(&full).and_then(first);
             if read.is_ok() { head } else { vec![] }
         };
-        if !(language.holds)(path.as_bytes(), &head) {
+        if !(language.holds)(path.as_bytes(), &head) || !self.in_its_project(path, language) {
             return Ok(None);
         }
         let read = std::fs::read(&full);
-        read.map(Some).map_err(|e| Unjudged(format!("{} could not be read: {e}", text::path(full.as_os_str()))))
+        let bytes = read.map_err(|e| Unjudged(format!("{} could not be read: {e}", text::path(full.as_os_str()))))?;
+        Ok(Some(bytes).filter(|bytes| !(language.generated)(bytes)))
+    }
+
+    /// Whether `path`, the path of a side that holds `language`'s source, lies in one of the language's projects
+    /// ([`in_project`]), as it must to be read as the language's where the language has them ([`Language::project`]).
+    /// It is asked after [`Language::holds`], which most paths fail by their name alone, as it walks up the path's
+    /// directories with a `stat` at each.
+    fn in_its_project(&self, path: &OsStr, language: &Language) -> bool {
+        language.project.is_none_or(|manifest| in_project(self.change, &self.gone, path, manifest))
     }
 }
 
@@ -422,11 +428,11 @@ fn regular_file(path: &Path) -> bool {
 /// or one above it up to the top: in the working tree, or at the base where the change deletes or renames it, as
 /// `gone`, the base paths the change deletes or renames, says. One test serves both sides of a file, so a manifest
 /// the change adds also places the file's base in a project.
-fn in_project(change: &Change, gone: &[OsString], path: &OsStr, manifest: &str) -> bool {
+fn in_project(change: &Change, gone: &HashSet<PathBuf>, path: &OsStr, manifest: &str) -> bool {
     let mut dir = Path::new(path).parent();
     while let Some(d) = dir {
         let manifest = d.join(manifest);
-        if gone.iter().any(|g| Path::new(g) == manifest) || change.root.join(&manifest).is_file() {
+        if gone.contains(&manifest) || change.root.join(&manifest).is_file() {
             return true;
         }
         dir = d.parent();

@@ -465,9 +465,9 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   baseline did not end in them, and the finding was "budget reached before cargo-mutants had tested the unmutated
   baseline" where the test expects "budget reached after ". Seen twice in `cargo nextest run --workspace` on
   2026-11-10 at `bfb184b`; alone, on the same machine and under the same load, the test passed. Seen once more that
-  day at a load average of 4 to 6, while a Jenkins build of another repository compiled. Not seen in a Jenkins build
-  of this one. Closes with a budget the baseline fits in whatever the load, or a test that does not depend on how
-  long a build takes.
+  day at a load average of 4 to 6, while a Jenkins build of another repository compiled. Its Python twin, since
+  deleted, failed Jenkins build PR-30 #1 the same way on 2026-11-11. Ticket load-flakes/01 (GitHub #32). Closes with
+  a budget the baseline fits in whatever the load, or a test that does not depend on how long a build takes.
 - **This repo's own Rust is not mutation-tested: the workspace's tests outlast cargo-mutants' `--timeout`.** The gate
   gives cargo-mutants `--timeout 60` (`TEST_TIMEOUT` in `crates/gate/src/mutants.rs`), which holds the unmutated
   baseline's test run too, and `cargo nextest run --workspace` takes about 165 seconds since gate-standalone/16 added

@@ -484,15 +484,19 @@ module that is not a `_test.go` file nor in a `testdata` directory, and that the
 source](#reading-the-source)), so not a vendored, generated or symlinked one; but not one whose file's base has a
 function of its name with the same declaration, its receiver, parameters, results and body, whatever its comments and
 layout, as an edit to its comments or layout alone changes nothing to mutate; a signature edited alone is an edit.
-gremlins runs as `gremlins unleash --diff <base>` in the directory of the go.mod nearest above the functions' files,
-once per module, in the gate's copy of the files git tracks. It first runs the module's tests for their coverage, then
-each mutant against the tests of its package, and mutates only what it reads as changed from `git diff --merge-base
-<base>`: the gate puts a `git` first on its `PATH` that answers that one command with the edited functions' lines, and
-passes any other to git, so gremlins mutates the edited functions whole, though the copy has no repository. gremlins
-writes its report only when it finishes, so the gate reads the line it prints for each mutant, which a run the budget
-stopped has printed for those it tried. A mutant that LIVED survived; a KILLED one, and one TIMED OUT, did not; one NOT
-COVERED is on a line no test runs; a NOT VIABLE one, which does not build, was not tried. The findings are mutmut's
-kinds:
+gremlins runs as `gremlins unleash --silent=false --output-statuses lctkvsr --threshold-efficacy 0 --threshold-mcover 0
+--timeout-coefficient 10 --diff <base>`, with `-count=1` added to `GOFLAGS`, in the directory of the go.mod nearest
+above the functions' files, once per module, in the gate's copy of the files git tracks. It first runs the module's
+tests for their coverage, then each mutant against the tests of its package, and mutates only what it reads as changed
+from `git diff --merge-base <base>`: the gate puts a `git` first on its `PATH` that answers that one command with the
+edited functions' lines, and passes any other to git, so gremlins mutates the edited functions whole, though the copy
+has no repository. The flags pin what a module's `.gremlins.yaml` could otherwise change under the gate: every mutant's
+line printed, no threshold's exit status, and a timeout for each mutant's tests of ten times what gremlins' first run of
+the module's tests took, a run the test cache cannot shorten to milliseconds, which would time out every mutant and
+count it caught. Which mutators run stays the module's choice. gremlins writes its report only when it finishes, so the
+gate reads the line it prints for each mutant, which a run the budget stopped has printed for those it tried. A mutant
+that LIVED survived; a KILLED one, and one TIMED OUT, did not; one NOT COVERED is on a line no test runs; a NOT VIABLE
+one, which does not build, was not tried. The findings are mutmut's kinds:
 
 - `survived`: a function with mutants that lived, at its `func` line, with how many of its tried mutants survived and
   the first three, each by its line, column and gremlins' kind, such as `line 13, column 11: CONDITIONALS_BOUNDARY`;

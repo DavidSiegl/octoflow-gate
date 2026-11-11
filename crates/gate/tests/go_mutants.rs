@@ -81,6 +81,21 @@ fn a_function_whose_mutants_survive_is_found_and_one_no_test_runs_is_untested() 
 }
 
 #[test]
+fn a_gremlins_configuration_in_the_module_changes_neither_what_it_prints_nor_its_exit() {
+    let repo = repo("");
+    // Silent, Killed lines alone, a threshold that Unchecked's survivors fail, which would exit 10, and a timeout so
+    // short that every mutant would time out.
+    let settings = "silent: true\nunleash:\n  output-statuses: k\n  timeout-coefficient: 1\n  threshold:\n    \
+                    efficacy: 90\n";
+    repo.commit(&[(".gremlins.yaml", settings.as_bytes())], "gremlins' settings");
+    repo.put("calc.go", format!("{CALC}{ADDED}").as_bytes());
+    repo.put("more_test.go", ADDED_TEST.as_bytes());
+    let found = findings(&repo, None, &[]);
+    let places: Vec<_> = found.iter().map(|(path, line, rule, _)| (path.as_deref(), *line, rule.as_str())).collect();
+    assert_eq!(places, [(Some("calc.go"), Some(14), "survived"), (Some("calc.go"), Some(19), "untested")], "{found:?}");
+}
+
+#[test]
 fn a_function_whose_edit_only_removes_lines_is_mutated_in_a_module_below_the_top() {
     let repo = repo("calc/");
     // Clamp's guard clause goes; what is left, a > 3, no test checks.
@@ -155,8 +170,8 @@ fn gremlins_runs_in_the_copy_on_the_gate_s_diff_and_is_stopped_with_sigint() {
     let record = repo.outside.join("record");
     // The diff is what git gives when asked as gremlins asks; a SIGINT is recorded, and ends the stub.
     let script = format!(
-        "{{ pwd; printf '%s\\n' \"$@\"; echo \"color=$NO_COLOR token=${{JENKINS_TOKEN-unset}}\"; \
-         git diff --merge-base \"$3\"; git --version; }} > '{0}'\n\
+        "{{ pwd; printf '%s\\n' \"$@\"; echo \"color=$NO_COLOR token=${{JENKINS_TOKEN-unset}} goflags=$GOFLAGS\"; \
+         git diff --merge-base \"${{12}}\"; git --version; }} > '{0}'\n\
          echo '       LIVED CONDITIONALS_BOUNDARY at calc.go:15:11'\n\
          trap 'echo interrupted >> \"{0}\"; exit 0' INT\nsleep 30 & wait",
         record.display()
@@ -175,11 +190,16 @@ fn gremlins_runs_in_the_copy_on_the_gate_s_diff_and_is_stopped_with_sigint() {
     let lines: Vec<&str> = recorded.lines().collect();
     assert!(std::path::Path::new(lines[0]).ends_with("tree/calc"), "{recorded}");
     let base = repo.git(&["rev-parse", "HEAD"]);
-    assert_eq!(lines[1..5], ["unleash", "--diff", base.trim(), "color=1 token=unset"]);
+    let argv = [
+        "unleash", "--silent=false", "--output-statuses", "lctkvsr", "--threshold-efficacy", "0", "--threshold-mcover",
+        "0", "--timeout-coefficient", "10", "--diff", base.trim(),
+    ];
+    assert_eq!(lines[1..13], argv);
+    assert!(lines[13].starts_with("color=1 token=unset goflags=") && lines[13].ends_with(" -count=1"), "{recorded}");
     let diff = "diff --git a/calc.go b/calc.go\n--- a/calc.go\n+++ b/calc.go\n@@ -0,0 +9,3 @@\n+\n+\n+\n\
                 @@ -0,0 +14,3 @@\n+\n+\n+\n@@ -0,0 +19,3 @@\n+\n+\n+\n";
-    assert_eq!(lines[5..20].join("\n") + "\n", diff);
-    assert!(lines[20].starts_with("git version "), "{recorded}");
+    assert_eq!(lines[14..29].join("\n") + "\n", diff);
+    assert!(lines[29].starts_with("git version "), "{recorded}");
     assert_eq!(lines.last(), Some(&"interrupted"));
 }
 

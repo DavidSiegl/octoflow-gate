@@ -28,6 +28,11 @@ const SURVIVED: &str = "LIVED";
 const TRIED: [&str; 3] = ["LIVED", "KILLED", "TIMED OUT"];
 const NOT_COVERED: &str = "NOT COVERED";
 
+/// How many times as long as the module's tests took in gremlins' first run of them, with their coverage, a mutant's
+/// tests may run before gremlins counts them timed out (its `--timeout-coefficient`, 3 by default). A mutant's run
+/// also builds its package anew, which the first run took from the build cache, so 3 left too little on a small module.
+const TIMEOUT_COEFFICIENT: u32 = 10;
+
 /// A Go function the change edits, which gremlins mutates.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Edited {
@@ -200,10 +205,33 @@ fn run_module(run: &Run, module: &Path, functions: &[&Edited], budget: &Budget) 
         Ok(path) => path,
         Err(e) => return (vec![not_run(&format!("could not write the change's diff for gremlins: {e}"))], false),
     };
-    let argv = ["gremlins", "unleash", "--diff", run.base].map(OsStr::new);
+    // gremlins also takes these from a .gremlins.yaml in the module, which could silence the lines the gate reads, add
+    // a threshold whose exit would read as a failure, or narrow the timeout: the command line pins them, every status
+    // printed.
+    let timeout = TIMEOUT_COEFFICIENT.to_string();
+    let argv = [
+        "gremlins",
+        "unleash",
+        "--silent=false",
+        "--output-statuses",
+        "lctkvsr",
+        "--threshold-efficacy",
+        "0",
+        "--threshold-mcover",
+        "0",
+        "--timeout-coefficient",
+        &timeout,
+        "--diff",
+        run.base,
+    ]
+    .map(OsStr::new);
     // gremlins colours its output only on a terminal, which a process the gate starts has none of; NO_COLOR makes
     // sure.
-    let env = [("PATH", path.as_os_str()), ("NO_COLOR", OsStr::new("1"))];
+    // gremlins times each mutant's tests by how long its first run of the module's tests took, which the go tool's
+    // test cache can make a few milliseconds: then every mutant times out and counts as caught. -count=1 runs them.
+    let mut goflags = std::env::var_os("GOFLAGS").unwrap_or_default();
+    goflags.push(" -count=1");
+    let env = [("PATH", path.as_os_str()), ("NO_COLOR", OsStr::new("1")), ("GOFLAGS", goflags.as_os_str())];
     let extras = Extras { env: &env, soft_stop: Some(STOP_GRACE) };
     match run_with(&argv, &run.tree.join(module), left, &extras) {
         Ok(done) => (run_findings(&done, module, functions, &place, budget.seconds), done.stopped),

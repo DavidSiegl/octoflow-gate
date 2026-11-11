@@ -45,9 +45,9 @@ options:
   --config FILE           a gate.toml whose settings are used instead of those of the tree's own; the rules of
                           ruff, mypy, pymarkdown and mutmut are then those of the pyproject.toml beside FILE, and
                           their defaults when there is none, instead of the tree's own
-  --coverage XML          a Cobertura or LCOV coverage report of the tree; given more than once, the reports are
-                          merged by path and line. With --coverage or --tests, gate.toml's [[test]] commands do not
-                          run: these reports are what is judged
+  --coverage XML          a Cobertura, LCOV or Go (go test -coverprofile) coverage report of the tree; given more
+                          than once, the reports are merged by path and line. With --coverage or --tests,
+                          gate.toml's [[test]] commands do not run: these reports are what is judged
   --tests XML             a JUnit report of the tree's tests; given more than once, a failing test in any of them
                           counts. With --tests or --coverage, gate.toml's [[test]] commands do not run
   --out FILE              write the quality file here instead of to standard output, and quality.json beside it,

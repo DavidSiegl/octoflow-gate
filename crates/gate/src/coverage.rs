@@ -1,5 +1,6 @@
 //! Coverage of the lines a change added, from the coverage reports of the tree's tests: Cobertura, such as
-//! pytest-cov's coverage.xml and cargo-llvm-cov's `--cobertura`, and LCOV, such as cargo-llvm-cov's `--lcov`.
+//! pytest-cov's coverage.xml and cargo-llvm-cov's `--cobertura`, LCOV, such as cargo-llvm-cov's `--lcov`, and Go's
+//! coverage profile, as `go test -coverprofile` writes it.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ffi::{OsStr, OsString};
@@ -85,18 +86,20 @@ impl NewCoverage {
 /// from the coverage `reports`, merged by path and line: a line is coverable when any report lists it, and covered
 /// when any report covers it; its branch outcomes are the most any report counts, and the most any report covers.
 ///
-/// A report is Cobertura when it is XML, LCOV otherwise, as [`report_format`] tells them. A
-/// Cobertura report's paths are relative to its `<source>` directories, or to `root`, the tree's top, when it lists
-/// none; an LCOV report's are as its `SF:` lines give them. A relative path, or source, is taken from the current
-/// directory; each is matched to the tree's paths through its real path, so cargo-llvm-cov's report, whose source is
-/// its workspace's directory, maps to the tree's paths as long as the tree is where the report was written. A changed
-/// line no report lists is not coverable, like a comment. Only the entries of the files the change adds lines to are
-/// read.
+/// A report is Cobertura when it is XML, a Go coverage profile when it starts with its `mode:` line, LCOV otherwise,
+/// as [`report_format`] tells them. A Cobertura report's paths are relative to its `<source>` directories, or to
+/// `root`, the tree's top, when it lists none; an LCOV report's are as its `SF:` lines give them; a Go profile names a
+/// file by its package's import path, which [`go_profile_names`] maps to the tree's paths. A relative path, or
+/// source, is taken from the current directory; each is matched to the tree's paths through its real path, so
+/// cargo-llvm-cov's report, whose source is its workspace's directory, maps to the tree's paths as long as the tree is
+/// where the report was written. A changed line no report lists is not coverable, like a comment. Only the entries of
+/// the files the change adds lines to are read.
 ///
-/// Errs when a report cannot be read or parsed: when it is not XML or LCOV, as an empty or truncated one is not; when
-/// a Cobertura line of a file the change adds lines to has a number, or on a changed line hits, that is not a whole
-/// number; when a DA or BRDA entry of such a file in an LCOV report has a line number that is not a whole number, or
-/// on a changed line other fields that cannot be read.
+/// Errs when a report cannot be read or parsed: when it is not XML, a Go profile or LCOV, as an empty or truncated
+/// one is not; when a Cobertura line of a file the change adds lines to has a number, or on a changed line hits, that
+/// is not a whole number; when a DA or BRDA entry of such a file in an LCOV report has a line number that is not a
+/// whole number, or on a changed line other fields that cannot be read; when a Go profile has a line that is not a
+/// block, or the go.mod of a Go file the change adds lines to cannot be read.
 pub fn new_coverage(
     reports: &[PathBuf],
     root: &Path,
@@ -147,6 +150,7 @@ fn changed_line_coverage(
             })
         }
         Report::Lcov(lcov) => lcov_lines(lcov, real_root, changed).map_err(cannot),
+        Report::GoProfile(profile) => go_profile_lines(profile, root, real_root, changed).map_err(cannot),
     }
 }
 
@@ -156,11 +160,14 @@ enum Report<'a> {
     Xml(String),
     /// An LCOV report's bytes, past any byte-order mark.
     Lcov(&'a [u8]),
+    /// A Go coverage profile's bytes, from its `mode:` line.
+    GoProfile(&'a [u8]),
 }
 
 /// What `bytes`, a coverage report, holds: an XML document when, past a byte-order mark and any whitespace, it
 /// starts with `<`, decoded as the mark says, UTF-8 or UTF-16 in either byte order, as XML lets a document say
-/// (https://www.w3.org/TR/xml/#sec-guessing), and as UTF-8 without one; LCOV otherwise. Errs, with why, on XML that
+/// (https://www.w3.org/TR/xml/#sec-guessing), and as UTF-8 without one; a Go coverage profile when, past a UTF-8
+/// byte-order mark, it starts with `mode: `, which no LCOV entry does; LCOV otherwise. Errs, with why, on XML that
 /// does not decode, or on UTF-16 that is not XML, as LCOV never is.
 fn report_format(bytes: &[u8]) -> Result<Report<'_>, String> {
     let utf16 = |rest: &[u8], unit: fn([u8; 2]) -> u16| {
@@ -180,6 +187,9 @@ fn report_format(bytes: &[u8]) -> Result<Report<'_>, String> {
         [0xfe, 0xff, rest @ ..] => utf16(rest, u16::from_be_bytes),
         _ => {
             let rest = bytes.strip_prefix("\u{feff}".as_bytes()).unwrap_or(bytes);
+            if rest.starts_with(GO_PROFILE_MODE) {
+                return Ok(Report::GoProfile(rest));
+            }
             if !rest.trim_ascii_start().starts_with(b"<") {
                 return Ok(Report::Lcov(rest));
             }
@@ -352,6 +362,128 @@ impl LcovRecord<'_> {
     }
 }
 
+/// How a Go coverage profile starts: its first line is `mode: set`, `count` or `atomic`.
+const GO_PROFILE_MODE: &[u8] = b"mode: ";
+
+/// The changed lines a Go coverage profile (`go test -coverprofile`, <https://go.dev/blog/cover>) lists, `profile`
+/// being its bytes from its `mode:` line. Each later line but another `mode:` line, as profiles joined end to end
+/// have, is a block of statements: `<file>:<start>,<end> <statements> <count>`, each place a `<line>.<column>`, the
+/// end exclusive. `<file>` is the file's package import path and its name, as [`go_profile_names`] reads it, else a
+/// path, absolute or from the current directory, as an LCOV `SF:` line gives one. A block covers each line from its
+/// start up to its end, its end's line only when the block holds some of it (an end column past 1), and a block of
+/// no statements, as an empty function's, none; a line is covered when a block that covers it ran (a count above 0).
+/// Go counts no branches.
+///
+/// Errs, with why, when a line after the first is not a block, as in a truncated profile, or the go.mod of a Go file
+/// the change adds lines to cannot be read.
+fn go_profile_lines(
+    profile: &[u8],
+    root: &Path,
+    real_root: &Path,
+    changed: &BTreeMap<OsString, BTreeSet<u32>>,
+) -> Result<Vec<LineCoverage>, String> {
+    let names = go_profile_names(root, changed)?;
+    let here = [PathBuf::from(".")];
+    let mut hits: BTreeMap<(OsString, u32), bool> = BTreeMap::new();
+    for (k, raw) in profile.split(|&b| b == b'\n').enumerate().skip(1) {
+        let line = raw.strip_suffix(b"\r").unwrap_or(raw);
+        if line.is_empty() || line.starts_with(GO_PROFILE_MODE) {
+            continue;
+        }
+        let block = GoBlock::parse(line).ok_or_else(|| {
+            format!("its line {} is not a block of a Go coverage profile: `{}`", k + 1, String::from_utf8_lossy(line))
+        })?;
+        let file = match names.get(block.file) {
+            Some(path) => changed.get_key_value(path).map(|(path, added)| (path.clone(), added)),
+            None => changed_file(OsStr::from_bytes(block.file), &here, real_root, changed),
+        };
+        let Some((path, added)) = file.filter(|_| block.statements > 0) else { continue };
+        let last = if block.end.1 > 1 { block.end.0 } else { block.end.0.saturating_sub(1) };
+        for n in added.range(block.start.0..=last) {
+            *hits.entry((path.clone(), *n)).or_default() |= block.count > 0;
+        }
+    }
+    Ok(hits.into_iter().map(|(at, hit)| LineCoverage { at, hit, taken: 0, outcomes: 0 }).collect())
+}
+
+/// One block of statements of a Go coverage profile, as [`go_profile_lines`] reads it.
+struct GoBlock<'a> {
+    /// The file, as the profile names it.
+    file: &'a [u8],
+    /// (line, column) where the block starts, and where it ends, exclusive.
+    start: (u32, u32),
+    end: (u32, u32),
+    statements: u64,
+    /// How many times the block ran; 1 for any number of times in a profile of mode `set`.
+    count: u64,
+}
+
+impl GoBlock<'_> {
+    /// The block `line` writes, None when it writes none.
+    fn parse(line: &[u8]) -> Option<GoBlock<'_>> {
+        let number = |field: &[u8]| std::str::from_utf8(field).ok()?.parse::<u64>().ok();
+        let position = |field: &[u8]| {
+            let (line, column) = field.split_at(field.iter().position(|&b| b == b'.')?);
+            Some((u32::try_from(number(line)?).ok()?, u32::try_from(number(&column[1..])?).ok()?))
+        };
+        // The fields are read from the end, as a file's name may hold a space or a colon.
+        let mut fields = line.rsplitn(3, |&b| b == b' ');
+        let count = number(fields.next()?)?;
+        let statements = number(fields.next()?)?;
+        let place = fields.next()?;
+        let colon = place.iter().rposition(|&b| b == b':')?;
+        let (start, end) = place[colon + 1..].split_at(place[colon + 1..].iter().position(|&b| b == b',')?);
+        Some(GoBlock { file: &place[..colon], start: position(start)?, end: position(&end[1..])?, statements, count })
+    }
+}
+
+/// Each Go file `changed` adds lines to, by the name a Go coverage profile gives it: the module path of the go.mod
+/// nearest above it in the working tree at `root`, as its `module` line gives it, then the file's path from the
+/// go.mod's directory, as `example.com/calc/sub/sub.go` for `sub/sub.go` of the module `example.com/calc` at the top.
+/// A file under no go.mod, or one whose go.mod names no module, has no such name. Errs, with why, when such a go.mod
+/// cannot be read.
+fn go_profile_names(
+    root: &Path,
+    changed: &BTreeMap<OsString, BTreeSet<u32>>,
+) -> Result<HashMap<Vec<u8>, OsString>, String> {
+    let mut modules: HashMap<PathBuf, Option<Vec<u8>>> = HashMap::new();
+    let mut out = HashMap::new();
+    for (path, _) in changed.iter().filter(|(p, added)| !added.is_empty() && p.as_bytes().ends_with(b".go")) {
+        let Some(dir) = Path::new(path).ancestors().skip(1).find(|d| root.join(d).join("go.mod").is_file()) else {
+            continue;
+        };
+        let module = match modules.get(dir) {
+            Some(module) => module.clone(),
+            None => {
+                let manifest = root.join(dir).join("go.mod");
+                let read = std::fs::read(&manifest).map_err(|e| format!("cannot read {}: {e}", manifest.display()))?;
+                let module = module_path(&read);
+                modules.insert(dir.to_path_buf(), module.clone());
+                module
+            }
+        };
+        let Some(module) = module else { continue };
+        let within = rel_path(Path::new(path), dir);
+        out.insert([&module[..], b"/", within.as_os_str().as_bytes()].concat(), path.clone());
+    }
+    Ok(out)
+}
+
+/// The module path a go.mod's `module` line gives, bare or quoted, a comment after it allowed; None when it has none.
+fn module_path(go_mod: &[u8]) -> Option<Vec<u8>> {
+    go_mod.split(|&b| b == b'\n').find_map(|line| {
+        let rest = line.trim_ascii().strip_prefix(b"module")?;
+        if !rest.first().is_some_and(u8::is_ascii_whitespace) {
+            return None;
+        }
+        let rest = rest.trim_ascii_start();
+        let end = rest.windows(2).position(|w| w == b"//").unwrap_or(rest.len());
+        let named = rest[..end].trim_ascii();
+        let named = named.strip_prefix(b"\"").and_then(|n| n.strip_suffix(b"\"")).unwrap_or(named);
+        (!named.is_empty()).then(|| named.to_vec())
+    })
+}
+
 /// `field`, a field of an LCOV entry, as text; errs, with why, when it is not UTF-8.
 fn utf8(field: &[u8]) -> Result<&str, String> {
     std::str::from_utf8(field).map_err(|e| format!("not UTF-8: {e}"))
@@ -502,6 +634,69 @@ mod tests {
         let a = changed(&[("a.py", &[1, 3])]);
         let got = new_coverage(&[cobertura, lcov], &root, &a).unwrap();
         assert_eq!((got.lines, got.covered_lines), (2, 2));
+    }
+
+    #[test]
+    fn a_go_profile_names_files_by_their_module_and_covers_the_lines_of_its_blocks() {
+        let root = std::env::temp_dir().join(format!("gate-coverage-go-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("tools/sub")).unwrap();
+        std::fs::write(root.join("go.mod"), "// The calculator.\nmodule example.com/calc // a comment\n\ngo 1.22\n")
+            .unwrap();
+        std::fs::write(root.join("tools/go.mod"), "module \"example.com/tools\"\n").unwrap();
+        // Lines 4 to 6 are `if x > 0 {`, its body and its `}`, which the body's block, ending at 6.1, does not hold;
+        // 15 is an empty function's, whose block holds no statement. tools/sub/s.go is of the module in tools.
+        let profile = "mode: count\n\
+                       example.com/calc/t.go:4.2,4.11 1 3\n\
+                       example.com/calc/t.go:5.3,6.1 1 0\n\
+                       example.com/calc/t.go:9.2,10.12 2 1\n\
+                       example.com/calc/t.go:15.11,15.11 0 0\n\
+                       example.com/calc/other.go:1.1,9.2 1 0\n\
+                       mode: count\n\
+                       example.com/tools/sub/s.go:2.2,3.10 1 0\n";
+        let report = scratch("go.out", profile);
+        let changed = changed(&[("t.go", &[4, 5, 6, 7, 10, 15]), ("tools/sub/s.go", &[3])]);
+        let got = new_coverage(&[report], &root, &changed).unwrap();
+        assert_eq!(
+            got,
+            NewCoverage { lines: 4, covered_lines: 2, conditions: 0, covered_conditions: 0, unmeasured: vec![] }
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_go_profile_names_a_file_outside_a_module_by_its_path() {
+        let root = std::env::temp_dir().join(format!("gate-coverage-go-path-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let profile = format!("mode: set\n{}:1.1,2.5 1 1\n", root.join("a b.go").display());
+        let got = new_coverage(&[scratch("go-path.out", profile)], &root, &changed(&[("a b.go", &[2])])).unwrap();
+        assert_eq!((got.lines, got.covered_lines), (1, 1));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_go_profile_with_a_line_that_is_no_block_is_an_error() {
+        let root = std::env::temp_dir();
+        let a = changed(&[("a.go", &[1])]);
+        for (name, text) in [
+            ("go-cut.out", "mode: set\nexample.com/a/a.go:1.1,2\n"),
+            ("go-words.out", "mode: set\nexample.com/a/a.go:1.1,2.1 one 1\n"),
+            ("go-place.out", "mode: set\na.go 1 1\n"),
+        ] {
+            let problem = new_coverage(&[scratch(name, text)], &root, &a).unwrap_err().0;
+            assert!(problem.contains("its line 2 is not a block of a Go coverage profile"), "{name}: {problem}");
+        }
+    }
+
+    #[test]
+    fn a_go_mod_names_its_module_bare_or_quoted() {
+        for (go_mod, module) in [
+            ("module example.com/a\n", Some("example.com/a")),
+            ("\tmodule  \"example.com/b\" // why\r\n", Some("example.com/b")),
+            ("modules x\nmodule\n", None),
+            ("go 1.22\n", None),
+        ] {
+            assert_eq!(module_path(go_mod.as_bytes()).as_deref(), module.map(str::as_bytes), "{go_mod:?}");
+        }
     }
 
     #[test]

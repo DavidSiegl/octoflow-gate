@@ -28,8 +28,10 @@ over this repository's changes showed (gate-standalone/17); a difference found l
   gate.py's `ElementTree` read whatever encoding the report declared (`TODO.md`, "reads an XML report only in
   UTF-8").
 - **The quality file's second line names `gate`**, "`gate` judged the working tree at ...", where gate.py's said
-  "`gate.py` judged ...". The line is prose, outside the report's contract; quality.json's fields are unchanged,
-  `schema_version` 1.
+  "`gate.py` judged ...", and its rules "by the rules from ...", where gate.py's said "by the rules in ...". Where no
+  `pyproject.toml` is beside the gate.toml that judges, it says "by the rules from the defaults (there is no
+  `<path>`)", which gate.py never did, refusing to judge. The line is prose, outside the report's contract;
+  quality.json's fields are unchanged, `schema_version` 1.
 - **A linter's first line**, which a "failed" condition quotes up to 200 characters, counts a byte that is not
   UTF-8, written `\xNN`, as four characters, where gate.py counted one.
 - **A git command past its minute** ends "did not finish within 60 seconds", where gate.py's ended with Python's

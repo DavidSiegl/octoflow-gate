@@ -288,10 +288,13 @@ fn findings(name: &str, detail: &str, output: &[u8], root: &Path, tracked: &Trac
     });
     let detail = Regex::new(&format!("(?s)^(?:{})$", detail.replace(".+", "(?-u:.)+")))
         .expect("a linter's detail is a valid regex");
+    let top = [root.as_os_str().as_bytes(), b"/"].concat();
     let mut out = vec![];
     for line in output.split(|&b| b == b'\n') {
         // Spaces, tabs and the \r of a \r\n only: other whitespace, such as U+2028, can be part of a name.
         let line = trim_bytes(line, b" \t\r");
+        // A linter run apart names its files by absolute paths, under a root whose own path may hold a colon.
+        let line = line.strip_prefix(top.as_slice()).unwrap_or(line);
         let Some(at) = AT.captures(line) else { continue };
         let Some(path) = tracked.name_of(&at["path"], root) else { continue };
         let Some(found) = detail.captures(&at["detail"]) else { continue };
@@ -356,6 +359,14 @@ mod tests {
             ]
         );
         assert_eq!(found[0].message, "Quote this.");
+    }
+
+    #[test]
+    fn an_absolute_path_is_read_under_a_root_whose_path_holds_a_colon() {
+        // pymarkdown runs apart, on absolute paths, which the location's `[^:]+` alone would cut at the root's colon.
+        let tracked = Tracked::new(vec!["README.md".into()]);
+        let found = read("pymarkdown", b"/w/a:b/repo/README.md:3:1: MD047: End", Path::new("/w/a:b/repo"), &tracked);
+        assert_eq!(fields(&found), [("README.md", Some(3), "error", "pymarkdown MD047", "End")]);
     }
 
     #[test]

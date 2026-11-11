@@ -53,11 +53,11 @@ max-complexity = 15
 [tool.mypy]
 # gate.py and the Python the gate embeds to run in a judged project's Python (crates/gate/src). Named by what is left
 # out rather than by file, so the same rules check a tree from which the cutover (gate-standalone/18) has deleted
-# gate.py: mypy refuses a named file that is not there. The tests are untyped by design.
+# gate.py: mypy refuses a named file that is not there. The tests are untyped by design; mutants/ and target/ hold
+# copies of the sources. mypy skips directories whose names start with a dot (.venv, .cargo-home, .tools) itself.
+# The list stays here, in the judge's rules: a .gitignore is the judged change's own to edit.
 files = ["."]
-exclude = ["^tests/", "^ci/", "^xtask/", "^gate-rust/"]
-# What a checkout holds beside the tracked files: .venv, .cargo-home (crates may ship Python), mutants/, target/.
-exclude_gitignore = true
+exclude = ["^tests/", "^ci/", "^xtask/", "^gate-rust/", "^mutants/", "^target/"]
 
 [tool.mutmut]
 # What `gate.py`'s surviving-mutants check runs mutmut by, on a copy of the tree in which only the functions a change

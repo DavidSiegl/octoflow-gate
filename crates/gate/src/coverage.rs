@@ -2,11 +2,13 @@
 //! pytest-cov's coverage.xml and cargo-llvm-cov's `--cobertura`, LCOV, such as cargo-llvm-cov's `--lcov`, and Go's
 //! coverage profile, as `go test -coverprofile` writes it.
 
+use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
+use crate::parser_checks::{project_dir, GO_MANIFEST};
 use crate::paths::{real_path, rel_path};
 use crate::text::{self, floor_tenth, series};
 use crate::xml;
@@ -108,8 +110,10 @@ pub fn new_coverage(
     // (path, line): (covered, covered outcomes, outcomes)
     let mut merged: HashMap<(OsString, u32), (bool, usize, usize)> = HashMap::new();
     let real_root = real_path(root);
+    // Read once, for the first Go profile among the reports.
+    let go_names = OnceCell::new();
     for report in reports {
-        for entry in changed_line_coverage(report, root, &real_root, changed)? {
+        for entry in changed_line_coverage(report, root, &real_root, changed, &go_names)? {
             let was = merged.entry(entry.at).or_default();
             *was = (was.0 || entry.hit, was.1.max(entry.taken), was.2.max(entry.outcomes));
         }
@@ -133,12 +137,14 @@ struct LineCoverage {
     outcomes: usize,
 }
 
-/// Each changed line the report at `report` lists, as [`new_coverage`] reads it and errs.
+/// Each changed line the report at `report` lists, as [`new_coverage`] reads it and errs. `go_names` holds
+/// [`go_profile_names`]' once a Go profile has needed them.
 fn changed_line_coverage(
     report: &Path,
     root: &Path,
     real_root: &Path,
     changed: &BTreeMap<OsString, BTreeSet<u32>>,
+    go_names: &OnceCell<HashMap<Vec<u8>, OsString>>,
 ) -> Result<Vec<LineCoverage>, Unjudged> {
     let cannot = |why: String| Unjudged(format!("cannot read the coverage report {}: {why}", report.display()));
     let bytes = std::fs::read(report).map_err(|e| cannot(e.to_string()))?;
@@ -150,7 +156,16 @@ fn changed_line_coverage(
             })
         }
         Report::Lcov(lcov) => lcov_lines(lcov, real_root, changed).map_err(cannot),
-        Report::GoProfile(profile) => go_profile_lines(profile, root, real_root, changed).map_err(cannot),
+        Report::GoProfile(profile) => {
+            let names = match go_names.get() {
+                Some(names) => names,
+                None => {
+                    let names = go_profile_names(root, changed).map_err(cannot)?;
+                    go_names.get_or_init(|| names)
+                }
+            };
+            go_profile_lines(profile, names, real_root, changed).map_err(cannot)
+        }
     }
 }
 
@@ -366,24 +381,24 @@ impl LcovRecord<'_> {
 const GO_PROFILE_MODE: &[u8] = b"mode: ";
 
 /// The changed lines a Go coverage profile (`go test -coverprofile`, <https://go.dev/blog/cover>) lists, `profile`
-/// being its bytes from its `mode:` line. Each later line but another `mode:` line, as profiles joined end to end
-/// have, is a block of statements: `<file>:<start>,<end> <statements> <count>`, each place a `<line>.<column>`, the
-/// end exclusive. `<file>` is the file's package import path and its name, as [`go_profile_names`] reads it, else a
-/// path, absolute or from the current directory, as an LCOV `SF:` line gives one. A block covers each line from its
-/// start up to its end, its end's line only when the block holds some of it (an end column past 1), and a block of
-/// no statements, as an empty function's, none; a line is covered when a block that covers it ran (a count above 0).
-/// Go counts no branches.
+/// being its bytes from its `mode:` line, `names` [`go_profile_names`]' of the change. Each later line but another
+/// `mode:` line, as profiles joined end to end have, is a block of statements: `<file>:<start>,<end> <statements>
+/// <count>`, each place a `<line>.<column>`, the end exclusive. `<file>` is the file's package import path and its
+/// name, as [`go_profile_names`] reads it, else a path, absolute or from the current directory, as an LCOV `SF:` line
+/// gives one. A block covers each line from its start up to its end, its end's line only when the block holds some of
+/// it (an end column past 1), and a block of no statements, as an empty function's, none; a line is covered when a
+/// block that covers it ran (a count above 0). Go counts no branches.
 ///
-/// Errs, with why, when a line after the first is not a block, as in a truncated profile, or the go.mod of a Go file
-/// the change adds lines to cannot be read.
+/// Errs, with why, when a line after the first is not a block, as in a truncated profile.
 fn go_profile_lines(
     profile: &[u8],
-    root: &Path,
+    names: &HashMap<Vec<u8>, OsString>,
     real_root: &Path,
     changed: &BTreeMap<OsString, BTreeSet<u32>>,
 ) -> Result<Vec<LineCoverage>, String> {
-    let names = go_profile_names(root, changed)?;
     let here = [PathBuf::from(".")];
+    // Each file the profile names, as the tree's path and the lines the change adds to it, looked up once.
+    let mut files: HashMap<&[u8], Option<(OsString, &BTreeSet<u32>)>> = HashMap::new();
     let mut hits: BTreeMap<(OsString, u32), bool> = BTreeMap::new();
     for (k, raw) in profile.split(|&b| b == b'\n').enumerate().skip(1) {
         let line = raw.strip_suffix(b"\r").unwrap_or(raw);
@@ -393,11 +408,11 @@ fn go_profile_lines(
         let block = GoBlock::parse(line).ok_or_else(|| {
             format!("its line {} is not a block of a Go coverage profile: `{}`", k + 1, String::from_utf8_lossy(line))
         })?;
-        let file = match names.get(block.file) {
+        let file = files.entry(block.file).or_insert_with(|| match names.get(block.file) {
             Some(path) => changed.get_key_value(path).map(|(path, added)| (path.clone(), added)),
             None => changed_file(OsStr::from_bytes(block.file), &here, real_root, changed),
-        };
-        let Some((path, added)) = file.filter(|_| block.statements > 0) else { continue };
+        });
+        let Some((path, added)) = file.as_ref().filter(|_| block.statements > 0) else { continue };
         let last = if block.end.1 > 1 { block.end.0 } else { block.end.0.saturating_sub(1) };
         for n in added.range(block.start.0..=last) {
             *hits.entry((path.clone(), *n)).or_default() |= block.count > 0;
@@ -413,6 +428,8 @@ struct GoBlock<'a> {
     /// (line, column) where the block starts, and where it ends, exclusive.
     start: (u32, u32),
     end: (u32, u32),
+    /// How many statements the block holds, as the profile counts them: none, as in an empty function's, and it
+    /// covers no line.
     statements: u64,
     /// How many times the block ran; 1 for any number of times in a profile of mode `set`.
     count: u64,
@@ -449,13 +466,11 @@ fn go_profile_names(
     let mut modules: HashMap<PathBuf, Option<Vec<u8>>> = HashMap::new();
     let mut out = HashMap::new();
     for (path, _) in changed.iter().filter(|(p, added)| !added.is_empty() && p.as_bytes().ends_with(b".go")) {
-        let Some(dir) = Path::new(path).ancestors().skip(1).find(|d| root.join(d).join("go.mod").is_file()) else {
-            continue;
-        };
+        let Some(dir) = project_dir(path, GO_MANIFEST, |manifest| root.join(manifest).is_file()) else { continue };
         let module = match modules.get(dir) {
             Some(module) => module.clone(),
             None => {
-                let manifest = root.join(dir).join("go.mod");
+                let manifest = root.join(dir).join(GO_MANIFEST);
                 let read = std::fs::read(&manifest).map_err(|e| format!("cannot read {}: {e}", manifest.display()))?;
                 let module = module_path(&read);
                 modules.insert(dir.to_path_buf(), module.clone());

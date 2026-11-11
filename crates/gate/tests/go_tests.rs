@@ -8,7 +8,8 @@ mod common;
 /// The command a Go module at the top runs its tests with, writing junit.xml and cover.out at the top.
 const GATE_TOML: &str = "[linters]\ngolangci-lint = []\n\n[[test]]\nname = \"go\"\n\
                          command = [\"gotestsum\", \"--junitfile\", \"junit.xml\", \"--\", \
-                         \"-coverprofile=cover.out\", \"./...\"]\njunit = [\"junit.xml\"]\ncoverage = [\"cover.out\"]\n";
+                         \"-coverprofile=cover.out\", \"./...\"]\njunit = [\"junit.xml\"]\n\
+                         coverage = [\"cover.out\"]\n";
 
 const CALC: &str = "package calc\n\n// Add adds.\nfunc Add(a, b int) int {\n\treturn a + b\n}\n";
 

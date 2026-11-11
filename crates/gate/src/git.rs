@@ -45,13 +45,27 @@ fn command<S: AsRef<OsStr>>(cwd: &Path, args: &[S]) -> String {
 }
 
 /// `word` quoted for a POSIX shell as Python's `shlex.quote` quotes it: as it is when it holds only letters, digits
-/// and `_@%+=:,./-`, else in single quotes.
+/// and `_@%+=:,./-`, else in single quotes ([`shell_quote_bytes`]).
 pub fn shell_quote(word: &str) -> String {
-    let plain = |c: char| c.is_ascii_alphanumeric() || "_@%+=:,./-".contains(c);
-    if !word.is_empty() && word.chars().all(plain) {
-        return word.to_string();
+    String::from_utf8(shell_quote_bytes(word.as_bytes())).expect("quoting adds only ASCII to UTF-8")
+}
+
+/// The bytes `word`, such as a path that need not be UTF-8, quoted for a POSIX shell as [`shell_quote`] says, each
+/// byte kept as it is.
+pub fn shell_quote_bytes(word: &[u8]) -> Vec<u8> {
+    let plain = |b: &u8| b.is_ascii_alphanumeric() || b"_@%+=:,./-".contains(b);
+    if !word.is_empty() && word.iter().all(plain) {
+        return word.to_vec();
     }
-    format!("'{}'", word.replace('\'', "'\"'\"'"))
+    let mut out = b"'".to_vec();
+    for &b in word {
+        match b {
+            b'\'' => out.extend(b"'\"'\"'"),
+            b => out.push(b),
+        }
+    }
+    out.push(b'\'');
+    out
 }
 
 #[cfg(test)]
@@ -64,6 +78,7 @@ mod tests {
         assert_eq!(shell_quote(""), "''");
         assert_eq!(shell_quote("a b"), "'a b'");
         assert_eq!(shell_quote("it's"), "'it'\"'\"'s'");
+        assert_eq!(shell_quote_bytes(b"/tmp/a\xff b"), b"'/tmp/a\xff b'");
     }
 
     #[test]

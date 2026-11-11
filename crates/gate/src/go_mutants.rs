@@ -14,8 +14,9 @@ use regex::bytes::Regex;
 
 use crate::copies::{copy_tracked, finding, in_scratch_directory, Budget};
 use crate::diff::removal_points;
+use crate::git::shell_quote_bytes;
 use crate::mutants::{dir_name, KILL_WAIT, STOP_GRACE, SURVIVOR_EXAMPLES};
-use crate::parser_checks::GoChange;
+use crate::parser_checks::{project_dir, GoChange, GO_MANIFEST};
 use crate::paths::rel_path;
 use crate::process::{run_with, Extras, Finished};
 use crate::text;
@@ -126,7 +127,7 @@ fn on_copy(root: &Path, base: &str, dir: &Path, functions: &[Edited], budget: &B
     let mut out = vec![];
     let mut modules: BTreeMap<PathBuf, Vec<&Edited>> = BTreeMap::new();
     for f in functions {
-        match Path::new(&f.path).ancestors().skip(1).find(|d| tree.join(d).join("go.mod").is_file()) {
+        match project_dir(&f.path, GO_MANIFEST, |manifest| tree.join(manifest).is_file()) {
             Some(module) => modules.entry(module.to_path_buf()).or_default().push(f),
             None => out.push(finding(
                 Some(&f.path),
@@ -249,9 +250,9 @@ fn git_for_gremlins(scratch: &Path, diff: &[u8]) -> std::io::Result<OsString> {
     std::fs::write(&diff_file, diff)?;
     let path = std::env::var_os("PATH").unwrap_or_default();
     let mut script = b"#!/bin/sh\nif [ \"$1\" = diff ] && [ \"$2\" = --merge-base ]; then exec cat ".to_vec();
-    script.extend(quoted(diff_file.as_os_str()));
+    script.extend(shell_quote_bytes(diff_file.as_os_str().as_bytes()));
     script.extend(b"; fi\nPATH=");
-    script.extend(quoted(&path));
+    script.extend(shell_quote_bytes(path.as_bytes()));
     script.extend(b" exec git \"$@\"\n");
     let git = bin.join("git");
     std::fs::write(&git, script)?;
@@ -262,19 +263,6 @@ fn git_for_gremlins(scratch: &Path, diff: &[u8]) -> std::io::Result<OsString> {
         found.push(&path);
     }
     Ok(found)
-}
-
-/// `word` as one word of sh, in single quotes.
-fn quoted(word: &OsStr) -> Vec<u8> {
-    let mut out = b"'".to_vec();
-    for &b in word.as_bytes() {
-        match b {
-            b'\'' => out.extend(b"'\\''"),
-            b => out.push(b),
-        }
-    }
-    out.push(b'\'');
-    out
 }
 
 /// The findings of a finished run of gremlins, `done`, in the module at `module` (named as `place` in them), on
@@ -491,10 +479,5 @@ mod tests {
         assert_eq!(early[0].message, "budget reached before gremlins had tried a mutant of the module at `m`: it was \
             stopped at 30 seconds (`--mutation-budget`), so the mutants it did not try may survive too.");
         assert_eq!(found(&done(0, false, b"Starting...\n", b"")), []);
-    }
-
-    #[test]
-    fn a_word_is_quoted_for_sh() {
-        assert_eq!(quoted(OsStr::new("/tmp/it's here")), b"'/tmp/it'\\''s here'");
     }
 }

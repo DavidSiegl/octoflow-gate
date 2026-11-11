@@ -1,6 +1,5 @@
-//! The report's two renderings held to gate.py's golden files under tests/golden/, byte for byte: each report here
-//! is the one gate.py's TestQualityReport builds for the file of the same name (tests/test_gate.py), so the Rust
-//! gate writes what gate.py writes.
+//! The report's two renderings held to the golden files under tests/golden/, byte for byte: each report here is
+//! built to be the one the files of the same name show.
 
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;

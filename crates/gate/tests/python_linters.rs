@@ -1,6 +1,5 @@
 //! ruff and mypy as the `gate` binary runs them over a real git repository, with stubs on PATH that print what each
-//! one does, as gate.py's TestGate runs gate.py (tests/test_gate.py): what they are given, and how what ruff prints
-//! of a Python file is placed on the lines git counts.
+//! one does: what they are given, and how what ruff prints of a Python file is placed on the lines git counts.
 
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
@@ -10,7 +9,7 @@ use gate::text::one_line;
 
 mod common;
 
-/// TestGate's BASE_FILES: rules for ruff, and f.py of three lines.
+/// A repository whose base holds rules for ruff, and f.py of three lines.
 fn repo() -> Repo {
     Repo::with(&[("pyproject.toml", b"[tool.ruff]\n"), ("f.py", b"line1 = 1\nline2 = 2\nline3 = 3\n")])
 }

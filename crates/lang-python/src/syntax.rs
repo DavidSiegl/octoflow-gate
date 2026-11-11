@@ -23,8 +23,8 @@ pub fn line(node: Node) -> u32 {
 
 /// `written`, code of one or more lines, on one line: each line break, with the spaces around it and the backslash
 /// that continues a line, becomes one space, or nothing after an opening bracket or before a closing one. A finding
-/// quotes a piece of code by its first line (model::first_line), which is then all of it, as gate.py quotes
-/// `ast.unparse`'s one line. A line break inside a string is joined as any other.
+/// quotes a piece of code by its first line (model::first_line), which is then all of it. A line break inside a
+/// string is joined as any other.
 pub fn on_one_line(written: &str) -> String {
     let mut out = String::new();
     for line in written.split('\n').map(|line| line.trim().trim_end_matches('\\').trim_end()) {

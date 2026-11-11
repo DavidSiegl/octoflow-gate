@@ -1,5 +1,5 @@
-//! The XML reports the gate reads, JUnit and Cobertura, as a tree of elements, the parts of Python's ElementTree that
-//! gate.py reads them with: a name, attributes, the text before the first child, and children.
+//! The XML reports the gate reads, JUnit and Cobertura, as a tree of elements, with the parts of Python's ElementTree
+//! that the gate needs of one: a name, attributes, the text before the first child, and children.
 
 use std::path::Path;
 

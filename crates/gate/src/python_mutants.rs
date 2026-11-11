@@ -1,6 +1,5 @@
 //! Python's half of the surviving-mutants check (mutants.rs): mutmut mutates the functions a change touches in
-//! Python code under test, and a function whose mutants its tests do not notice is a finding. gate.py's
-//! `_mutation_test` and what it calls.
+//! Python code under test, and a function whose mutants its tests do not notice is a finding.
 //!
 //! mutmut 3 (3.8.0 here) is bounded to the functions the change edits like this. Its own selector, `mutmut run` with
 //! mutant names, only picks which mutants run: it first makes a mutant of every function in its source_paths, which
@@ -40,11 +39,11 @@ const SKIP: &[u8] = b"  # pragma: no mutate block";
 const UNTRIED: [&str; 3] = ["not checked", "check was interrupted by user", "no tests"];
 
 /// The seconds listing mutmut's results and showing what the survivors change get in all, each call's stop
-/// included; gate.py's MUTMUT_REPORT_TIMEOUT.
+/// included.
 const REPORT_TIMEOUT: u64 = 60;
 
 /// The seconds reading which tests `--test-contexts` records gets, and pytest's collection of mutmut's test
-/// selection; gate.py's TEST_CONTEXTS_TIMEOUT and TEST_COLLECTION_TIMEOUT.
+/// selection.
 const TEST_CONTEXTS_TIMEOUT: u64 = 30;
 const TEST_COLLECTION_TIMEOUT: u64 = 30;
 
@@ -1061,8 +1060,8 @@ mod tests {
 
     #[test]
     fn a_listing_that_hangs_ends_by_the_deadline_with_its_stop_counted_in() {
-        // gate.py's test_the_report_ends_within_its_time_whatever_mutmut_does. The Python ignores SIGINT, so it is
-        // killed STOP_GRACE after its time is up; given all the time to the deadline, it would end that long past it.
+        // The Python ignores SIGINT, so it is killed STOP_GRACE after its time is up; given all the time to the
+        // deadline, it would end that long past it.
         use std::os::unix::fs::PermissionsExt;
         let tree = std::env::temp_dir().join(format!("gate-python-mutants-{}-listing", std::process::id()));
         std::fs::create_dir_all(&tree).unwrap();

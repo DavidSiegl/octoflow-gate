@@ -1,6 +1,5 @@
 //! The flaky-tests check: the Python tests a change adds or edits, rerun with pytest-randomly under several seeds.
-//! A test that passes in one order and fails in another is one the build's single green run does not show. gate.py's
-//! `flaky_tests`.
+//! A test that passes in one order and fails in another is one the build's single green run does not show.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ffi::{OsStr, OsString};

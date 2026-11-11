@@ -1,9 +1,8 @@
 //! The `gate` binary with the real cargo clippy, over a crate of no dependencies in a subdirectory of the
-//! repository, as gate.py's TestClippy runs gate.py (tests/test_gate.py). cargo runs offline, so it never reaches
-//! for the registry.
+//! repository. cargo runs offline, so it never reaches for the registry.
 //!
-//! TestClippy's test of a cargo past the timeout is not ported: the Rust gate's timeout is a constant of ten minutes,
-//! and process.rs's own tests hold that a process past its timeout is killed with what it started.
+//! No test here has cargo outlive its timeout: that is a constant of ten minutes, and process.rs's own tests hold
+//! that a process past its timeout is killed with what it started.
 
 use std::path::Path;
 

@@ -1,8 +1,8 @@
 //! The surviving-mutants check over a real git repository's Cargo package, through the `gate` binary and its
-//! quality.json, as gate.py's TestRustSurvivingMutants and TestCargoMutantsRuns run gate.py's check
-//! (tests/test_gate.py): with a real cargo-mutants, or a stub `cargo` ahead of PATH where gate.py's tests patch what
-//! runs it. What those tests patch below the run itself is mutants.rs's own tests. cargo runs offline, so it never
-//! reaches for the registry, and the passes-at-base check, which the gate runs too, has a budget of a second.
+//! quality.json: with a real cargo-mutants, or a stub `cargo` ahead of PATH where a test needs cargo-mutants to do
+//! what the real one cannot be made to. What a stub `cargo` cannot vary either is held by mutants.rs's own tests.
+//! cargo runs offline, so it never reaches for the registry, and the passes-at-base check, which the gate runs too,
+//! has a budget of a second.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};

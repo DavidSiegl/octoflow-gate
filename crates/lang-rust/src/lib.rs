@@ -1,6 +1,6 @@
 //! The gate's Rust front end: a Rust source file, read with tree-sitter-rust, as the model the parser checks judge
-//! (crates/model). It replaces gate-rust, the helper gate.py reads Rust with; docs/port-differences.md lists where the
-//! two read a file differently.
+//! (crates/model). docs/port-differences.md lists where it reads a file differently from the gate up to 0.6.0, which
+//! read Rust with syn.
 
 use std::collections::{BTreeSet, HashMap};
 

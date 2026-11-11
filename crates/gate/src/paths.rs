@@ -1,4 +1,4 @@
-//! Paths as Python's os.path resolves them, which gate.py's judgement of paths rests on: `realpath`, which never
+//! Paths as Python's os.path resolves them, which the gate's judgement of paths rests on: `realpath`, which never
 //! fails, `abspath`, `normpath` and `relpath`.
 
 use std::collections::HashMap;

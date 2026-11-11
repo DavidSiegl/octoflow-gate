@@ -1,6 +1,6 @@
 //! The walk of a Rust file's tree-sitter tree that gathers what the model is made of: each `fn` with the items that
 //! hold it, its attributes, assertions and discarded values and, for one no other `fn` holds, the flow of its body;
-//! each inline module; and every name the file binds. As gate-rust's Collector and FlowWalker read syn's tree.
+//! each inline module; and every name the file binds.
 //!
 //! A macro's arguments are walked as code when they are expressions separated by commas, as an assertion's or
 //! `vec![...]`'s are; any other macro's tokens are a language of its own (TODO.md, "A macro whose arguments are no
@@ -240,7 +240,7 @@ impl Walk<'_> {
     /// Walks a `const` or `static` item, `node`, inside a holder of its name; `assoc` as [`Walk::node`] says.
     fn const_or_static(&mut self, node: Node, text: Text, assoc: bool) {
         let name = self.bind_name(node, text, false);
-        // An associated const has no holder of its own, as syn's walk gives none.
+        // An associated const is no holder: what it holds takes no name from it.
         match (assoc, node.kind()) {
             (true, _) => self.children(node, text),
             (false, "const_item") => self.inside(Holder::Const(name), |w| w.children(node, text)),

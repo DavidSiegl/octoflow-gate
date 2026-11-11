@@ -73,7 +73,7 @@ pipeline {
         // The release tarball, built and checked on every build, so a pull request shows that its merge would
         // release; RELEASE_TARBALL is its path, which the Release stage publishes. CARGO_HOME and TMPDIR as
         // scripts/gate sets them, for the reasons its header gives: package.sh builds Rust in TMPDIR, and the smoke
-        // check runs the helper and clippy there.
+        // check runs the gate and clippy there.
         stage('Package') {
             environment {
                 CARGO_HOME = "${env.WORKSPACE}/.cargo-home"
@@ -84,11 +84,11 @@ pipeline {
                     env.RELEASE_TARBALL = sh(returnStdout: true,
                                              script: 'mkdir -p "$TMPDIR" && ci/package.sh dist').trim()
                 }
-                sh 'uv run --frozen python ci/smoke-release.py "$RELEASE_TARBALL"'
+                sh 'cargo xtask smoke-release "$RELEASE_TARBALL"'
             }
         }
 
-        // A merge into main that raises the version in pyproject.toml releases it; any other build of main finds
+        // A merge into main that raises the version in crates/gate/Cargo.toml releases it; any other build of main finds
         // that release already there. gh creates the tag v<version> on GitHub at the commit built, so Jenkins needs
         // no git push credentials. Modelled on octoflow-ai's Release stage.
         stage('Release') {
@@ -141,16 +141,13 @@ pipeline {
 
     post {
         always {
-            // quality-rust.* and quality-diff.txt are the shadow run's (scripts/gate), there once the pinned
-            // release ships the Rust gate.
-            archiveArtifacts allowEmptyArchive: true,
-                             artifacts: 'quality.md, quality.json, quality-rust.md, quality-rust.json, quality-diff.txt'
-            // The JUnit reports the gate's test commands wrote (gate.toml's [[test]]), shown as the
+            archiveArtifacts allowEmptyArchive: true, artifacts: 'quality.md, quality.json'
+            // The JUnit report the gate's test command wrote (gate.toml's [[test]]), shown as the
             // build's test results and never judged: neither the build's result nor a GitHub check
-            // (skipPublishingChecks) comes from them, so a failing test leaves the result to the
+            // (skipPublishingChecks) comes from it, so a failing test leaves the result to the
             // gate. None is no error.
             junit allowEmptyResults: true, skipMarkingBuildUnstable: true, skipPublishingChecks: true,
-                  testResults: 'test-results.xml, gate-rust/target/nextest/ci/junit.xml, target/nextest/ci/junit.xml'
+                  testResults: 'target/nextest/ci/junit.xml'
         }
         // Mail on every build that did not pass (failed, unstable or aborted), and on the first
         // passing build after one, never on a build that merely passed again.

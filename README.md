@@ -1,10 +1,10 @@
 # octoflow-gate
 
-octoflow-gate is a quality gate for changes to Python and Rust projects. `gate.py` judges what a git working tree
+octoflow-gate is a quality gate for changes to Python and Rust projects. `gate` judges what a git working tree
 changed since a commit and writes its report twice: as the quality file, Markdown whose first line is `GATE: OK` or
 `GATE: ERROR`, for the people and agents who answer it, and as `quality.json`, the same report as data for a program to
 read. It was written for [octoflow](https://github.com/DavidSiegl/octoflow-ai), whose agents answer the quality file in
-a loop, and runs in any project as one stdlib-only Python file.
+a loop, and runs in any project as one binary.
 
 ## What it judges
 
@@ -14,8 +14,8 @@ against it.
 - **Linters** over the files git tracks: ruff and mypy for Python, pymarkdown for Markdown, shellcheck for shell
   scripts, actionlint for GitHub workflows, clippy for each Cargo workspace. Their findings on added lines fail the
   gate, and so does a linter that is missing or fails, or a Cargo workspace that does not compile.
-- **Tests and coverage**, from the JUnit and Cobertura reports it is given: a failing test fails the gate, and so does
-  coverage below 80% on 20 or more new lines to cover.
+- **Tests and coverage**, from JUnit reports and Cobertura or LCOV coverage reports: a failing test fails the gate,
+  and so does coverage below 80% on 20 or more new lines to cover.
 - **Checks of what the change did**: tests it weakened (removed, skipped, fewer assertions, expected values changed
   together with the code), functions whose cognitive complexity it took over 15, and, as findings to weigh that do not
   fail the gate, tests that are flaky, tests that pass without the change, surviving mutants of the functions it
@@ -27,15 +27,14 @@ against it.
 ## Running it
 
 ```bash
-python gate.py --base REV [--config PYPROJECT] [--config GATE_TOML] [--tests JUNIT]... [--coverage XML]...
-               [--out FILE] [--json FILE] [--mutation-budget SECONDS] [--base-run-budget SECONDS]
-               [--test-contexts COVERAGE] [--rust-syntax PATH]
+gate --base REV [--config GATE_TOML] [--tests JUNIT]... [--coverage XML]... [--out FILE] [--json FILE]
+     [--mutation-budget SECONDS] [--base-run-budget SECONDS] [--test-contexts COVERAGE] [--python PATH]
 ```
 
 `--base` is the commit the change is measured from; the working tree of the git repository around the current
 directory is the change. The quality file goes to `--out`, else to standard output; `quality.json` to `--json`, else
 beside `--out`'s file, its `.md` made `.json` (`quality.md` gives `quality.json`) or `.json` added. Each file is
-written whole or not at all. `python gate.py --help` describes each option.
+written whole or not at all. `gate --help` describes each option.
 
 | Exit status | Means |
 |---|---|
@@ -57,11 +56,9 @@ not the Markdown. [The report as a contract](docs/quality-gate.md#the-report-as-
 
 A project runs a release, pinned by its version and its sha256. Each
 [release](https://github.com/DavidSiegl/octoflow-gate/releases) `v<version>` has two assets:
-`octoflow-gate-<version>.tar.gz`, which holds `gate.py`, the gate-rust helper built for Linux x86_64 as
-`gate-rust-linux-x86_64`, the JSON Schema in `schema/`, golden quality files in both formats in `golden/`, this
-README, and, from 0.6.0, the Rust gate as `gate-linux-x86_64` with `shadow-run.sh` (below, "The Rust gate's shadow
-run"); and `octoflow-gate-<version>.tar.gz.sha256`, its sha256. `gate.py` is one file and imports only the standard
-library, so it runs in the project's working tree with the project's own Python:
+`octoflow-gate-<version>.tar.gz`, which holds `gate`, built for Linux x86_64, the JSON Schema in `schema/`, golden
+quality files in both formats in `golden/`, and this README; and `octoflow-gate-<version>.tar.gz.sha256`, its sha256.
+`gate` is one binary, which runs in the project's working tree:
 
 ```bash
 v=<version> gate=$(mktemp -d)   # outside the working tree, which is the change
@@ -69,52 +66,38 @@ release=https://github.com/DavidSiegl/octoflow-gate/releases/download/v$v
 curl -fsSL -o "$gate/gate.tar.gz" "$release/octoflow-gate-$v.tar.gz"
 echo "<sha256>  $gate/gate.tar.gz" | sha256sum -c -
 tar -xzf "$gate/gate.tar.gz" -C "$gate"
-uv run python "$gate/gate.py" --base main --rust-syntax "$gate/gate-rust-linux-x86_64" --out quality.md
+"$gate/gate" --base main --out quality.md
 ```
 
-A merge into this repository's `main` that raises its version publishes that version's release; every release stays
-published.
+[ci/fetch-gate.sh](ci/fetch-gate.sh) does the first five lines from a pin file, as this repository's own builds do. A
+merge into this repository's `main` that raises its version publishes that version's release; every release stays
+published. Releases up to 0.6.0 are judged by `gate.py`, the gate's first form, in Python;
+[docs/port-differences.md](docs/port-differences.md) lists where `gate` judges differently, for a project that raises
+its pin from one of them.
 
-It runs the project's tests itself, with the commands its `gate.toml` lists as `[[test]]` (below), and judges the
-JUnit and Cobertura reports they write. A CI that has already run the tests passes their reports instead, with
-`--tests` and `--coverage`, and then no command runs.
-
-It takes what it runs from that project, so the project's dev dependencies hold them: ruff, mypy and pymarkdownlnt
-from `PATH`, which `uv run` points at the project's environment, and pytest, pytest-randomly and mutmut through the
-Python that runs `gate.py`, for the flaky-tests, passes-at-base and surviving-mutants checks. shellcheck, actionlint
-and clippy come from the machine, and only for a project that tracks shell scripts, GitHub workflows or Rust files.
-
-A change to Rust files is read with the [gate-rust helper](docs/quality-gate.md#reading-rust-the-gate-rust-helper),
-named with `--rust-syntax`. The release's is linked against the GNU C library of the Jenkins agent that built it, and
-does not start on a machine whose glibc is older; there, and on another platform, build one from this repository's
-`gate-rust/` at the release's tag. A project without Rust needs neither:
+The release's `gate` is linked against the GNU C library of the Jenkins agent that built it, and does not start on a
+machine whose glibc is older; there, and on another platform, build it from this repository at the release's tag:
 
 ```bash
-cargo build --release --locked --manifest-path path/to/octoflow-gate/gate-rust/Cargo.toml
+cargo build --release --locked --manifest-path path/to/octoflow-gate/Cargo.toml --package gate
 ```
+
+It runs the project's tests itself, with the commands its `gate.toml` lists as `[[test]]` (below), and judges the
+JUnit and coverage reports they write. A CI that has already run the tests passes their reports instead, with
+`--tests` and `--coverage`, and then no command runs.
+
+It takes what it runs from the machine and the project: ruff, mypy and pymarkdown from `PATH`, which `uv run` points
+at a project's environment, and only for a project that tracks Python or Markdown files; shellcheck, actionlint and
+clippy likewise, for shell scripts, GitHub workflows and Rust files. The flaky-tests, passes-at-base and
+surviving-mutants checks of a change to Python run pytest, pytest-randomly and mutmut through the project's Python,
+which `gate.toml`'s `python` or `--python` names, `python3` without either; those of a change to Rust run
+cargo-nextest and cargo-mutants.
 
 A linter that is missing is a failed condition naming it, and for clippy that is a `cargo clippy --version` that
 fails, as it does where rustup's `clippy` component is not installed; a check that cannot run is one of its own
-findings. The rules come from the project's `pyproject.toml`, or the one `--config` names, as [whose rules judge a
+findings. The rules of ruff, mypy, pymarkdown and mutmut come from the `pyproject.toml` beside the project's
+`gate.toml`, and are the tools' defaults where there is none, as [whose rules judge a
 change](docs/quality-gate.md#whose-rules-judge-a-change) says.
-
-### The Rust gate's shadow run
-
-The gate is being ported to Rust, as one binary that needs no helper. Until it judges alone, a release ships it as
-`gate-linux-x86_64`, built for Linux x86_64 as the helper is, and `gate.py` stays the judge. A project's CI can have
-it judge each change a second time and keep how the two reports differ, which decides nothing:
-
-```bash
-uv run "$gate/shadow-run.sh" . --base main --tests test-results.xml --coverage coverage.xml --python python
-```
-
-after `gate.py --out quality.md` has judged, in the same working tree, with the arguments `gate.py` had. Where
-`gate.py` ran the `[[test]]` commands of `gate.toml` itself, give the reports they wrote as `--tests` and `--coverage`,
-as here: without them the Rust gate runs the commands again. It writes `quality-rust.md`, `quality-rust.json` and
-`quality-diff.txt` beside `quality.md`; the last is empty when the reports agree, and the script's header says the
-rest. `--python` names the Python that has the project's pytest, pytest-randomly and mutmut,
-which for `gate.py` is the one that runs it. The differences that are meant are listed in
-[docs/port-differences.md](docs/port-differences.md); any other is a bug worth an issue.
 
 ## Settings: `gate.toml`
 
@@ -127,23 +110,17 @@ settings](docs/quality-gate.md#the-gates-settings) lists them. An unknown key or
 octoflow's, for example:
 
 ```toml
-# Its tests are where the defaults look: Python's under tests/, Rust's under engine/tests/, in tests.rs files and in
-# #[cfg(test)] modules, its golden files under tests/golden/.
+# Its tests are where the defaults look: Rust's under engine/tests/, in tests.rs files and in #[cfg(test)] modules,
+# its golden files under tests/golden/.
 
 [build-config]
 Jenkinsfile = "The quality job reads it from `main`, so this analysis ran without the edit."
+"ci/gate.pin" = "A quality build takes the gate release from `main`'s pin, so this analysis ran without the edit."
 
-[[test]]
-name = "pytest"
-command = ["uv", "run", "pytest", "--cov=gate", "--cov-branch", "--cov-context=test", "--cov-report=xml",
-           "--junitxml=test-results.xml"]
-junit = ["test-results.xml"]
-coverage = ["coverage.xml"]
-
+# A script, since a command is an argv with the gate's environment and octoflow's test run sets variables of its own.
 [[test]]
 name = "cargo-nextest"
-command = ["cargo", "llvm-cov", "nextest", "--locked", "--workspace", "--ignore-run-fail", "--profile", "ci",
-           "--config-file", "ci/nextest.toml", "--cobertura", "--output-path", "coverage-rust.xml"]
+command = ["sh", "ci/rust-tests.sh"]
 junit = ["target/nextest/ci/junit.xml"]
 coverage = ["coverage-rust.xml"]
 
@@ -153,9 +130,9 @@ mutation = 600
 base-run = 120
 ```
 
-A CI that passes `main`'s `pyproject.toml` with `--config` judges by the `gate.toml` beside it, or by the defaults
-where there is none, never by the change's own, so a change cannot loosen its own settings: put `main`'s `gate.toml`
-beside `main`'s `pyproject.toml`.
+A CI that passes `main`'s `gate.toml` with `--config` judges by it and by the rules of the `pyproject.toml` beside it,
+or by the tools' defaults where there is none, never by the change's own, so a change cannot loosen how it is judged:
+put `main`'s `pyproject.toml`, if it has one, beside `main`'s `gate.toml`.
 
 ## License
 

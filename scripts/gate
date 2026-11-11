@@ -1,15 +1,12 @@
 #!/usr/bin/env bash
 # Judge the change this working tree makes since BASE with the gate itself: install what the
-# tests need, then run the judge's gate, with the judge's rules (pyproject.toml) and settings
-# (gate.toml), so that a change cannot loosen how it is itself judged (docs/quality-gate.md
-# says what each check means). The gate is the release the judge's ci/gate.pin names, gate.py
-# and gate-rust helper, fetched with the judge's ci/fetch-gate.sh as a project fetches it; a
-# judge from before the pin (main up to v0.5.0's release) judges with its own gate.py and a
-# helper built from its gate-rust/. A release's helper is built for Linux x86_64 alone
-# (README.md, "Running the gate in a project"): on any other machine the pinned gate reports
-# every check that reads Rust as not run, which it warns of, and only a Linux x86_64 run
-# matches Jenkins's. gate.py runs the tests, with the `[[test]]` commands of the judge's
-# gate.toml.
+# tests need, then run the judge's gate with the judge's settings (gate.toml) and rules (the
+# pyproject.toml beside it), so that a change cannot loosen how it is itself judged
+# (docs/quality-gate.md says what each check means). The gate is the release the judge's
+# ci/gate.pin names, fetched with the judge's ci/fetch-gate.sh as a project fetches it. A
+# release's gate is built for Linux x86_64 alone (README.md, "Running the gate in a project"),
+# so on any other machine the change cannot be judged. The gate runs the tests, with the
+# `[[test]]` commands of the judge's gate.toml.
 #
 #   scripts/gate [BASE]     BASE is any git revision; default the branch main, read as
 #                           refs/heads/main so a tag main cannot stand in (gitrevisions(7)).
@@ -22,24 +19,15 @@
 #
 # Jenkins runs it on every pull request (from its merge base with main) and on main (from the
 # last passing build), and judges by its exit status alone: 0 for GATE: OK, 1 for GATE: ERROR
-# (quality.md says why), 2 when the change could not be judged, and 130 when gate.py was
+# (quality.md says why), 2 when the change could not be judged, and 130 when the gate was
 # interrupted. It cannot be judged when a tool is missing; BASE or the judge is not a commit;
-# the judge lacks pyproject.toml, or a gate.toml listing a [[test]] command; the judge pins a
-# release that cannot be downloaded or does not match its sha256, or has neither a pin nor
-# gate.py and gate-rust/Cargo.toml; the change pins a release that cannot be fetched, or one
-# that would refuse the change's gate.toml (below, where the check is); or gate.py ends without
-# a verdict. A failing test, or a test command that could not run, is the gate's to report. It
-# leaves at the repo root quality.md and, from a judge whose gate.py writes one (0.3.0 on),
-# quality.json, which Jenkins archives; and the reports the judge's test commands write, which
-# Jenkins publishes the JUnit ones of.
-#
-# The shadow run (gate-standalone/17): when the pinned release ships the Rust gate, it judges
-# the same change after gate.py, from the reports the test commands wrote, and
-# quality-rust.md, quality-rust.json and quality-diff.txt at the repo root say what it found
-# and how that differs from gate.py's report (the release's shadow-run.sh says what each
-# holds). Jenkins archives them for a person to read. It never changes the exit status: when
-# gate.py gave no verdict, or could not judge a test command, it does not run; when it fails
-# that is a line on standard error.
+# the judge lacks ci/gate.pin, ci/fetch-gate.sh, pyproject.toml, or a gate.toml listing a
+# [[test]] command; the judge pins a release that cannot be downloaded or does not match its
+# sha256; the change pins a release that cannot be fetched, or one that would refuse the
+# change's gate.toml (below, where the check is); or the gate itself could not judge. A
+# failing test, or a test command that could not run, is the gate's to report. It leaves at
+# the repo root quality.md and quality.json, which Jenkins archives, and the reports the
+# judge's test commands write, which Jenkins publishes the JUnit ones of.
 #
 # In a Jenkins build (WORKSPACE set), crates are fetched into the workspace (CARGO_HOME), so
 # no build compiles sources an earlier one left, and temporary files go under WORKSPACE_TMP
@@ -50,15 +38,12 @@
 # cargo-llvm-cov, cargo-nextest and cargo-mutants are taken from PATH when all three are
 # there, else downloaded by ci/install-tools.sh into .tools/bin, pinned; rustup's clippy and
 # llvm-tools components must be installed, since a build cannot add to the agent's rustup
-# home, which is root's.
+# home, which is root's. uv installs the Python tools pyproject.toml lists, the linters the
+# gate runs and what its tests run them and pytest with, and the gate runs among them.
 set -euo pipefail
-# Any failure before gate.py runs is "could not judge", whatever the command's status.
+# Any failure before the gate runs is "could not judge", whatever the command's status.
 trap 'exit 2' ERR
 export UV_NO_PROGRESS=1
-# Where the judge's pytest command, which inherits it, writes the test contexts gate.py reads.
-# Relative, in the tree: set to an absolute path elsewhere, the file vanished during a run and
-# over 2300 tests errored (octoflow-ai, where this script's steps began as Jenkins stages).
-export COVERAGE_FILE=.coverage
 
 top=$(git rev-parse --show-toplevel)
 cd "$top"
@@ -75,39 +60,28 @@ if ! judge=$(git rev-parse --verify --quiet "$judge_rev^{commit}"); then
 	echo "gate: the judge $judge_rev is not a commit" >&2
 	exit 2
 fi
-# The gate the judge pins, or, from a judge before the pin, the judge's own: gate_paths are
-# what the judge must hold of it, and gate_tree what is taken from the judge to run it.
-if git cat-file -e "$judge:ci/gate.pin" 2>/dev/null; then
-	pinned=true
-	gate_paths=(ci/gate.pin ci/fetch-gate.sh)
-	gate_tree=("${gate_paths[@]}")
-else
-	pinned=false
-	gate_paths=(gate.py gate-rust/Cargo.toml)
-	gate_tree=(gate.py gate-rust)
-fi
-for path in "${gate_paths[@]}" pyproject.toml gate.toml; do
+# What is taken from the judge: the release it pins and how to fetch it, its settings and rules.
+judge_paths=(ci/gate.pin ci/fetch-gate.sh pyproject.toml gate.toml)
+for path in "${judge_paths[@]}"; do
 	if ! git cat-file -e "$judge:$path" 2>/dev/null; then
 		echo "gate: $judge_rev has no $path to judge with" >&2
 		exit 2
 	fi
 done
-# The judge's gate.py runs the tests, with its gate.toml's [[test]] commands: without one it
+# The gate runs the tests, with the judge's gate.toml's [[test]] commands: without one it
 # would judge the change on no test at all, and pass it whatever its tests do.
 if ! git show "$judge:gate.toml" | grep -q '^\[\[test\]\]'; then
 	echo "gate: $judge_rev's gate.toml lists no [[test]] command, so no test would be judged" >&2
 	exit 2
 fi
-# The verdict and the test contexts are gitignored and outlive a run: removed, so a run that
-# ends early cannot leave the last verdict, nor a pytest that writes none the last contexts.
-# gate.py removes each test command's reports before it runs it.
-rm -f quality.md quality.json quality-rust.md quality-rust.json quality-diff.txt "$COVERAGE_FILE"
+# The verdict is gitignored and outlives a run: removed, so a run that ends early cannot leave
+# the last one. The gate removes each test command's reports before it runs it.
+rm -f quality.md quality.json
 
 if [[ -n ${WORKSPACE:-} ]]; then
 	export CARGO_HOME="$WORKSPACE/.cargo-home"
-	# Python's tempfile silently takes /tmp for a TMPDIR that does not exist, so it is
-	# created. What an earlier build left there goes first: on the volume, unlike in /tmp, it
-	# would stay. The chmod is for a directory a killed test left without write permission; a
+	# What an earlier build left in TMPDIR goes first: on the volume, unlike in /tmp, it would
+	# stay. The chmod is for a directory a killed test left without write permission; a
 	# clear-out that still fails only warns, since failing would fail every later build of
 	# this workspace until someone cleaned the volume by hand.
 	if [[ -z ${WORKSPACE_TMP:-} ]]; then
@@ -122,58 +96,51 @@ if [[ -n ${WORKSPACE:-} ]]; then
 	mkdir -p "$TMPDIR"
 fi
 
-# The judge's rules, settings and gate. gate.py reads the gate.toml beside the rules it is
-# given, never the change's own.
+# The judge's settings, rules and gate. Given the judge's gate.toml, the gate takes its rules
+# from the pyproject.toml beside it, never from the change's own.
 judge_dir=$(mktemp -d)
 trap 'rm -rf "$judge_dir"' EXIT
-git archive "$judge" pyproject.toml gate.toml "${gate_tree[@]}" | tar -x -C "$judge_dir"
-if $pinned; then
-	version=$("$judge_dir/ci/fetch-gate.sh" "$judge_dir/ci/gate.pin" "$judge_dir/release")
-	echo "gate: judging with octoflow-gate $version, the release $judge_rev's ci/gate.pin pins" >&2
-	if [[ $(uname -sm) != "Linux x86_64" ]]; then
-		echo "gate: the release's gate-rust helper is for Linux x86_64, not $(uname -sm): Rust is not judged" >&2
-	fi
-	gate_py=$judge_dir/release/gate.py
-	helper=$judge_dir/release/gate-rust-linux-x86_64
-else
-	# A helper that does not build is one the gate cannot run, which each check that reads
-	# Rust reports as not run on a change to Rust, so it only warns.
-	cargo build --release --locked --manifest-path "$judge_dir/gate-rust/Cargo.toml" --target-dir "$judge_dir/target" ||
-		echo "gate: $judge_rev's gate-rust helper did not build; gate.py reports Rust as not run" >&2
-	gate_py=$judge_dir/gate.py
-	helper=$judge_dir/target/release/gate-rust
+git archive "$judge" "${judge_paths[@]}" | tar -x -C "$judge_dir"
+version=$("$judge_dir/ci/fetch-gate.sh" "$judge_dir/ci/gate.pin" "$judge_dir/release")
+echo "gate: judging with octoflow-gate $version, the release $judge_rev's ci/gate.pin pins" >&2
+if [[ $(uname -sm) != "Linux x86_64" ]]; then
+	echo "gate: the release's gate is built for Linux x86_64, not $(uname -sm)" >&2
+	exit 2
 fi
 
-# Once merged, the change's gate.toml is read by the gate the change pins, and that gate.py
-# refuses a key it does not know: a gate.toml ahead of its pin would leave every later change
-# unjudgeable, the one that raises the pin included. So the change's gate.toml must load under
-# the release the change's ci/gate.pin names, fetched with the judge's ci/fetch-gate.sh, or
-# the change's own from a judge before the pin, which has none (the change that adds the pin);
-# a change may raise the pin and use what the new release reads in one go. A change without a
-# pin is judged next by its own gate.py, which its tests cover.
-if [[ -e ci/gate.pin ]]; then
-	if $pinned && cmp -s ci/gate.pin "$judge_dir/ci/gate.pin"; then
-		next_gate=$judge_dir/release
+# released_gate DIR: the path of the gate in the release unpacked into DIR. 0.6.0, the one
+# release before the cutover that ships it, names it for its platform.
+released_gate() {
+	if [[ -e $1/gate ]]; then
+		echo "$1/gate"
 	else
-		next_gate=$judge_dir/next-release
-		fetch=$judge_dir/ci/fetch-gate.sh
-		$pinned || fetch=ci/fetch-gate.sh
-		"$fetch" ci/gate.pin "$next_gate" >/dev/null
+		echo "$1/gate-linux-x86_64"
 	fi
-	# GateSettings.read is gate.py's own reader of gate.toml (no release has a public one).
-	if ! uv run --no-project python -I - "$next_gate/gate.py" gate.toml <<-'EOF'; then
-		import importlib.util, sys
-		spec = importlib.util.spec_from_file_location("released_gate", sys.argv[1])
-		gate = importlib.util.module_from_spec(spec)
-		sys.modules[spec.name] = gate
-		spec.loader.exec_module(gate)
-		try:
-		    gate.GateSettings.read(sys.argv[2])
-		except gate.GateError as e:
-		    sys.exit(f"gate: {e}; the release ci/gate.pin pins would refuse it, so raise the pin first")
-	EOF
-		exit 2
-	fi
+}
+gate=$(released_gate "$judge_dir/release")
+
+# Once merged, the change's gate.toml is read by the gate the change pins, which refuses a key
+# it does not know: a gate.toml ahead of its pin would leave every later change unjudgeable,
+# the one that raises the pin included. So the change's gate.toml must load under the release
+# the change's ci/gate.pin names, fetched with the judge's ci/fetch-gate.sh; a change may
+# raise the pin and use what the new release reads in one go. No release's gate reads a
+# gate.toml but to judge by it, so that gate judges an empty change by this one, in a
+# repository made for it, from a test report given so that no test command runs.
+if cmp -s ci/gate.pin "$judge_dir/ci/gate.pin"; then
+	next_gate=$gate
+else
+	"$judge_dir/ci/fetch-gate.sh" ci/gate.pin "$judge_dir/next-release" >/dev/null
+	next_gate=$(released_gate "$judge_dir/next-release")
+fi
+empty=$judge_dir/empty
+git init --quiet --initial-branch=main "$empty"
+git -C "$empty" -c user.name=gate -c user.email=gate@localhost -c commit.gpgSign=false \
+	commit --quiet --allow-empty -m empty
+echo '<testsuites/>' >"$judge_dir/no-tests.xml"
+next_gate_args=(--base HEAD --config "$top/gate.toml" --tests "$judge_dir/no-tests.xml")
+if ! (cd "$empty" && "$next_gate" "${next_gate_args[@]}" >/dev/null); then
+	echo "gate: the release ci/gate.pin pins would refuse gate.toml, so raise the pin first" >&2
+	exit 2
 fi
 
 installed=$(rustup component list --installed)
@@ -194,56 +161,13 @@ for tool in cargo-llvm-cov cargo-nextest cargo-mutants; do
 done
 uv sync --frozen
 
-# Judge the change once more with the Rust gate of the pinned release, as the header says. The
-# reports of the judge's test commands stand in for the commands, which gate.py has run. That
-# holds only while gate.py judged every command: one it could not judge (a report not written,
-# an exit status no failing test explains) is a failed condition of its report that the Rust
-# gate, given the reports alone, would not reach, so no shadow run is made then. `python` is
-# the environment's, in which gate.py ran.
-shadow_run() {
-	local listed reports=() read_status=0
-	# Prints the flags that name the reports of gate.toml's test commands, a flag or a path a
-	# line; exits 3, printing nothing, when quality.json's failed conditions hold the one
-	# gate.py's run_test_commands words for a command it could not judge.
-	listed=$(
-		uv run --frozen python -I - "$judge_dir/gate.toml" quality.json <<-'EOF'
-		import json, sys, tomllib
-		with open(sys.argv[2]) as f:
-		    if any(c.startswith("The test command `") for c in json.load(f)["failed_conditions"]):
-		        sys.exit(3)
-		with open(sys.argv[1], "rb") as f:
-		    for command in tomllib.load(f).get("test", []):
-		        for flag, key in (("--tests", "junit"), ("--coverage", "coverage")):
-		            for report in command.get(key, []):
-		                print(flag, report, sep="\n")
-		EOF
-	) || read_status=$?
-	if [[ $read_status -eq 3 ]]; then
-		echo "gate: no shadow run of the Rust gate: gate.py could not judge a test command" >&2
-		return 0
-	fi
-	[[ $read_status -eq 0 ]] || return
-	[[ -z $listed ]] || mapfile -t reports <<<"$listed"
-	uv run --frozen "$judge_dir/release/shadow-run.sh" . "${gate_args[@]}" --python python "${reports[@]}"
-}
-
-gate_args=(--base "$base" --config "$judge_dir/pyproject.toml" --test-contexts "$COVERAGE_FILE"
-	--rust-syntax "$helper")
 trap - ERR
 status=0
-uv run --frozen python "$gate_py" "${gate_args[@]}" --out quality.md || status=$?
+# `python` is the environment's, which holds what the gate's checks of Python run: pytest,
+# pytest-randomly and mutmut.
+uv run --frozen "$gate" --base "$base" --config "$judge_dir/gate.toml" --python python --out quality.md || status=$?
 case $status in
-0 | 130) ;;
-1)
-	# gate.py exits 1 for GATE: ERROR, but so does Python on an uncaught exception.
-	if [[ $(head -n 1 quality.md 2>/dev/null) != "GATE: ERROR" ]]; then
-		echo "gate: gate.py exited 1 without writing a verdict" >&2
-		status=2
-	fi
-	;;
+0 | 1 | 130) ;;
 *) status=2 ;;
 esac
-if [[ $status -le 1 && -x $judge_dir/release/shadow-run.sh ]]; then
-	shadow_run || echo "gate: the shadow run of the Rust gate failed; gate.py's verdict stands" >&2
-fi
 exit "$status"

@@ -1,4 +1,4 @@
-//! The vague-names check on Python, read with lang_python: tests/test_gate.py's TestVagueNames.
+//! The vague-names check on Python, read with lang_python.
 
 mod common;
 

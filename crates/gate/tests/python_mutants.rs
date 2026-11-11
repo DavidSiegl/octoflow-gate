@@ -1,10 +1,10 @@
 //! Python's half of the surviving-mutants check over a real git repository, through the `gate` binary and its
-//! quality.json, as gate.py's TestSurvivingMutants runs gate.py's check (tests/test_gate.py): with the workspace's
-//! own mutmut (common::python), or a `--python` that is a shell script standing in for it. Where gate.py's tests
-//! patch the gate, these give the binary such a `--python`, or a TMPDIR; what a `--python` cannot vary, the gate's
-//! own waits and a scratch directory that cannot be removed among it, is the unit tests' in python_mutants.rs,
-//! copies.rs and process.rs. The gate runs its flaky-tests and passes-at-base checks on the same change with the same
-//! Python, so a fake mutmut answers nothing to what is not mutmut's.
+//! quality.json: with the workspace's own mutmut (common::python), or a `--python` that is a shell script standing
+//! in for it. Where a test needs mutmut or the system to go wrong, it gives the binary such a `--python`, or a
+//! TMPDIR; what a `--python` cannot vary, the gate's own waits and a scratch directory that cannot be removed among
+//! it, is the unit tests' in python_mutants.rs, copies.rs and process.rs. The gate runs its flaky-tests and
+//! passes-at-base checks on the same change with the same Python, so a fake mutmut answers nothing to what is not
+//! mutmut's.
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -48,21 +48,17 @@ const EDITS: [(&str, &str, &str); 4] = [
 const WEAKLY_TESTED: [(&str, u32, &str); 3] =
     [("calc.py", 5, "survived"), ("calc.py", 13, "untested"), ("calc.py", 18, "survived")];
 
-/// The workspace's own `[tool.mutmut]` do_not_mutate_patterns, as TOML, which keep mutmut off argparse's help and
-/// description texts.
-fn patterns() -> String {
-    let own = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../pyproject.toml")).unwrap();
-    let own: toml::Table = own.parse().unwrap();
-    own["tool"]["mutmut"]["do_not_mutate_patterns"].to_string()
-}
+/// `[tool.mutmut]`'s do_not_mutate_patterns of the base's rules, as TOML: they keep mutmut off the help and
+/// description texts of an argparse parser, any keyword argument of those names.
+const PATTERNS: &str = r"['\bhelp=', '\bdescription=']";
 
 /// A repository whose base holds [`BASE`] as calc.py, [`TESTS`], and a pyproject.toml whose `[tool.mutmut]` mutates
-/// calc.py by the tests under tests/, with the workspace's [`patterns`]; it runs neither ruff nor mypy.
+/// calc.py by the tests under tests/, with [`PATTERNS`]; it runs neither ruff nor mypy.
 fn calc() -> Repo {
     let rules = format!(
         "[tool.mutmut]\nsource_paths = [\"calc.py\"]\npytest_add_cli_args_test_selection = [\"tests/\"]\n\
          do_not_mutate_patterns = {}\n",
-        patterns()
+        PATTERNS
     );
     Repo::with(&[
         common::NO_PYTHON_LINTERS,

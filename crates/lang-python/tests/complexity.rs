@@ -1,7 +1,7 @@
 //! The cognitive-complexity check on Python read by lang_python: the score of each construct, after G. Ann Campbell's
 //! paper in its mapping to Python, each expected score added up in the comments, one increment per line; then the
-//! check over a change, with how it pairs a function with its base. tests/test_gate.py's TestCognitiveComplexity and
-//! TestTooComplexFunctions, but for what the gate decides over a real change (crates/gate/tests/parser_checks.rs).
+//! check over a change, with how it pairs a function with its base. What the gate decides over a real change before
+//! the check judges it is crates/gate/tests/parser_checks.rs's.
 
 mod common;
 
@@ -569,7 +569,7 @@ fn a_body_differs_with_its_structure_and_its_literals() {
 
 #[test]
 fn the_seven_functions_sonarqube_flagged_score_over_the_limit() {
-    let source = include_str!("../../../tests/data/s3776_at_84e87e7.py.txt");
+    let source = include_str!("data/s3776_at_84e87e7.py.txt");
     let scores = scores_of(source);
     let names: Vec<&str> = scores.keys().map(|name| name.rsplit('.').next().unwrap()).collect();
     let mut expected = ["main", "_turn", "_poll", "quality_report", "changed_lines", "_shared_name", "_parse_step"];
@@ -602,8 +602,7 @@ fn over_limit(path: &str, line: u32) -> Found {
 
 const CALC: &str = "calc.py";
 
-/// calc.py at the base of the changes below: grow just under the limit, big over it and small well under it, as
-/// TestTooComplexFunctions' BASE.
+/// calc.py at the base of the changes below: grow just under the limit, big over it and small well under it.
 fn base() -> String {
     format!("{}\n\n{}\n\n{}", flat("grow", 14, ""), flat("big", 20, ""), flat("small", 3, ""))
 }
@@ -737,7 +736,7 @@ fn a_base_that_does_not_parse_leaves_its_functions_judged_as_new() {
 
 #[test]
 fn a_base_whose_coding_cookie_names_no_text_encoding_leaves_its_functions_judged_as_new() {
-    // rot13 is a codec that decodes no bytes to text, which Python refuses; the Rust gate reads no cookie but
+    // rot13 is a codec that decodes no bytes to text, which Python refuses; the gate reads no cookie but
     // UTF-8's, ASCII's and Latin-1's (docs/port-differences.md, "Reading a Python file").
     let rotated = flat("rotated", 20, "");
     let now = replaced(&rotated, "x += 3\n", "x += 30\n");

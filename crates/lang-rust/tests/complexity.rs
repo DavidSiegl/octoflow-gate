@@ -1,6 +1,5 @@
 //! The cognitive-complexity check on Rust read by lang_rust: the score of each construct, by the rules above
 //! [`LIMIT`], each expected score added up in the comments, one increment per line; then the check over a change.
-//! tests/test_gate.py's TestRustCognitiveComplexity and TestTooComplexRustFunctions.
 
 mod common;
 

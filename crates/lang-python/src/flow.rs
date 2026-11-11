@@ -1,6 +1,6 @@
 //! The flow of a Python function's body as the cognitive-complexity check scores it ([`model::Flow`]), and the
-//! functions of its module that its calls reach, resolved through Python's scopes. gate.py's `cognitive_complexity`
-//! and `_callees`; docs/quality-gate.md, "Cognitive complexity", has the rules.
+//! functions of its module that its calls reach, resolved through Python's scopes; docs/quality-gate.md, "Cognitive
+//! complexity", has the rules.
 
 use std::collections::{BTreeSet, HashSet};
 use std::rc::Rc;

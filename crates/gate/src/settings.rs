@@ -16,7 +16,7 @@ use crate::Unjudged;
 pub const LINTER_NAMES: [&str; 6] = ["ruff", "mypy", "pymarkdown", "shellcheck", "actionlint", "clippy"];
 
 /// The settings a project is judged by: [`Settings::default`] for one without gate.toml, else what its gate.toml
-/// says, a default for each key it leaves out. gate.py's GateSettings.
+/// says, a default for each key it leaves out.
 #[derive(Clone, Debug)]
 pub struct Settings {
     pub python_tests: Globs,
@@ -51,7 +51,8 @@ pub struct TestCommand {
     pub name: String,
     /// The argv, run in the tree's top level; never through a shell. Never empty.
     pub command: Vec<String>,
-    /// The JUnit and the Cobertura reports it writes, paths inside the tree from its top level.
+    /// The JUnit reports and the coverage reports (Cobertura or LCOV, coverage::new_coverage) it writes, paths inside
+    /// the tree from its top level.
     pub junit: Vec<String>,
     pub coverage: Vec<String>,
 }
@@ -360,7 +361,7 @@ mod tests {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../gate.toml");
         let settings = Settings::read(&path).unwrap();
         let names: Vec<&str> = settings.test_commands.iter().map(|c| c.name.as_str()).collect();
-        assert_eq!(names, ["cargo-nextest", "cargo-nextest-gate", "pytest"]);
+        assert_eq!(names, ["cargo-nextest-gate"]);
     }
 
     #[test]

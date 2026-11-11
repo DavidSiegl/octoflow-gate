@@ -18,7 +18,7 @@ pub struct Repo {
 }
 
 impl Repo {
-    /// The repository with `files`, (path, contents), committed as "base", as TestGate's BASE_FILES are.
+    /// The repository with `files`, (path, contents), committed as "base".
     pub fn with(files: &[(&str, &[u8])]) -> Repo {
         static MADE: AtomicUsize = AtomicUsize::new(0);
         let dir = std::env::temp_dir()
@@ -110,10 +110,9 @@ impl Repo {
         bin
     }
 
-    /// Puts stubs of ruff, mypy and pymarkdown outside the repository, as TestGate's setUp gives gate.py, and gives
-    /// back a PATH that finds them ahead of the real ones. Each writes its arguments, a line each, where
-    /// [`Repo::argv`] reads them, then prints what [`Repo::says`] gave it and exits 1, or, given nothing, prints
-    /// nothing and exits 0.
+    /// Puts stubs of ruff, mypy and pymarkdown outside the repository, and gives back a PATH that finds them ahead of
+    /// the real ones. Each writes its arguments, a line each, where [`Repo::argv`] reads them, then prints what
+    /// [`Repo::says`] gave it and exits 1, or, given nothing, prints nothing and exits 0.
     pub fn stub_linters(&self) -> String {
         let stubs = self.outside.join("stubs");
         std::fs::create_dir_all(&stubs).unwrap();

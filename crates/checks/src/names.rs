@@ -1,4 +1,4 @@
-//! The vague-names check: names a change binds that could name anything. gate.py's vague_names.
+//! The vague-names check: names a change binds that could name anything.
 
 use std::collections::HashMap;
 
@@ -66,7 +66,6 @@ fn vague(name: &str, camel: bool) -> bool {
 mod tests {
     use super::vague;
 
-    // The verdicts are gate.py's: _ends_in_vague_word, and _is_vague_in_rust for camel.
     #[test]
     fn a_name_is_vague_by_its_word_after_the_last_underscore_in_any_case() {
         for name in ["data", "raw_info", "HANDLE", "DATA_info", "_value", "Data"] {

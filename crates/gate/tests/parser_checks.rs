@@ -2,7 +2,6 @@
 //! over the whole change before a check judges it, which the front ends' tests of the checks (crates/lang-python,
 //! crates/lang-rust) take as given: which files are a language's source, whether the change edits its code under
 //! test, by the settings and, for Rust, the Cargo packages of the tree, and which golden files go with it.
-//! TestRustWeakenedTests in tests/test_gate.py, for Rust's cases, and its Python classes' cases of the same kind.
 
 use std::fs::OpenOptions;
 use std::os::unix::fs::OpenOptionsExt;
@@ -304,7 +303,7 @@ fn each_rs_file_the_change_touches_is_read_at_the_base_and_in_the_working_tree()
 
 #[test]
 fn a_test_file_that_is_not_utf_8_on_a_side_fails_the_gate_as_unreadable() {
-    // Among the tests by its place: gate.py cannot decode its base, so it cannot tell which tests the change removes.
+    // Among the tests by its place: its base cannot be decoded, so the gate cannot tell which tests the change removes.
     let latin1 = [IT.as_bytes(), b"// caf\xe9\n"].concat();
     let repo = Repo::with(&[("crate/Cargo.toml", MANIFEST.as_bytes()), ("crate/tests/it.rs", &latin1)]);
     repo.put("crate/tests/it.rs", b"use tiny::add;\n");

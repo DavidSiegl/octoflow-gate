@@ -1,6 +1,6 @@
 //! The test-integrity check: tests a change removed, skipped, stripped of assertions or wrapped in a swallowed error,
-//! and the expected values it changed together with the code under test. gate.py's weakened_tests, for the languages
-//! whose front ends give the model; docs/quality-gate.md, "Test integrity", says what each finding means.
+//! and the expected values it changed together with the code under test, for the languages whose front ends give the
+//! model; docs/quality-gate.md, "Test integrity", says what each finding means.
 
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsString;

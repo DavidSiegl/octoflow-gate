@@ -12,7 +12,7 @@ use crate::xml;
 use crate::Unjudged;
 
 /// Coverage below this percent fails the gate once a change has [`MIN_NEW_LINES`] or more new lines to cover; a
-/// smaller change is not judged on coverage. gate.py's GATE_MIN_COVERAGE and GATE_MIN_NEW_LINES.
+/// smaller change is not judged on coverage.
 pub const MIN_COVERAGE: f64 = 80.0;
 pub const MIN_NEW_LINES: usize = 20;
 
@@ -251,9 +251,8 @@ fn branch_counts(text: &str) -> (usize, usize) {
     counts.unwrap_or((0, 0))
 }
 
-/// `text` as Python's `int()` reads a whole number, as gate.py reads a report's: surrounding whitespace, a sign, and
-/// single underscores between digits allowed. Errs, with why, on anything else, or on a number beyond an i128, which
-/// no coverage tool counts to.
+/// `text` as Python's `int()` reads a whole number: surrounding whitespace, a sign, and single underscores between
+/// digits allowed. Errs, with why, on anything else, or on a number beyond an i128, which no coverage tool counts to.
 fn py_int(text: &str) -> Result<i128, String> {
     let trimmed = text.trim();
     let digits = trimmed.strip_prefix(['+', '-']).unwrap_or(trimmed);

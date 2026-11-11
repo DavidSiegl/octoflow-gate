@@ -1,9 +1,8 @@
 //! The flaky-tests check over a real git repository, its tests rerun with the workspace's own pytest
-//! (common::python), through the `gate` binary and its quality.json, as gate.py's TestFlakyTests runs gate.py's check
-//! (tests/test_gate.py). Where gate.py's tests patch the gate, these give the binary a `--python` that is a shell
-//! script, or a TMPDIR. The binary's seeds and timeout are fixed, so each test has all five seeds, and the run that
-//! outlives its timeout is pytest.rs's own test; the reruns that stop at a run that went wrong stop here at one that
-//! exits with a status the check does not expect.
+//! (common::python), through the `gate` binary and its quality.json. Where a test needs pytest or the system to go
+//! wrong, it gives the binary a `--python` that is a shell script, or a TMPDIR. The binary's seeds and timeout are
+//! fixed, so each test has all five seeds, and the run that outlives its timeout is pytest.rs's own test; the reruns
+//! that stop at a run that went wrong stop here at one that exits with a status the check does not expect.
 
 use std::ffi::OsString;
 use std::path::Path;

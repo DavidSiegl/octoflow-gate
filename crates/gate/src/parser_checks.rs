@@ -69,7 +69,7 @@ impl PythonChange<'_> {
     /// Whether `path`, on either side of the change, is Python code under test: a path named `*.py`, whatever is
     /// there, or one where a side of [`files`] held Python, that gate.toml places neither among the Python tests nor
     /// with what supports the tests (`test-files.support`). Unlike Rust's ([`RustChange::is_code`]), it does not ask
-    /// what the change edits in the file: Python's test code is told by its file alone. gate.py's `_python_code`.
+    /// what the change edits in the file: Python's test code is told by its file alone.
     ///
     /// [`files`]: PythonChange::files
     pub fn is_code(&self, path: &OsStr) -> bool {
@@ -93,8 +93,7 @@ impl PythonChange<'_> {
     /// as regular files in the working tree, adds lines to or removes lines from, and whose paths `in_scope` accepts;
     /// and each such file that cannot be read or does not parse.
     /// `touched(unit, added, removal_points)` says whether the change touched a unit of a file, given the lines the
-    /// change added to the file and the points it only removed lines at (diff::removal_points). gate.py's
-    /// `_changed_python_units`.
+    /// change added to the file and the points it only removed lines at (diff::removal_points).
     pub fn changed_units(
         &self,
         in_scope: impl Fn(&OsStr) -> bool,
@@ -137,7 +136,7 @@ impl RustChange<'_> {
     /// Whether `path`, on either side of the change, is Rust code under test: a .rs file of a Cargo package
     /// ([`in_cargo_package`]) that gate.toml's `test-files.rust` does not place among the tests, which the change
     /// adds, deletes, renames or edits outside its test code ([`integrity::edits_code`]). A path no file was read at,
-    /// as a symlink's, counts as edited. gate.py's `_rust_code`.
+    /// as a symlink's, counts as edited.
     pub fn is_code(&self, path: &OsStr) -> bool {
         let change = self.change;
         if !path.as_bytes().ends_with(b".rs")
@@ -165,16 +164,14 @@ fn any_path(change: &Change, holds: impl Fn(&OsStr) -> bool) -> bool {
 }
 
 /// Whether `settings` place the file at `path` among the Python tests: a `.py` file `test-files.python` matches.
-/// gate.py's `GateSettings.python_test`.
 pub(crate) fn python_test(settings: &Settings, path: &OsStr) -> bool {
     path.as_bytes().ends_with(b".py") && settings.python_tests.matches(path)
 }
 
 /// The test-integrity check's findings on `sources`: the golden files the change edits ([`changed_golden_files`]),
 /// when it edits a language's code under test ([`PythonChange::edits_code`], [`RustChange::edits_code`]), by path,
-/// then the findings on Python, then those on Rust, each by path and line, as gate.py's `weakened_tests` lists golden
-/// files before each language's findings. Each finding's severity says whether it fails the gate
-/// ([`Finding::severity`]).
+/// then the findings on Python, then those on Rust, each by path and line. Each finding's severity says whether it
+/// fails the gate ([`Finding::severity`]).
 pub fn weakened_tests(sources: &Sources) -> Vec<Finding> {
     let (python_edited, rust_edited) = (sources.python.edits_code(), sources.rust.edits_code());
     let mut out = if python_edited || rust_edited { changed_golden_files(sources.change) } else { vec![] };
@@ -215,7 +212,7 @@ struct Language {
     /// other side, where the change gives it one, is at `other`.
     among_tests: fn(settings: &Settings, path: &OsStr, other: Option<&OsStr>) -> bool,
     /// Whether a file that holds the language's source in the working tree has its base read as the language's too,
-    /// whatever the base's name and first line say: gate.py compares a Python file with its base under any name.
+    /// whatever the base's name and first line say, so that a file is compared with its base under any name.
     base_of_any_name: bool,
     /// The front end's reading of `source`, the file at `path`.
     read: fn(source: &[u8], path: &OsStr, among_tests: bool) -> Result<SourceFile, Unreadable>,
@@ -224,7 +221,7 @@ struct Language {
 const PYTHON: Language = Language {
     holds: |path, head| lang_python::is_python(path, head),
     // A file is a test file by either of its paths, so that a rename into or out of the tests loses none of them
-    // unseen: gate.py's `weakened_tests`.
+    // unseen.
     among_tests: |settings, path, other| python_test(settings, path) || other.is_some_and(|o| python_test(settings, o)),
     base_of_any_name: true,
     read: |source, path, among_tests| lang_python::read(source, Path::new(path), among_tests),
@@ -377,8 +374,7 @@ fn in_cargo_package(change: &Change, gone: &[OsString], path: &OsStr) -> bool {
 ///
 /// [`weakened_tests`] lists them only when the change also edits code outside its tests, which only a language can
 /// tell: a golden file is then an expected value outside any assertion, which `UPDATE_GOLDEN=1` rewrites to whatever
-/// the code now writes. A golden file the change adds, or renames without editing, has no old value to lose. gate.py's
-/// `_changed_golden_files`.
+/// the code now writes. A golden file the change adds, or renames without editing, has no old value to lose.
 fn changed_golden_files(change: &Change) -> Vec<Finding> {
     let removals = crate::diff::removal_points(&change.diff);
     let finding = |path: &OsString, what: &str| Finding {

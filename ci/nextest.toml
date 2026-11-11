@@ -1,8 +1,7 @@
-# cargo-nextest's configuration for the gate's cargo-nextest commands (gate.toml), which pass it with --config-file in
-# place of gate-rust's own .config/nextest.toml, so that a change cannot configure how its own tests are run there. Each
-# command runs `cargo llvm-cov nextest --profile ci`, which runs every test whatever fails (cargo-llvm-cov passes
-# --no-fail-fast), and this profile writes their JUnit report to junit.xml under nextest/ci/ in the target directory
-# of what it tests, gate-rust's or the workspace's, which gate.toml names as the command's report and Jenkins
-# publishes (https://nexte.st/docs/machine-readable/junit/).
+# cargo-nextest's configuration for the gate's cargo-nextest command (gate.toml), which passes it with --config-file,
+# so that a .config/nextest.toml a change adds cannot configure how its own tests are run there. The command runs
+# `cargo llvm-cov nextest --profile ci`, which runs every test whatever fails (cargo-llvm-cov passes --no-fail-fast),
+# and this profile writes their JUnit report to nextest/ci/junit.xml in the workspace's target directory, which
+# gate.toml names as the command's report and Jenkins publishes (https://nexte.st/docs/machine-readable/junit/).
 [profile.ci.junit]
 path = "junit.xml"

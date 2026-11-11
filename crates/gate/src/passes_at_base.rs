@@ -1,6 +1,6 @@
 //! The passes-at-base check: the tests a change adds or edits, run against the code the change started from. A test
 //! that passes there does not test the change. Python's tests run with pytest (python_at_base.rs), and Rust's, here,
-//! with cargo-nextest. gate.py's `passes_at_base`.
+//! with cargo-nextest.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
@@ -136,7 +136,7 @@ fn changed_tests(rust: &RustChange) -> (Vec<ChangedTest>, Vec<Finding>) {
 
 /// Whether the change touches a test that spans `lines` in the working tree, by adding one of them (`added`) or
 /// removing lines at one of the `removal_points` from just above its first line, as an `#[ignore]` taken off its
-/// top, to just below its last, as gate.py's `_touched_rust_tests` counts them (TODO.md, "A removal just below").
+/// top, to just below its last (TODO.md, "A removal just below").
 fn touches(lines: Lines, added: &BTreeSet<u32>, removal_points: &BTreeSet<u32>) -> bool {
     added.iter().any(|&n| lines.holds(n))
         || removal_points.iter().any(|&n| lines.first.saturating_sub(1) <= n && n <= lines.last)

@@ -1,5 +1,5 @@
-//! The gate's judgement of one change: what it reads of the change, and the report it gives on it, as gate.py's
-//! judge_change does: the linters, and the checks beside them, over Python and Rust.
+//! The gate's judgement of one change: what it reads of the change, and the report it gives on it, from the linters
+//! and the checks beside them, over Python and Rust.
 
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
@@ -214,11 +214,10 @@ pub fn judge_change(cwd: &Path, base: &str, given: &Given) -> Result<QualityRepo
     })
 }
 
-/// Runs the checks beside the linters on `change`, in the order gate.py's `gate_checks` runs them: test-integrity,
-/// cognitive-complexity, flaky-tests, surviving-mutants and passes-at-base, the last two's runs within the seconds
-/// `budgets` gives, (mutation, base run), mutmut set up as `mutmut` says, and vague-names. Appends to `conditions`
-/// a failed condition for each check with findings of severity "error", in that order, and to `issues` those
-/// findings; returns the others, to weigh.
+/// Runs the checks beside the linters on `change`, in this order: test-integrity, cognitive-complexity, flaky-tests,
+/// surviving-mutants and passes-at-base, the last two's runs within the seconds `budgets` gives, (mutation, base
+/// run), mutmut set up as `mutmut` says, and vague-names. Appends to `conditions` a failed condition for each check
+/// with findings of severity "error", in that order, and to `issues` those findings; returns the others, to weigh.
 /// Errs as [`Sources::read`] does, having appended nothing.
 fn judge_checks(
     change: &Change,
@@ -249,7 +248,8 @@ fn judge_checks(
 }
 
 /// `findings` of the check named `check`, as its find gives them (copies::finding), with the check's name before
-/// each rule: gate.py's `GateCheck.judged`, for a check whose findings never fail the gate.
+/// each rule, or as the whole rule of a finding that has none of its own. Their severity stays "warning": this is
+/// for a check whose findings never fail the gate.
 fn named(check: &str, findings: Vec<Finding>) -> Vec<Finding> {
     let rule = |own: String| if own.is_empty() { check.to_string() } else { format!("{check} {own}") };
     findings.into_iter().map(|f| Finding { rule: rule(f.rule), ..f }).collect()

@@ -10,8 +10,7 @@ use serde::Serialize;
 use crate::coverage::NewCoverage;
 use crate::text::{self, fingerprint, one_line, series};
 
-/// The version this binary carries into quality.json: its crate's, which tests/test_invariants.py holds to
-/// pyproject.toml's, as it does gate.py's GATE_VERSION.
+/// The version this binary carries into quality.json: its crate's.
 pub const GATE_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// quality.json's `schema_version`, the version of schema/quality-v1.json it follows: raised on any change to the
 /// JSON a reader could notice, but not for a new optional field.
@@ -100,7 +99,7 @@ impl QualityReport {
     ///
     /// It numbers at most [`QUALITY_ISSUE_LIMIT`] findings and lists as many failing tests, each by the first line of
     /// its detail, and counts the rest. It is prose, whose wording may change in any release; a program reads
-    /// [`QualityReport::json`] instead. Until the cutover it is gate.py's, word for word (tests/golden/).
+    /// [`QualityReport::json`] instead.
     pub fn markdown(&self) -> String {
         let mut out = vec![format!("GATE: {}", self.verdict().word()), String::new(), self.intro()];
         if !self.conditions.is_empty() {

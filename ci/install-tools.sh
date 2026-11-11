@@ -4,10 +4,10 @@
 # is kept, not downloaded again; one from another pin is replaced. scripts/gate runs it, with .tools/bin, which it then
 # puts first on PATH, when one of them is not on PATH, as on the Jenkins agent, whose image does not provide them:
 #
-# - cargo-llvm-cov and cargo-nextest, with which the gate's cargo-nextest command (gate.toml) runs the gate-rust
-#   helper's tests and measures their coverage, and which gate.py's passes-at-base check runs a change's Rust tests
-#   with. cargo-llvm-cov also needs rustup's llvm-tools component, which the agent image provides.
-# - cargo-mutants, with which gate.py's surviving-mutants check mutation-tests the Rust a change edits. The tests of
+# - cargo-llvm-cov and cargo-nextest, with which the gate's cargo-nextest command (gate.toml) runs the workspace's
+#   tests and measures their coverage, and which the gate's passes-at-base check runs a change's Rust tests with.
+#   cargo-llvm-cov also needs rustup's llvm-tools component, which the agent image provides.
+# - cargo-mutants, with which the gate's surviving-mutants check mutation-tests the Rust a change edits. The tests of
 #   those two checks fail, rather than skip, without them.
 #
 # Each is pinned to the sha256 of its linux x86_64 archive as its release publishes it: cargo-nextest's in the .sha256

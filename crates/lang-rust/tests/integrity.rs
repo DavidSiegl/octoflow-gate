@@ -1,6 +1,6 @@
-//! The test-integrity check on Rust tests read by lang_rust: gate.py's TestRustWeakenedTests, over a Cargo package
-//! `crate` with unit tests in an inline module and integration tests under tests/, and the platform-only cfgs and
-//! attribute reading of its TestRustPlatformOnly and TestRustAttribute that skips.rs's own tests leave out.
+//! The test-integrity check on Rust tests read by lang_rust, over a Cargo package `crate` with unit tests in an
+//! inline module and integration tests under tests/, and the platform-only cfgs and attribute reading that
+//! skips.rs's own tests leave out.
 
 mod common;
 

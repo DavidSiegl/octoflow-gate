@@ -1,5 +1,5 @@
-//! The test-integrity check on Python tests read by lang_python: tests/test_gate.py's TestWeakenedTests, but for what
-//! the gate decides over a real change (crates/gate/tests/parser_checks.rs).
+//! The test-integrity check on Python tests read by lang_python. What the gate decides over a real change before the
+//! check judges it is crates/gate/tests/parser_checks.rs's.
 
 mod common;
 
@@ -137,7 +137,7 @@ fn an_assertion_with_an_int_too_long_to_print_in_decimal_is_reported_as_any_othe
     let big = format!("def test_big():\n    assert 1 == 0x{}\n", "f".repeat(4000));
     let (place, messages) = found(&[code_edit(), edited(path, &big, &replaced(&big, "assert 1 ==", "assert 2 =="))]);
     assert_eq!(place, [at(path, 2, "expected-value-changed")]);
-    // Quoted as written and cut short, where gate.py says "(code at line 2, too long to print)"
+    // Quoted as written and cut short, where the gate up to 0.6.0 said "(code at line 2, too long to print)"
     // (docs/port-differences.md, "Quoted code is quoted as written").
     let [message] = messages.as_slice() else { panic!("one message, not {messages:?}") };
     assert!(message.starts_with("`test_big`: `assert 1 == 0xfff"), "{message}");

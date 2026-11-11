@@ -1,6 +1,6 @@
 //! The gate's Python front end: a Python source file, read with tree-sitter-python, as the model the parser checks
-//! judge (crates/model). It replaces gate.py's own reading of Python with `ast`; docs/port-differences.md lists where
-//! the two read a file differently.
+//! judge (crates/model). docs/port-differences.md lists where it reads a file differently from the gate up to 0.6.0,
+//! which read Python with Python's own `ast`.
 
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap};

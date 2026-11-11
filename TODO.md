@@ -8,6 +8,20 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
 
 ## Open issues
 
+- **Until the cutover (gate-standalone/18) merges, main runs one test command and says it runs three.** gate.toml
+  keeps only `cargo-nextest-gate`, the `crates/` workspace's tests (the cutover is judged by main's gate.toml and
+  deletes what the other two ran), so in that window:
+  - a change to `gate.py`, `gate-rust/` or `tests/*.py` is judged without those tests' coverage, and `scripts/gate`
+    still passes `--test-contexts .coverage`, which nothing writes, so mutmut is not narrowed (a `not-narrowed`
+    finding, and up to its whole budget);
+  - `docs/quality-gate.md` (the two `[[test]]` commands, `gate-rust/`'s command and report, `.coverage`),
+    `ci/install-tools.sh`, `ci/nextest.toml`, `tests/conftest.py` (the `ci` profile no command selects), `.gitignore`'s
+    test-report block, this file's Jenkinsfile and coverage-context entries, `scripts/gate`'s `COVERAGE_FILE` comment
+    and the Jenkinsfile's `junit` paths still describe the commands removed;
+  - the name `cargo-nextest-gate` keeps a suffix that no longer tells it from another command.
+  Found by cross-review 16 (R1-1 to R1-6). Closes when the cutover merges: it rewrites or deletes each of these and
+  drops this entry.
+
 - **`scripts/gate` checks a change's `gate.toml` through a private class of the released `gate.py`.** It loads the
   release the change pins and calls `GateSettings.read`, since no release has a public way to check settings; a
   release that renames or reshapes it makes every change that pins it fail the check (exit 2). Chosen by the user

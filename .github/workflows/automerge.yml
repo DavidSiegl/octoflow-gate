@@ -2,9 +2,10 @@
 # on its head commit, so a pull request lands without a human. Any file may change, as in
 # octoflow-ai's auto-merge (decided by the owner on 2026-11-05). So an agent's pull request
 # is trusted not to loosen its own check, which CI runs from the pull request's own copy of
-# the files that configure it (CI's files, scripts/gate, conftest.py, pytest's, coverage's
-# and ruff's configuration, uv.lock), and not to loosen the check of every later one by
-# changing those files or this workflow on main. Held for a human: drafts, and pull
+# the Jenkinsfile, scripts/gate, ci/install-tools.sh, ci/nextest.toml and uv.lock (gate.toml,
+# the linters' rules in pyproject.toml and the pinned release come from main: scripts/gate),
+# and not to loosen the check of every later one by changing those files or this workflow
+# on main. Held for a human: drafts, and pull
 # requests labelled no-automerge, from forks, or into another branch.
 #
 # GitHub runs this from main's copy for status events, so a pull request cannot change

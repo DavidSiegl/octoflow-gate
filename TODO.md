@@ -22,10 +22,10 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   Found by cross-review 16 (R1-1 to R1-6). Closes when the cutover merges: it rewrites or deletes each of these and
   drops this entry.
 
-- **mypy reads little of the Python the gate embeds.** The functions of `crates/gate/src/_octoflow_gate_base_imports.py`
-  and `_test_contexts.py` are unannotated, and mypy at its default strictness (`check_untyped_defs` off) skips the
-  bodies of unannotated functions, so "no issues found" says little about them. Found by cross-review 18 (R1-4).
-  Closes with the plugins annotated, or `check_untyped_defs` turned on for them in `[tool.mypy]`.
+- **mypy does not read the bodies of the embedded pytest plugin's hooks.** `pytest_addoption` and
+  `pytest_sessionfinish` in `crates/gate/src/_octoflow_gate_base_imports.py` are unannotated, and mypy at its default
+  strictness (`check_untyped_defs` off) skips the bodies of unannotated functions. Found by cross-review 18 (R1-4,
+  R3-1). Closes with the two annotated, or `check_untyped_defs` turned on for that file in `[tool.mypy]`.
 
 - **`scripts/gate` checks a change's `gate.toml` through a private class of the released `gate.py`.** It loads the
   release the change pins and calls `GateSettings.read`, since no release has a public way to check settings; a

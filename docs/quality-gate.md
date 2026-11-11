@@ -34,7 +34,7 @@ The files in the table are each linter's default, which a project's [settings](#
 | Linter | Files | Rules |
 |---|---|---|
 | ruff | `**/*.py` | `[tool.ruff.lint]` in `pyproject.toml` |
-| mypy | `[tool.mypy] files`, here every Python file but those `exclude` names: `gate.py` and `crates/gate/src` | `[tool.mypy]` |
+| mypy | `[tool.mypy] files`, less `exclude`; here `gate.py` and `crates/gate/src` | `[tool.mypy]` |
 | pymarkdown | `**/*.md` | `[tool.pymarkdown]` |
 | shellcheck | `**/*.sh` | its defaults |
 | actionlint | `.github/workflows/*.yml`, `*.yaml` | its defaults |

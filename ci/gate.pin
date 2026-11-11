@@ -3,4 +3,4 @@
 # reads this file from the judge's commit, so a change to it judges the changes after it, never itself. Raise it to a
 # new release only after that release exists and has been checked (sha256sum -c on the downloaded tarball). The
 # release named here must read this commit's gate.toml, which scripts/gate checks.
-0.6.0 364f6dfa6cb972262c61c71dfb5179bf72e04b230601e6cc10f28148e4c1b32c
+0.7.0 9700f6072b5d6926b9ce32c01ed582fde7bf887424b62e9ec0ced868b24509e1

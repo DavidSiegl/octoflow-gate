@@ -6,7 +6,7 @@
 # tests. --ignore-run-fail writes the coverage report whatever tests fail and exits 0 for them; ci/nextest.toml's ci
 # profile writes the JUnit report, to target/nextest/ci/junit.xml.
 [[test]]
-name = "cargo-nextest-gate"
+name = "cargo-nextest"
 command = ["cargo", "llvm-cov", "nextest", "--locked", "--workspace", "--exclude", "xtask", "--ignore-run-fail",
            "--profile", "ci", "--config-file", "ci/nextest.toml", "--cobertura", "--output-path", "coverage-gate.xml"]
 junit = ["target/nextest/ci/junit.xml"]

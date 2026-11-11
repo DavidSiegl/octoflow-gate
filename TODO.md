@@ -26,6 +26,10 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   for, coverage.py, cargo-llvm-cov and cargo-nextest, write UTF-8, and the fix adds a dependency outside spec decision
   7's set. Closes by decoding in `xml.rs` for both readers, from the mark and the declaration, as quick-xml's `encoding`
   feature (encoding_rs) does, `report_format` then keeping only the test of XML against LCOV.
+- **mypy does not read the bodies of the embedded pytest plugin's hooks.** `pytest_addoption` and
+  `pytest_sessionfinish` in `crates/gate/src/_octoflow_gate_base_imports.py` are unannotated, and mypy at its default
+  strictness (`check_untyped_defs` off) skips the bodies of unannotated functions. Found by cross-review 18 (R1-4,
+  R3-1). Closes with the two annotated, or `check_untyped_defs` turned on for that file in `[tool.mypy]`.
 - **`crates/checks/src/lib.rs` and docs/quality-gate.md still speak in octoflow's words.** `Finding`'s doc comments name
   the Reviewer as the one a warning is listed for, and docs/quality-gate.md names the Builder and the Reviewer where it
   says who a part of the quality file is for, and cites octoflow's pull requests, its orchestrator's `QUALITY_TIMEOUT`

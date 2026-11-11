@@ -80,8 +80,22 @@ pub fn tokens<'t>(node: Node, text: Text<'t>) -> Vec<&'t str> {
 /// A digest of `node`'s [`tokens`]: equal for two nodes of the same code whatever their layout and comments. 64-bit
 /// FNV-1a (<http://www.isthe.com/chongo/tech/comp/fnv/>), as lang-rust's, as 16 hexadecimal digits.
 pub fn digest(node: Node, text: Text) -> String {
+    digest_of(&tokens(node, text))
+}
+
+/// A digest, as [`digest`]'s, of a function or method declaration `node` but its name: its receiver, type parameters,
+/// parameters, results and body. Equal for a function renamed or moved unchanged, and changed by an edit to its
+/// signature as by one to its body.
+pub fn declaration_digest(node: Node, text: Text) -> String {
+    let name = node.child_by_field_name("name").map(|n| n.id());
+    let parts = children(node).into_iter().filter(|c| Some(c.id()) != name);
+    digest_of(&parts.flat_map(|c| tokens(c, text)).collect::<Vec<_>>())
+}
+
+/// The FNV-1a digest of `tokens`, joined by spaces.
+fn digest_of(tokens: &[&str]) -> String {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in tokens(node, text).join(" ").bytes() {
+    for byte in tokens.join(" ").bytes() {
         hash ^= u64::from(byte);
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }

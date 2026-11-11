@@ -1,7 +1,8 @@
 # Quality gate
 
 What `gate` judges and why: the [gate](#the-gate) itself, its [Rust tests and
-coverage](#rust-tests-and-coverage), how it [reads Rust, Python and Go](#reading-the-source),
+coverage](#rust-tests-and-coverage), a Go project's [tests and coverage](#go-tests-and-coverage), how it [reads Rust,
+Python and Go](#reading-the-source),
 [whose rules judge a change](#whose-rules-judge-a-change), and [the report as a contract](#the-report-as-a-contract)
 with the programs that read it back. [README.md](../README.md) says how to
 run it in a project.
@@ -30,7 +31,7 @@ It first runs the tests, with the commands the project's `gate.toml` lists as `[
 workspace's tests and measures their coverage and takes [cargo-llvm-cov and
 cargo-nextest](#rust-tests-and-coverage).
 
-It runs six linters over the files git tracks outside `mutants/` (below), each over the files it reads, and keeps
+It runs seven linters over the files git tracks outside `mutants/` (below), each over the files it reads, and keeps
 only the findings on lines the change adds, and the lineless ones on files it touches. Findings on older lines are
 counted, never listed and never held against the change, so the gate judges the change rather than the codebase.
 The files in the table are each linter's default, which a project's [settings](#the-gates-settings) can replace.
@@ -43,6 +44,7 @@ The files in the table are each linter's default, which a project's [settings](#
 | shellcheck | `**/*.sh` | its defaults |
 | actionlint | `.github/workflows/*.yml`, `*.yaml` | its defaults |
 | clippy | `**/*.rs` and `**/Cargo.toml`, in each Cargo workspace, here the one at the top level | the workspace's `[lints]` and `clippy.toml` |
+| golangci-lint | `**/*.go` and `**/go.mod`, in each Go module | the module's `.golangci.yml`, `.yaml`, `.toml` or `.json` |
 
 ruff's rules include the coding rules the agents are given as prose that a linter can apply, so that every harness
 gets them, every time: a docstring on every public module, class, method and function (`D100`-`D104`, `D106`,
@@ -67,9 +69,22 @@ does not compile is a failed condition naming the compiler's first error in a tr
 cargo's own: a change that deletes a function an old line calls breaks the build on no line it added. A linter
 that outlives its timeout is killed with every process it started, such as cargo's rustc.
 
+golangci-lint runs as `golangci-lint run --output.json.path stdout --show-stats=false --max-issues-per-linter 0
+--max-same-issues 0 --issues-exit-code 1 --path-mode abs ./...` in the directory of each go.mod among its files, its
+tests included, but for a module the go tool leaves out of `./...`, as one under `testdata` or `vendor` (`linted_module`
+in `crates/gate/src/golangci.rs`). Which linters it runs, and how, is the module's own choice, the configuration
+golangci-lint finds from the module's directory up, as clippy's lints are the workspace's; without one it runs its
+standard set (errcheck, govet, ineffassign, staticcheck, unused). The gate asks for every finding, none held back as a
+repeat of another, and for exit status 1 on findings, whatever the configuration says, and each is an `error` named by
+its linter, as `golangci-lint errcheck`. Code that does not compile is a failed condition naming the type checker's
+first error, as clippy's is, since golangci-lint places it at the package clause, on no line the change added. A module
+with no Go file of its own, its code all in modules nested in it, has nothing to lint (exit status 5). A run that exits
+with any other status but 0 or 1, or prints no JSON report, as for a configuration it cannot read, is a failed condition
+quoting what it said.
+
 The gate runs each linter as a process, found on `PATH`. In this repository ruff, mypy and pymarkdownlnt are in uv's
 `dev` group, and `scripts/gate` starts the gate with `uv run`, which puts them there; shellcheck, actionlint, cargo
-and clippy come from the machine, in Jenkins the agent image.
+and clippy come from the machine, in Jenkins the agent image, and so do go and golangci-lint.
 
 After the linters come the checks in the table below, in its order, which judge what the change did rather than how
 the tree reads. Each either fails the gate or only reports: a failing check's findings are issues,
@@ -206,8 +221,8 @@ removing one or changing its output is not seen (`TODO.md`). The findings are Py
   knows, `go1.27` (`NEWEST_RELEASE` in `crates/lang-go/src/constraint.rs`, raised with each Go release), is taken as
   set, as on the newest toolchain, where the tests that matter run; a `go1.N` above it, as `go1.99`, is set by no
   toolchain and is a custom tag, so until the constant is raised a test file naming a new release's tag is a `skip`.
-  It is one to weigh, as Rust's is; a custom tag such as `integration` or `ignore` beside them makes it a `skip`, as
-  does an expression that holds nowhere, as `cgo && !cgo` or `!go1.21`;
+  A `platform-only` finding is one to weigh, as Rust's is; a custom tag such as `integration` or `ignore` beside
+  those names makes the line a `skip`, as does an expression that holds nowhere, as `cgo && !cgo` or `!go1.21`;
 - `fewer-assertions`: a kept test with fewer assertions than at the base. An assertion is a call, in the test's own
   body or a `func` literal in it, of testify's `assert` or `require` packages (`assert.Equal(t, 3, got)`, under the
   names the file imports them by; `assert.New` is none, and a package imported with `.` is not followed, so its
@@ -224,8 +239,9 @@ removing one or changing its output is not seen (`TODO.md`). The findings are Py
   Constants and a table-driven test's table of cases are not followed, so an expected value held there is not seen;
 - `unparsable`: as Rust's.
 
-Go's tests themselves are not run yet, nor is its coverage measured, its code linted with golangci-lint or
-mutation-tested: those come in a later release.
+Go's tests run through a `[[test]]` command, as [Go tests and coverage](#go-tests-and-coverage) says,
+golangci-lint lints Go as the table above says, and the surviving-mutants check mutation-tests the functions a change
+edits with gremlins (**Go's mutants**, below). The flaky-tests and passes-at-base checks do not judge Go (`TODO.md`).
 
 **Cognitive complexity** scores the functions the change edits, so that a change cannot pile branches into the function
 it is editing rather than split it. A function counts when the change adds a line to it, decorators included, in a
@@ -435,8 +451,12 @@ to such a text alone makes no mutant. Flag names that start a line of their own 
 
 **Rust's mutants.** After mutmut, with what is left of the one `--mutation-budget`, the check mutation-tests the Rust a
 change adds lines to outside the tests (a `.rs` file of a Cargo package, as for test integrity) with
-[cargo-mutants](https://mutants.rs/). When the change has Rust to mutate, mutmut gets half the budget, and cargo-mutants
-the rest, with whatever mutmut left unused; a change with no Python functions to mutate gives cargo-mutants all of it.
+[cargo-mutants](https://mutants.rs/). The languages share the one budget in turn, Python, Rust, then Go (below): each
+has an equal share of what those before it left, among itself and the languages after it that have something to
+mutate, so it also takes whatever an earlier one left unused. With Python and Rust to mutate, mutmut gets half the
+budget and cargo-mutants the rest; with Go as well, mutmut a third, cargo-mutants half of what is left and gremlins the
+rest; a change with no Python functions to mutate gives cargo-mutants all of it, or half with Go to mutate. A
+`budget-reached` finding names the seconds of the share its tool was stopped at.
 cargo-mutants chooses what to mutate itself: it runs `--in-diff` with the change's diff of the workspace's `.rs` files,
 which mutates only what the added lines hold, `--in-place` in the gate's copy of the files git tracks, once per Cargo
 workspace (that of the nearest `Cargo.toml` above the file, as `cargo locate-project` tells it), with `--test-tool
@@ -456,6 +476,37 @@ tried. Added lines with nothing to mutate, such as a `use` or a `const`, give no
 cargo-mutants' own skip attribute, `#[mutants::skip]`, also inside a `cfg_attr`, wrapped or not, is a suppression: the
 quality file lists the change's, as it lists an `#[allow(...)]`. The copy has no `target/`, so each run builds the
 workspace and its dependencies anew within the budget (see `TODO.md`).
+
+**Go's mutants.** After cargo-mutants, with what is left of the budget, shared as for Rust's, the check mutation-tests
+the Go functions a change edits with [gremlins](https://gremlins.dev/): a function or method, from its `func` line to
+its closing brace, that the change adds a line to or removes lines from, as Python's are chosen, in a `.go` file of a Go
+module that is not a `_test.go` file nor in a `testdata` directory, and that the gate reads ([reading the
+source](#reading-the-source)), so not a vendored, generated or symlinked one; but not one whose file's base has a
+function of its name with the same declaration, its receiver, parameters, results and body, whatever its comments and
+layout, as an edit to its comments or layout alone changes nothing to mutate; a signature edited alone is an edit.
+gremlins runs as `gremlins unleash --silent=false --output-statuses lctkvsr --threshold-efficacy 0 --threshold-mcover 0
+--timeout-coefficient 10 --diff <base>`, with `-count=1` added to `GOFLAGS`, in the directory of the go.mod nearest
+above the functions' files, once per module, in the gate's copy of the files git tracks. It first runs the module's
+tests for their coverage, then each mutant against the tests of its package, and mutates only what it reads as changed
+from `git diff --merge-base <base>`: the gate puts a `git` first on its `PATH` that answers that one command with the
+edited functions' lines, and passes any other to git, so gremlins mutates the edited functions whole, though the copy
+has no repository. The flags pin what a module's `.gremlins.yaml` could otherwise change under the gate: every mutant's
+line printed, no threshold's exit status, and a timeout for each mutant's tests of ten times what gremlins' first run of
+the module's tests took, a run the test cache cannot shorten to milliseconds, which would time out every mutant and
+count it caught. Which mutators run stays the module's choice. gremlins writes its report only when it finishes, so the
+gate reads the line it prints for each mutant, which a run the budget stopped has printed for those it tried. A mutant
+that LIVED survived; a KILLED one, and one TIMED OUT, did not; one NOT COVERED is on a line no test runs; a NOT VIABLE
+one, which does not build, was not tried. The findings are mutmut's kinds:
+
+- `survived`: a function with mutants that lived, at its `func` line, with how many of its tried mutants survived and
+  the first three, each by its line, column and gremlins' kind, such as `line 13, column 11: CONDITIONALS_BOUNDARY`;
+- `untested`: a function with mutants on lines no test runs, with how many;
+- `budget-reached`: the budget ran out, before gremlins started (it needs the 15 seconds of its stop, as mutmut does)
+  or while it ran, with how many mutants it had tried; the modules after it are `not-run`;
+- `not-run`: gremlins could not start, or failed, as it does when a test of the module fails, quoting its `ERROR:`
+  line; a changed file could not be parsed; or the copy could not be made;
+- `not-mutated`: a changed function whose file lies under no go.mod in the copy;
+- `not-removed`: the copy could not be removed afterwards; the findings stand.
 
 **Passes at base** runs the tests the change adds or edits, picked as flaky-tests picks them, against the base's code,
 since a test that passes without the change cannot be what shows the change works: coverage counts the lines it runs,
@@ -564,14 +615,15 @@ The gate is `GATE: ERROR` when any of these holds, and `GATE: OK` otherwise:
   linter reads, such as a text file with old Mac line ends, is not held to this;
 - a failing test, in any JUnit report a `[[test]]` command writes, or that `--tests` names;
 - a `[[test]]` command whose tests could not be judged, as [running the tests](#running-the-tests) says;
-- with a coverage report, Cobertura or LCOV, from a `[[test]]` command or `--coverage`, coverage of new code below
-  80%, once the change has 20 or more new lines to cover. Coverage
+- with a coverage report, Cobertura, LCOV or a Go coverage profile, from a `[[test]]` command or `--coverage`,
+  coverage of new code below 80%, once the change has 20 or more new lines to cover. Coverage
   of new code is (covered branch outcomes + covered lines) / (branch outcomes + coverable lines), over the added
   lines the report lists; a smaller change is not judged on coverage, since a few lines swing it too far.
   With more than one, as a project with Python and Rust has, the reports are merged by path and line: a
   line is coverable when any report lists it and covered when any report covers it, and its branch outcomes are
   the most any report counts and covers. A Cobertura report's paths are taken relative to its `<source>`
-  directories, an LCOV report's as its `SF:` lines give them.
+  directories, an LCOV report's as its `SF:` lines give them, and a Go profile's, which name a file by its package's
+  import path, through the `module` line of the go.mod nearest above each changed `.go` file.
 
 Exit status 0 means `GATE: OK`, 1 `GATE: ERROR`, and 2 that the gate could not judge (a bad argument, `REV` names no
 commit, not a git tree, settings it cannot read, an unreadable report, a source file of the change it cannot read),
@@ -670,6 +722,34 @@ cargo llvm-cov nextest --locked --workspace --exclude xtask --ignore-run-fail --
   the surviving-mutants check, each pinned by version and the sha256 of its release's archive; rustup's `llvm-tools`
   component comes with the agent image, as clippy does.
 
+### Go tests and coverage
+
+A Go project runs its tests as a `[[test]]` command with [gotestsum](https://github.com/gotestyourself/gotestsum),
+which runs `go test` and writes its JUnit report, the go tool's own `-coverprofile` writing the coverage profile:
+
+```toml
+[[test]]
+name = "go"
+command = ["gotestsum", "--junitfile", "junit-go.xml", "--", "-coverprofile=coverage-go.out", "./..."]
+junit = ["junit-go.xml"]
+coverage = ["coverage-go.out"]
+```
+
+- **Tests.** gotestsum names a test case by its package's import path and the test, a subtest after a slash, so the
+  failing tests list `example.com/calc.TestAdd/negative`; a failure's detail is gotestsum's word for it, `Failed`
+  (`TODO.md`). A package that does not compile is one failing test case, `TestMain`. gotestsum exits non-zero when a
+  test fails, as the gate expects; a run that leaves no report is a failed condition naming the command.
+- **What it measures** is the statements of each package that its own tests run, unless `-coverpkg` widens it: a line
+  is coverable when a block of statements holds some of it, and covered when such a block ran. Go counts no branches.
+- **Paths.** The profile names a file by its package's import path, as `example.com/calc/sub/calc.go`, which the gate
+  reads back to a path of the tree through the `module` line of the go.mod nearest above each changed `.go` file; a
+  module at the top of the tree or below it is read the same way.
+- **One module a command.** A command runs at the tree's top level; a module below it runs its tests from its own
+  directory, as `["sh", "-c", "cd tools && gotestsum --junitfile ../junit-tools.xml -- ./..."]`.
+- **Where the tools come from**: the machine, as cargo's do; in Jenkins the agent image provides go, gotestsum,
+  golangci-lint and gremlins, which `ci/install-tools.sh` does not download. The gate's tests of them fail, rather
+  than skip, without them.
+
 ### Reading the source
 
 The gate parses source itself, on [tree-sitter](https://tree-sitter.github.io/tree-sitter/): Rust with
@@ -760,10 +840,10 @@ trailing `/**` for all below.
 | `test-files.golden` | `**/tests/**/golden/**` | golden files, which test integrity reads as expected values |
 | `complexity.exempt` | `tests/**`, `**/tests/**/*.rs`, `**/tests.rs` | files whose functions cognitive complexity does not score |
 | `build-config` | none | a table of file to note, a sentence the quality file gives after "The change edits `file`." |
-| `linters.<name>` | the table above | the globs of the files that linter reads, for `ruff`, `mypy`, `pymarkdown`, `shellcheck`, `actionlint` or `clippy`; `[]` runs it on none. Clippy lints the workspaces of the `Cargo.toml` files among its files, so its globs must take those in |
+| `linters.<name>` | the table above | the globs of the files that linter reads, for `ruff`, `mypy`, `pymarkdown`, `shellcheck`, `actionlint`, `clippy` or `golangci-lint`; `[]` runs it on none. Clippy lints the workspaces of the `Cargo.toml` files among its files, and golangci-lint the modules of the `go.mod` files, so their globs must take those in |
 | `budgets.mutation` | 600 | seconds, as `--mutation-budget`, which replaces it |
 | `budgets.base-run` | 120 | seconds, as `--base-run-budget`, which replaces it |
-| `[[test]]` | none | the commands that run the tests: `name`, `command` (an argv list), `junit` and `coverage` (the reports it writes, JUnit and Cobertura or LCOV, paths inside the tree from its top level). The gate runs them, as [running the tests](#running-the-tests) says |
+| `[[test]]` | none | the commands that run the tests: `name`, `command` (an argv list), `junit` and `coverage` (the reports it writes, JUnit and Cobertura, LCOV or a Go coverage profile, paths inside the tree from its top level). The gate runs them, as [running the tests](#running-the-tests) says |
 
 The linters' rules stay in their own files, as below. A CI that passes `main`'s `gate.toml` with `--config`, with
 `main`'s `pyproject.toml` beside it when `main` has one, judges a change by the settings and the rules of `main`, so a
@@ -809,6 +889,8 @@ that `main` pins, so a change cannot loosen the rules it is judged by.
 pymarkdown runs in an empty directory of the gate's own, on absolute paths: given a configuration with `--config`,
 it still adds what a `pyproject.toml` or `.pymarkdown` in its current directory says, so at the tree's top level the
 tree's own `[tool.pymarkdown]` could turn a rule off.
+golangci-lint has none there either: like clippy's, its rules are the module's own configuration whatever
+`--config` names, and an edit to one is noted under build configuration.
 shellcheck and actionlint have no table there; they run on their defaults, with `--norc` and an empty config file
 so that a `.shellcheckrc` or `.github/actionlint.yaml` added to the tree cannot loosen them either. What a
 snapshot still controls is visible in its quality file: tool versions through `uv.lock` (noted under build

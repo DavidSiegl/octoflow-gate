@@ -62,6 +62,36 @@ pub fn among_tests(path: &[u8]) -> bool {
 /// Errs when `source` is not UTF-8, or does not parse as Go, at the line of the first token tree-sitter could not
 /// place.
 pub fn read(source: &[u8], among_tests: bool) -> Result<SourceFile, Unreadable> {
+    let (tree, text) = parse(source)?;
+    let root = tree.root_node();
+    let n = u32::try_from(text.0.split('\n').count()).unwrap_or(u32::MAX);
+    let (tests, weakenings) = if among_tests { testing::read(root, text) } else { (vec![], vec![]) };
+    Ok(SourceFile {
+        functions: functions(root, text, among_tests),
+        tests,
+        test_groups: vec![],
+        test_lines: if among_tests { vec![Lines { first: 1, last: n }] } else { vec![] },
+        weakenings,
+        bindings: binds::bindings(root, text),
+        constants: vec![],
+    })
+}
+
+/// Each function and method with a body that the Go source `source` declares, in the order they start, by its name as
+/// [`read`] gives it, with a digest of its declaration but its name: its receiver, type parameters, parameters,
+/// results and body, whatever their layout and comments. Two declarations of one digest differ at most in their names,
+/// comments and layout, so a function whose digest its base shares under its name was edited in none of its code;
+/// unlike [`model::Function::body`], it changes with the signature. Errs as [`read`] does.
+pub fn declarations(source: &[u8]) -> Result<Vec<(String, String)>, Unreadable> {
+    let (tree, text) = parse(source)?;
+    let declared = named(tree.root_node()).into_iter().filter(|n| {
+        matches!(n.kind(), "function_declaration" | "method_declaration") && n.child_by_field_name("body").is_some()
+    });
+    Ok(declared.map(|node| (function_name(node, text), syntax::declaration_digest(node, text))).collect())
+}
+
+/// `source` parsed as Go, with its text; errs as [`read`] does.
+fn parse(source: &[u8]) -> Result<(tree_sitter::Tree, Text<'_>), Unreadable> {
     let text = std::str::from_utf8(source).map_err(|e| Unreadable { line: None, why: format!("is not UTF-8: {e}") })?;
     let mut parser = Parser::new();
     let parsed = parser.set_language(&tree_sitter_go::LANGUAGE.into()).ok().and_then(|()| parser.parse(text, None));
@@ -79,17 +109,7 @@ pub fn read(source: &[u8], among_tests: bool) -> Result<SourceFile, Unreadable> 
         };
         return Err(Unreadable { line: Some(line(error)), why: format!("does not parse as Go ({what})") });
     }
-    let n = u32::try_from(text.0.split('\n').count()).unwrap_or(u32::MAX);
-    let (tests, weakenings) = if among_tests { testing::read(root, text) } else { (vec![], vec![]) };
-    Ok(SourceFile {
-        functions: functions(root, text, among_tests),
-        tests,
-        test_groups: vec![],
-        test_lines: if among_tests { vec![Lines { first: 1, last: n }] } else { vec![] },
-        weakenings,
-        bindings: binds::bindings(root, text),
-        constants: vec![],
-    })
+    Ok((tree, text))
 }
 
 /// The first node, in the order the file is written, that tree-sitter could not parse: an error, or a token it took

@@ -35,7 +35,7 @@ pub fn in_scratch_directory(rule: &str, purpose: &str, run: impl FnOnce(&Path) -
 
 /// The time a check's tool runs may take.
 pub struct Budget {
-    /// The check's budget, in seconds, as its findings name it.
+    /// Its length in seconds, as findings name what a run was stopped at: the check's budget, or a share of it.
     pub seconds: u64,
     /// When it runs out.
     pub deadline: Instant,
@@ -45,6 +45,14 @@ impl Budget {
     /// A budget of `seconds` that starts now.
     pub fn starting_now(seconds: u64) -> Budget {
         Budget { seconds, deadline: Instant::now() + Duration::from_secs(seconds) }
+    }
+
+    /// One of `parts` equal shares of what is left of this budget from now: a deadline that share from now, and its
+    /// length in whole seconds, rounded. `parts` of 0 is taken as 1.
+    pub fn share(&self, parts: u32) -> Budget {
+        let now = Instant::now();
+        let share = self.deadline.saturating_duration_since(now) / parts.max(1);
+        Budget { seconds: share.as_secs_f64().round() as u64, deadline: now + share }
     }
 }
 
@@ -260,6 +268,17 @@ fn unlinked_path(dest: &Path, path: &OsStr) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_share_of_a_budget_names_its_own_seconds() {
+        let budget = Budget { seconds: 300, deadline: Instant::now() + Duration::from_secs(300) };
+        let third = budget.share(3);
+        assert_eq!(third.seconds, 100);
+        assert!(third.deadline <= Instant::now() + Duration::from_secs(100));
+        assert_eq!(budget.share(0).seconds, 300);
+        let spent = Budget { seconds: 300, deadline: Instant::now() };
+        assert_eq!(spent.share(2).seconds, 0);
+    }
 
     #[test]
     fn a_scratch_directory_is_private_and_removed_afterwards() {

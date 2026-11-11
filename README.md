@@ -12,15 +12,16 @@ It judges the change rather than the codebase: findings on lines the change did 
 against it.
 
 - **Linters** over the files git tracks: ruff and mypy for Python, pymarkdown for Markdown, shellcheck for shell
-  scripts, actionlint for GitHub workflows, clippy for each Cargo workspace. Their findings on added lines fail the
-  gate, and so does a linter that is missing or fails, or a Cargo workspace that does not compile.
-- **Tests and coverage**, from JUnit reports and Cobertura or LCOV coverage reports: a failing test fails the gate,
-  and so does coverage below 80% on 20 or more new lines to cover.
+  scripts, actionlint for GitHub workflows, clippy for each Cargo workspace, golangci-lint for each Go module. Their
+  findings on added lines fail the gate, and so does a linter that is missing or fails, or a Cargo workspace or Go
+  module that does not compile.
+- **Tests and coverage**, from JUnit reports and Cobertura, LCOV or Go coverage reports: a failing test fails the
+  gate, and so does coverage below 80% on 20 or more new lines to cover.
 - **Checks of what the change did**: tests it weakened (removed, skipped, fewer assertions, expected values changed
   together with the code), functions whose cognitive complexity it took over 15, and, as findings to weigh that do not
   fail the gate, tests that are flaky, tests that pass without the change, surviving mutants of the functions it
-  edits, and vague names it binds. Go is read for test integrity, cognitive complexity and vague names; its tests,
-  coverage, linter (golangci-lint) and mutation testing come in a later release.
+  edits, and vague names it binds. Go gets all of these but two: tests are rerun for flakiness in Python alone, and
+  run without the change in Python and Rust.
 - **What to read**: the suppressions it added and the build configuration it edited.
 
 [docs/quality-gate.md](docs/quality-gate.md) says what each of these judges and why.
@@ -92,7 +93,9 @@ at a project's environment, and only for a project that tracks Python or Markdow
 clippy likewise, for shell scripts, GitHub workflows and Rust files. The flaky-tests, passes-at-base and
 surviving-mutants checks of a change to Python run pytest, pytest-randomly and mutmut through the project's Python,
 which `gate.toml`'s `python` or `--python` names, `python3` without either; those of a change to Rust run
-cargo-nextest and cargo-mutants.
+cargo-nextest and cargo-mutants, and the surviving-mutants check of a change to Go runs gremlins. golangci-lint, and
+the go tool it and gremlins run, come from `PATH` for a project that tracks Go files; a Go project runs its tests with
+gotestsum ([Go tests and coverage](docs/quality-gate.md#go-tests-and-coverage)).
 
 A linter that is missing is a failed condition naming it, and for clippy that is a `cargo clippy --version` that
 fails, as it does where rustup's `clippy` component is not installed; a check that cannot run is one of its own

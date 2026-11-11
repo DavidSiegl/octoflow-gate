@@ -1,5 +1,5 @@
 //! The linters the gate runs over the files a tree tracks, and how it reads what they print: ruff, mypy, pymarkdown,
-//! shellcheck and actionlint, which print a finding a line, and clippy (clippy.rs).
+//! shellcheck and actionlint, which print a finding a line, clippy (clippy.rs) and golangci-lint (golangci.rs).
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
@@ -50,10 +50,12 @@ enum Kind {
     },
     /// cargo clippy over the workspaces of the manifests among the files, as [`clippy::run`] runs it.
     Clippy,
+    /// golangci-lint over the modules of the go.mod files among the files, as [`golangci::run`] runs it.
+    GolangciLint,
 }
 
 /// The linters, in the order the gate runs them.
-pub static LINTERS: [Linter; 6] = [
+pub static LINTERS: [Linter; 7] = [
     Linter {
         name: "ruff",
         globs: &["**/*.py"],
@@ -133,6 +135,15 @@ pub static LINTERS: [Linter; 6] = [
     // observed with clippy 0.1.99 (rustc 1.99.1), whose finding below a line holding all four was on git's line.
     // Its manifests are among its files only to say which workspaces it lints.
     Linter { name: "clippy", globs: &["**/*.rs", "**/Cargo.toml"], line_ends: &[], kind: Kind::Clippy },
+    // The go tool, whose parser golangci-lint's linters share, numbers lines at "\n" alone and reads a "\r" as
+    // whitespace (https://go.dev/ref/spec#Tokens). Its go.mod files are among its files only to say which modules it
+    // lints.
+    Linter {
+        name: "golangci-lint",
+        globs: &["**/*.go", "**/go.mod"],
+        line_ends: &[],
+        kind: Kind::GolangciLint,
+    },
 ];
 
 /// `words`, then `path` when given, then `more`, then `files`, as an argv.
@@ -213,6 +224,7 @@ impl Linter {
         let (command, apart, detail) = match self.kind {
             Kind::Lines { command, apart, detail } => (command, apart, detail),
             Kind::Clippy => return crate::clippy::run(self.name, root, files, tracked),
+            Kind::GolangciLint => return crate::golangci::run(self.name, root, files, tracked),
         };
         let name = self.name;
         if !apart {

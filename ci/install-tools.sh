@@ -10,6 +10,10 @@
 # - cargo-mutants, with which the gate's surviving-mutants check mutation-tests the Rust a change edits. The tests of
 #   those two checks fail, rather than skip, without them.
 #
+# Go's tools are not among them: the agent image provides go, gotestsum, golangci-lint and gremlins on PATH, as it
+# provides rustup's components, and the tests of the gate's Go linter, Go coverage and Go mutants fail, rather than
+# skip, without them.
+#
 # Each is pinned to the sha256 of its linux x86_64 archive as its release publishes it: cargo-nextest's in the .sha256
 # file beside the archive, and cargo-llvm-cov's as the asset's digest on its GitHub release page, which has no
 # checksums file. cargo-mutants publishes neither, so its sha256 is that of the archive as downloaded when it was

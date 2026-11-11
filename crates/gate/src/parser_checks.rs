@@ -303,7 +303,7 @@ const GO: Language = Language {
 
 /// The files whose directory, and those below it, are a Rust package and a Go module.
 const CARGO_MANIFEST: &str = "Cargo.toml";
-const GO_MANIFEST: &str = "go.mod";
+pub(crate) const GO_MANIFEST: &str = "go.mod";
 
 /// What git and the working tree hold of a change's files, for each [`Language`] to read its own from.
 struct Stored<'a> {
@@ -447,15 +447,18 @@ fn regular_file(path: &Path) -> bool {
 /// `gone`, the base paths the change deletes or renames, says. One test serves both sides of a file, so a manifest
 /// the change adds also places the file's base in a project.
 fn in_project(change: &Change, gone: &HashSet<PathBuf>, path: &OsStr, manifest: &str) -> bool {
-    let mut dir = Path::new(path).parent();
-    while let Some(d) = dir {
-        let manifest = d.join(manifest);
-        if gone.contains(&manifest) || change.root.join(&manifest).is_file() {
-            return true;
-        }
-        dir = d.parent();
-    }
-    false
+    project_dir(path, manifest, |m| gone.contains(m) || change.root.join(m).is_file()).is_some()
+}
+
+/// The directory, from the tree's top, empty for the top, of the project `path`, a path from the tree's top, lies in:
+/// the nearest one above it, its own included, that holds a file named `manifest`, as a go.mod, by `holds_manifest`,
+/// asked of that file's path from the top. None when no directory up to the top holds one.
+pub(crate) fn project_dir<'p>(
+    path: &'p OsStr,
+    manifest: &str,
+    holds_manifest: impl Fn(&Path) -> bool,
+) -> Option<&'p Path> {
+    Path::new(path).ancestors().skip(1).find(|dir| holds_manifest(&dir.join(manifest)))
 }
 
 /// A test-integrity expected-value-changed finding, on the whole file, for each golden file (Settings::golden) that

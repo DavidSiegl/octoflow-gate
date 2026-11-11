@@ -13,7 +13,8 @@ use crate::report::{BUILD_CONFIG_FILES, RULES_FILE, SETTINGS_FILE};
 use crate::Unjudged;
 
 /// The linters gate.toml may choose the files of, each a name its `[linters]` table may hold.
-pub const LINTER_NAMES: [&str; 6] = ["ruff", "mypy", "pymarkdown", "shellcheck", "actionlint", "clippy"];
+pub const LINTER_NAMES: [&str; 7] =
+    ["ruff", "mypy", "pymarkdown", "shellcheck", "actionlint", "clippy", "golangci-lint"];
 
 /// The settings a project is judged by: [`Settings::default`] for one without gate.toml, else what its gate.toml
 /// says, a default for each key it leaves out.
@@ -193,20 +194,23 @@ fn build_config_entry(name: String, note: String) -> Result<(String, String), St
 }
 
 /// The `[linters]` entry `name = globs`, as [`Settings::linters`] holds it; errs, with why, when `name` is not among
-/// [`LINTER_NAMES`], or names clippy with globs that take in no Cargo.toml.
+/// [`LINTER_NAMES`], or names clippy with globs that take in no Cargo.toml, or golangci-lint with globs that take in
+/// no go.mod.
 fn linter_entry(name: String, globs: &[String]) -> Result<(String, Globs), String> {
     if !LINTER_NAMES.contains(&name.as_str()) {
         return Err(format!("unknown key `linters.{name}`"));
     }
-    // Clippy lints only the workspaces of the manifests among its files: globs that take in none would turn it off
-    // as silently as a typo would.
+    // Clippy lints only the workspaces of the manifests among its files, and golangci-lint the modules: globs that
+    // take in none would turn it off as silently as a typo would.
+    let (manifest, project) = match name.as_str() {
+        "clippy" => ("Cargo.toml", "workspace"),
+        "golangci-lint" => ("go.mod", "module"),
+        _ => return Ok((name, Globs::new(globs))),
+    };
     let last = |g: &String| g.rsplit('/').next().unwrap_or_default().to_string();
-    if name == "clippy"
-        && !globs.is_empty()
-        && !globs.iter().any(|g| Globs::new(&[last(g)]).matches(OsStr::new("Cargo.toml")))
-    {
+    if !globs.is_empty() && !globs.iter().any(|g| Globs::new(&[last(g)]).matches(OsStr::new(manifest))) {
         return Err(format!(
-            "`linters.{name}` must take in the Cargo.toml of each workspace clippy lints, or be [] to turn it off"
+            "`linters.{name}` must take in the {manifest} of each {project} {name} lints, or be [] to turn it off"
         ));
     }
     Ok((name, Globs::new(globs)))
@@ -383,6 +387,7 @@ mod tests {
             ("[build-config]\n\"uv.lock\" = \"x\"\n", "<path>: `build-config.uv.lock` is build configuration already"),
             ("[build-config]\nx = \" \"\n", "<path>: `build-config.x` must be a sentence"),
             ("[linters]\nclippy = [\"**/*.rs\"]\n", "<path>: `linters.clippy` must take in the Cargo.toml"),
+            ("[linters]\ngolangci-lint = [\"**/*.go\"]\n", "<path>: `linters.golangci-lint` must take in the go.mod"),
             ("[[test]]\nname = \"t\"\n", "missing field `command`"),
             ("[[test]]\nname = \"\"\ncommand = [\"x\"]\n", "<path>: `test[0].name` must be a non-empty string"),
             ("[[test]]\nname = \"t\"\ncommand = []\n", "<path>: `test[0].command` must be a non-empty list"),

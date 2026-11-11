@@ -31,7 +31,7 @@ const USAGE: &str = "usage: gate --base REV [--config FILE] [--coverage XML] [--
 
 const HELP: &str = "
 Judges the change the git working tree around the current directory makes since --base: by ruff, mypy, pymarkdown,
-shellcheck, actionlint and clippy over the files the repository tracks, the checks test-integrity,
+shellcheck, actionlint, clippy and golangci-lint over the files the repository tracks, the checks test-integrity,
 cognitive-complexity, vague-names, flaky-tests, passes-at-base and surviving-mutants over Python and Rust, the first
 three over Go too, gate.toml's [[test]] commands, the tests and coverage they report, files committed under mutmut's
 mutants/, stray line ends, suppressions added and edited build configuration. It writes the quality file: GATE: OK or

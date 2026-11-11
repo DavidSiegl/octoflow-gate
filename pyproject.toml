@@ -51,10 +51,13 @@ max-complexity = 15
 "tests/**" = ["S101", "S105", "S106", "S108", "RUF059", "RUF012", "C408", "C901", "D1"]
 
 [tool.mypy]
-# The repository's Python once the cutover (gate-standalone/18) deletes gate.py: what the gate embeds to run in a
-# judged project's Python. scripts/gate judges the cutover by this file, whose mypy could not read a gate.py the
-# change deletes; until then gate.py goes without mypy.
-files = ["crates/gate/src"]
+# gate.py and the Python the gate embeds to run in a judged project's Python (crates/gate/src). Named by what is left
+# out rather than by file, so the same rules check a tree from which the cutover (gate-standalone/18) has deleted
+# gate.py: mypy refuses a named file that is not there. The tests are untyped by design.
+files = ["."]
+exclude = ["^tests/", "^ci/", "^xtask/", "^gate-rust/"]
+# What a checkout holds beside the tracked files: .venv, .cargo-home (crates may ship Python), mutants/, target/.
+exclude_gitignore = true
 
 [tool.mutmut]
 # What `gate.py`'s surviving-mutants check runs mutmut by, on a copy of the tree in which only the functions a change

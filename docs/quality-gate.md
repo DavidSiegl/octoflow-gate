@@ -202,9 +202,12 @@ removing one or changing its output is not seen (`TODO.md`). The findings are Py
 - `platform-only`: such a `//go:build` line whose expression names no custom tag, only platforms (`GOOS` and `GOARCH`
   values and `unix`), release tags (`go1.21`, written as go writes them) and the toolchain's tags (`cgo`, `gc`,
   `gccgo`), with `!`, `&&`, `||` and parentheses, and holds on at least one platform and toolchain, as
-  `//go:build linux || darwin` or `//go:build go1.21`. A release tag is taken as set, as on the newest toolchain, where
-  the tests that matter run. It is one to weigh, as Rust's is; a custom tag such as `integration` or `ignore` beside
-  them makes it a `skip`, as does an expression that holds nowhere, as `cgo && !cgo` or `!go1.21`;
+  `//go:build linux || darwin` or `//go:build go1.21`. A release tag, `go1.1` up to the newest Go release the gate
+  knows, `go1.27` (`NEWEST_RELEASE` in `crates/lang-go/src/constraint.rs`, raised with each Go release), is taken as
+  set, as on the newest toolchain, where the tests that matter run; a `go1.N` above it, as `go1.99`, is set by no
+  toolchain and is a custom tag, so until the constant is raised a test file naming a new release's tag is a `skip`.
+  It is one to weigh, as Rust's is; a custom tag such as `integration` or `ignore` beside them makes it a `skip`, as
+  does an expression that holds nowhere, as `cgo && !cgo` or `!go1.21`;
 - `fewer-assertions`: a kept test with fewer assertions than at the base. An assertion is a call, in the test's own
   body or a `func` literal in it, of testify's `assert` or `require` packages (`assert.Equal(t, 3, got)`, under the
   names the file imports them by; `assert.New` is none, and a package imported with `.` is not followed, so its

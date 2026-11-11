@@ -72,11 +72,12 @@ const GOARCHES: &[&str] = &[
 
 /// The weakening the comment `comment`, on line `line` of a `_test.go` file's header, is when it is a build constraint:
 /// platform-only when its expression names no custom tag, only platforms (`GOOS` and `GOARCH` values and `unix`),
-/// release tags (`go1.21`, each taken as set, as on the newest toolchain: [`release_tag`]) and the toolchain's tags
-/// (`cgo`, `gc`, `gccgo`), and holds on some platform and toolchain, since that leaves the tests out only where what
-/// they test may not be built, as Rust's `cfg(unix)` does; a skip otherwise, as for a custom tag such as
-/// `integration` or `ignore`, a negated release tag such as `!go1.21`, or an expression go cannot read. None for a
-/// comment that is no `//go:build` line.
+/// release tags (`go1.1` to the newest release the gate knows, each taken as set, as on the newest toolchain:
+/// [`release_tag`]) and the toolchain's tags (`cgo`, `gc`, `gccgo`), and holds on some platform and toolchain, since
+/// that leaves the tests out only where what they test may not be built, as Rust's `cfg(unix)` does; a skip
+/// otherwise, as for a custom tag such as `integration`, `ignore` or a release no toolchain sets yet, `go1.99`, a
+/// negated release tag such as `!go1.21`, or an expression go cannot read. None for a comment that is no `//go:build`
+/// line.
 pub fn weakening(comment: &str, line: u32) -> Option<Weakening> {
     let expression = comment.strip_prefix("//go:build")?;
     if !expression.is_empty() && !expression.starts_with([' ', '\t']) {
@@ -102,13 +103,20 @@ pub fn weakening(comment: &str, line: u32) -> Option<Weakening> {
 /// The compilers' names, which the go tool sets as a tag for the compiler that builds.
 const COMPILERS: &[&str] = &["gc", "gccgo"];
 
-/// Whether `tag` is a release tag, `go1.N`, N written as the go tool writes it, without a leading zero. Every toolchain
-/// sets those up to its own release, and a change's tests matter where they run on the newest, so each is taken as
-/// set: `go1.21` holds and `!go1.21` turns the tests off.
+/// The minor version of the newest Go release the gate knows, N of go 1.N: 27, for Go 1.27
+/// (<https://go.dev/doc/devel/release>). It is raised with each Go release. Until it is, a test file whose
+/// `//go:build` names the new release's tag, as `go1.28`, is a skip, a failing finding, since the tag reads as a
+/// custom one ([`release_tag`]).
+const NEWEST_RELEASE: u32 = 27;
+
+/// Whether `tag` is a release tag, `go1.N`, N written as the go tool writes it, without a leading zero, and at most
+/// [`NEWEST_RELEASE`]. A toolchain sets those up to its own release, and a change's tests matter where they run on the
+/// newest, so each is taken as set: `go1.21` holds and `!go1.21` turns the tests off. A `go1.N` above the newest
+/// release is set by no toolchain, so it is no release tag but a custom one.
 fn release_tag(tag: &str) -> bool {
-    tag.strip_prefix("go1.").is_some_and(|minor| {
-        !minor.is_empty() && !minor.starts_with('0') && minor.bytes().all(|b| b.is_ascii_digit())
-    })
+    let Some(minor) = tag.strip_prefix("go1.") else { return false };
+    let written_as_go_writes_it = !minor.starts_with('0') && minor.bytes().all(|b| b.is_ascii_digit());
+    written_as_go_writes_it && minor.parse::<u32>().is_ok_and(|n| n <= NEWEST_RELEASE)
 }
 
 /// What a build sets the tags of a constraint by: the platform, and the toolchain.
@@ -279,7 +287,7 @@ mod tests {
     fn a_constraint_naming_release_and_toolchain_tags_beside_platforms_is_platform_only() {
         for comment in [
             "//go:build go1.21",
-            "//go:build go1.99",
+            "//go:build go1.27",
             "//go:build cgo",
             "//go:build !cgo",
             "//go:build gc || gccgo",
@@ -294,6 +302,9 @@ mod tests {
         for comment in [
             "//go:build !go1.1",
             "//go:build !go1.21",
+            "//go:build go1.28",
+            "//go:build go1.99",
+            "//go:build linux || go1.99 && !linux",
             "//go:build go1.21 && !go1.21",
             "//go:build go1.21 && !go1.23",
             "//go:build linux && !go1.22",

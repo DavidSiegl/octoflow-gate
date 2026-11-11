@@ -1,6 +1,6 @@
 //! The surviving-mutants check: a function the change touches whose mutants its tests do not notice is a finding.
 //! Here is the check and its Rust half, in which cargo-mutants mutates what the change adds to Rust code under test;
-//! the Python half, which runs mutmut, is python_mutants.rs.
+//! the Python half, which runs mutmut, is python_mutants.rs, and the Go half, which runs gremlins, go_mutants.rs.
 
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
@@ -13,6 +13,7 @@ use serde_json::Value;
 
 use crate::clippy::workspaces;
 use crate::copies::{copy_tracked, finding, in_scratch_directory, sort_by_place, Budget};
+use crate::go_mutants::{edited_functions, go_mutants};
 use crate::parser_checks::{RustChange, Sources};
 use crate::process::{run_with, Extras, Finished};
 use crate::python_mutants::{python_mutants, Mutmut};
@@ -42,14 +43,20 @@ pub(crate) const SURVIVOR_EXAMPLES: usize = 3;
 /// rule is the check's own, without its name, and each severity "warning".
 ///
 /// Mutation-tests the Python functions the change touches with mutmut, set up as `mutmut` says
-/// (python_mutants::python_mutants), then, with what is left of `budget` seconds, the Rust the change adds lines to
-/// with cargo-mutants ([`rust_mutants`]); mutmut has half the budget when there is Rust to mutate too.
+/// (python_mutants::python_mutants), then the Rust the change adds lines to with cargo-mutants ([`rust_mutants`]),
+/// then the Go functions it edits with gremlins (go_mutants::go_mutants), all within `budget` seconds. Each language
+/// in turn has an equal share of what the ones before it left, among itself and the languages after it that have
+/// something to mutate: with all three, mutmut has a third of the budget, cargo-mutants half of what is left, and
+/// gremlins the rest.
 pub fn surviving_mutants(sources: &Sources, mutmut: &Mutmut, budget: u64) -> Vec<Finding> {
     let budget = Budget::starting_now(budget);
     let rust = changed_code(&sources.rust);
-    let seconds = Duration::from_secs(budget.seconds).as_secs_f64();
-    let mut out = python_mutants(&sources.python, mutmut, if rust.is_empty() { seconds } else { seconds / 2.0 });
-    out.extend(rust_mutants(&sources.rust, &rust, &budget));
+    let (go, mut out) = edited_functions(&sources.go);
+    let after_python = u32::from(!rust.is_empty()) + u32::from(!go.is_empty());
+    let seconds = Duration::from_secs(budget.seconds).as_secs_f64() / f64::from(1 + after_python);
+    out.extend(python_mutants(&sources.python, mutmut, seconds));
+    out.extend(rust_mutants(&sources.rust, &rust, &budget.share(1 + u32::from(!go.is_empty()))));
+    out.extend(go_mutants(&sources.go, &go, &budget));
     sort_by_place(&mut out);
     out
 }
@@ -114,7 +121,7 @@ fn on_copy(rust: &RustChange, dir: &Path, paths: &[OsString], budget: &Budget) -
             out.extend(roots[n + 1..].iter().map(|(later, _)| {
                 not_run(&format!(
                     "the budget ran out before cargo-mutants reached the workspace at `{}`",
-                    workspace_name(later)
+                    dir_name(later)
                 ))
             }));
             break;
@@ -143,12 +150,13 @@ fn cargo_root(tree: &Path, path: &OsStr) -> Result<OsString, String> {
     }
 }
 
-/// The workspace directory `root`, from the tree's top, as findings name it: `.` for the top.
-fn workspace_name(root: &OsStr) -> String {
-    if root.is_empty() {
+/// The directory `dir`, from the tree's top, as findings name it, as a Cargo workspace's or a Go module's: `.` for the
+/// top.
+pub(crate) fn dir_name(dir: &OsStr) -> String {
+    if dir.is_empty() {
         ".".to_string()
     } else {
-        text::path(root)
+        text::path(dir)
     }
 }
 
@@ -216,7 +224,7 @@ fn run_workspace(run: &Run, root: &OsStr, paths: &[OsString], budget: &Budget) -
         let message = format!(
             "budget reached before cargo-mutants started on the workspace at `{}`: the {} seconds of \
              `--mutation-budget` left too little to run and stop it, so its mutants were not tried.",
-            workspace_name(root),
+            dir_name(root),
             budget.seconds
         );
         return (vec![finding(None, None, "budget-reached", message)], true);
@@ -261,7 +269,7 @@ fn run_findings(done: &Finished, output: &Path, root: &OsStr, budget: u64) -> Ve
             ))]
         }
     };
-    let place = format!("the workspace at `{}`", workspace_name(root));
+    let place = format!("the workspace at `{}`", dir_name(root));
     let baseline = outcomes.iter().find(|o| o.scenario == "Baseline").and_then(|o| o.summary.as_str());
     if let Some(summary) = baseline.filter(|&s| s != "Success") {
         return vec![not_run(&format!(

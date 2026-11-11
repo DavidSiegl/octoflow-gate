@@ -10,6 +10,7 @@ pub mod diff;
 pub mod flaky_tests;
 pub mod git;
 pub mod glob;
+pub mod go_mutants;
 pub mod golangci;
 pub mod judge;
 pub mod junit;

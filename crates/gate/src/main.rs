@@ -32,8 +32,8 @@ const USAGE: &str = "usage: gate --base REV [--config FILE] [--coverage XML] [--
 const HELP: &str = "
 Judges the change the git working tree around the current directory makes since --base: by ruff, mypy, pymarkdown,
 shellcheck, actionlint, clippy and golangci-lint over the files the repository tracks, the checks test-integrity,
-cognitive-complexity, vague-names, flaky-tests, passes-at-base and surviving-mutants over Python and Rust, the first
-three over Go too, gate.toml's [[test]] commands, the tests and coverage they report, files committed under mutmut's
+cognitive-complexity, vague-names and surviving-mutants over Python, Rust and Go, flaky-tests and passes-at-base over
+Python and Rust, gate.toml's [[test]] commands, the tests and coverage they report, files committed under mutmut's
 mutants/, stray line ends, suppressions added and edited build configuration. It writes the quality file: GATE: OK or
 GATE: ERROR on its first line, then the failed conditions, the findings on lines added since --base, failing tests,
 coverage of new code, suppressions added and edited build configuration. Exit status 0 for OK, 1 for ERROR, 2 when it
@@ -54,8 +54,8 @@ options:
                           its name FILE's with the .md made .json, or with .json added
   --json FILE             write quality.json, the report as data, here; with --out, instead of beside FILE
   --mutation-budget SECONDS
-                          the seconds the surviving-mutants check may run mutmut and cargo-mutants for, in place of
-                          gate.toml's budgets.mutation
+                          the seconds the surviving-mutants check may run mutmut, cargo-mutants and gremlins for, in
+                          place of gate.toml's budgets.mutation
   --base-run-budget SECONDS
                           the seconds the passes-at-base check may run the changed tests at the base for, in place
                           of gate.toml's budgets.base-run

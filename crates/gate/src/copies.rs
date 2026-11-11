@@ -46,6 +46,13 @@ impl Budget {
     pub fn starting_now(seconds: u64) -> Budget {
         Budget { seconds, deadline: Instant::now() + Duration::from_secs(seconds) }
     }
+
+    /// One of `parts` equal shares of what is left of this budget from now: the same seconds, as findings name the
+    /// check's budget, and a deadline that share from now. `parts` of 0 is taken as 1.
+    pub fn share(&self, parts: u32) -> Budget {
+        let left = self.deadline.saturating_duration_since(Instant::now());
+        Budget { seconds: self.seconds, deadline: Instant::now() + left / parts.max(1) }
+    }
 }
 
 /// Puts `findings` in the order a check gives them: by path and line, a finding on no path or line first.

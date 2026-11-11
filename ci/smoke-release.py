@@ -153,7 +153,9 @@ def check_shadow_run(release: Path, project: Path, gate_args: list[str]) -> None
     except OSError as e:
         raise SmokeFailure(f"cannot read the shadow run's quality-diff.txt: {e}") from e
     if difference:
-        raise SmokeFailure(f"the Rust gate does not report the fixture project as gate.py does:\n{difference}")
+        # The script exits 0 for a Rust gate that could not judge, whose reason is on standard error alone.
+        raise SmokeFailure(f"the Rust gate does not report the fixture project as gate.py does:\n{difference}"
+                           f"shadow-run.sh's standard error: {proc.stderr.strip()}")
 
 
 def smoke(tarball: Path) -> None:

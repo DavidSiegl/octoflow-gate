@@ -360,7 +360,7 @@ fn declared_file(path: &Path, root: bool, d: &Declaration, index: &HashMap<&Path
         return index.get(normal(&parent.join(attribute)).as_path()).copied();
     }
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
-    let mut dir = if root || matches!(stem, "lib" | "main" | "mod") { parent.to_path_buf() } else { parent.join(stem) };
+    let mut dir = if root || stem == "mod" { parent.to_path_buf() } else { parent.join(stem) };
     dir.extend(&d.scope);
     [dir.join(format!("{}.rs", d.name)), dir.join(&d.name).join("mod.rs")]
         .iter()

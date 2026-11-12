@@ -77,6 +77,24 @@ fn a_module_below_a_file_named_for_it_and_an_inline_one_resolve_to_their_files()
 }
 
 #[test]
+fn a_module_named_main_below_a_crate_root_declares_its_modules_below_its_own_directory() {
+    let files = [
+        ("src/lib.rs", "mod commands;\nmod b;\n"),
+        ("src/commands.rs", "mod main;\n"),
+        ("src/commands/main.rs", "mod helpers;\n"),
+        ("src/commands/main/helpers.rs", "use crate::b::X;\n"),
+        ("src/b.rs", ""),
+    ];
+    assert_eq!(imports_of(&files, "src/commands/main/helpers.rs"), [("src/b.rs".into(), 1)]);
+}
+
+#[test]
+fn a_third_party_import_named_as_a_local_module_is_none() {
+    let files = [("src/lib.rs", "mod a;\nmod serde;\n"), ("src/a.rs", "use serde::X;\n"), ("src/serde.rs", "")];
+    assert_eq!(imports_of(&files, "src/a.rs"), []);
+}
+
+#[test]
 fn an_import_between_a_module_and_one_it_holds_is_none() {
     let files = [
         ("src/lib.rs", "mod a;\nuse a::X;\nuse crate::a::Y;\n"),

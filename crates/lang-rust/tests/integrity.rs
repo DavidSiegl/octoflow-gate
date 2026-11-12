@@ -118,8 +118,7 @@ fn an_inline_module_whose_tests_all_went_is_one_finding() {
 #[test]
 fn two_tests_of_one_name_are_two_tests() {
     // Under cfgs that never hold together, as two platforms' versions of one test. Wrapped so that no line starts
-    // with a cfg, which the gate would read as a skip added to this test's body (TODO.md, "A line of a string
-    // literal in a test's body...").
+    // with a cfg, which the gate would read as a skip added to this test's body (#47).
     let twins = "#[cfg(unix)]\n#[test]\nfn twin() {\n    assert!(add(1, 1) == 2);\n}\n\n#[cfg(not(unix))]\n\
                  #[test]\nfn twin() {\n    assert!(add(2, 2) == 4);\n    assert!(add(0, 2) == 2);\n}\n";
     let base = format!("use tiny::add;\n\n{twins}");
@@ -238,7 +237,7 @@ fn a_helper_removed_from_a_test_module_is_no_removed_test() {
 #[test]
 fn attributes_in_or_on_a_module_that_holds_no_test_are_not_skips() {
     // Modules before and after the one holding the tests; the attributes are kept off the start of a line here, as
-    // the gate would read them as skips added to this test (TODO.md, "A line of a string literal...").
+    // the gate would read them as skips added to this test (#47).
     let base = edit(LIB, "\n#[cfg(test)]", "\nmod before {\n    pub fn x() {}\n}\n\n#[cfg(test)]");
     let base = format!("{base}\nmod after {{\n    pub fn y() {{}}\n}}\n");
     let inner = "    #![cfg(feature = \"slow\")]\n";

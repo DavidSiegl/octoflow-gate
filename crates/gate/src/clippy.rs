@@ -7,7 +7,8 @@
 //! cargo before the crates after it, is a finding like the rest: every finding is a warning, and the gate keeps
 //! those on added lines. The cap also lets an allow override a forbid, which rustc otherwise refuses (E0453), so
 //! such an allow silences its lint here; it is listed under the suppressions added only where its added line holds
-//! the allow itself (TODO.md). A build that still fails is a failed condition, naming the compiler's first error in
+//! the allow itself, not a lint added to an existing wrapped `#[allow(` list: left so, since no workspace the gate
+//! judges sets a lint to forbid. A build that still fails is a failed condition, naming the compiler's first error in
 //! a tracked file, wherever it is, else cargo's own: a change that deletes a function an old line calls breaks the
 //! build on no line it added.
 //!

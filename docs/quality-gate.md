@@ -61,8 +61,9 @@ ruff's rules are the project's; the gate caps each at warn, so that a lint at `d
 crate's build and stop cargo before the crates after it, is a finding like the rest. The cap also lets an
 `#[allow(...)]` override a `forbid`, which rustc otherwise refuses, so such an allow silences its lint for the gate;
 it is listed under the suppressions added only where its added line holds the allow itself, not a lint added inside an
-existing wrapped `#[allow(` list (`TODO.md` has the rest). The top-level `Cargo.toml` sets its `[workspace.lints]`,
-which every member takes, to `warn` all the same, since rustc's `unsafe_code` at `deny` would stop `cargo test`. Its
+existing wrapped `#[allow(` list, left so since no workspace the gate judges sets a lint to forbid. The top-level
+`Cargo.toml` sets its `[workspace.lints]`, which every member takes, to `warn` all the same, since rustc's
+`unsafe_code` at `deny` would stop `cargo test`. Its
 table adds to clippy's defaults the lints `main` passed when it was set, so that clippy found nothing on old lines. A
 workspace that still
 does not compile is a failed condition naming the compiler's first error in a tracked file, wherever it is, else
@@ -154,7 +155,7 @@ a module holds both: the check compares the items of its test modules, and the r
 outside the tests is any other `.rs` file in a directory that holds a `Cargo.toml`, or below one, `build.rs` included,
 and a change edits it when it adds, deletes or renames such a file, or adds or removes a line of it outside its
 `cfg(test)` modules; so a change to the tests of `lib.rs` alone edits no code. A file that a `#[cfg(test)] mod name;`
-elsewhere names is read by its own path alone, so its tests count only under `tests/` or as `tests.rs` (`TODO.md`). A
+elsewhere names is read by its own path alone, so its tests count only under `tests/` or as `tests.rs` (#49). A
 test is known by its file and the names of the items that hold it, joined by `::`, as `tests::adds`; tests of one name
 in one file, as under two `cfg`s for two platforms, are each a test of its own, matched with the other side's in their
 order. The findings are Python's, read of Rust:
@@ -206,7 +207,7 @@ where the gate does not judge it: a vendored, generated or symlinked file is cod
 string literal after the test holding it, as `TestAdd/negative`, with `_` for a space as `go test` writes it. A subtest
 named by any other expression, as a table-driven test's `t.Run(tc.name, ...)`, is part of the test holding it. An
 example, `ExampleX()` with its `// Output:` comment, is no test, though `go test` runs it and checks its output, so
-removing one or changing its output is not seen (`TODO.md`). The findings are Python's, read of Go:
+removing one or changing its output is not seen (#73). The findings are Python's, read of Go:
 
 - `removed-test`: a test or subtest gone from its file, its body compared by a digest of its tokens as Rust's is; a
   deleted file is one finding. Go has no item that holds tests, so there is no group finding;
@@ -230,7 +231,7 @@ removing one or changing its output is not seen (`TODO.md`). The findings are Py
   parameter as above. Such a call that is a statement of an `if`'s block makes that `if` one assertion, however many
   it holds, since the `if` holds the expected value: `if got := Add(1, 2); got != 3 { t.Errorf(...) }` is one. A
   helper's calls are not followed into the tests that call it: `check(t, Add(1, 2), 3)`, where `check` holds the
-  `t.Errorf`, is no assertion of the test, so a test that asserts only through helpers has none to lose (`TODO.md`);
+  `t.Errorf`, is no assertion of the test, so a test that asserts only through helpers has none to lose (#72);
 - `swallowed-error`: on an added line anywhere in the file, `_ = err`, or an `if err != nil {}` whose block holds no
   statement, `err` being a name Go gives an error by habit: `err`, `err` then a capital or a digit, or a name ending
   in `Err`. A parser knows no types, so an error thrown away under another name, or as `v, _ := f()`, is not seen;
@@ -241,7 +242,7 @@ removing one or changing its output is not seen (`TODO.md`). The findings are Py
 
 Go's tests run through a `[[test]]` command, as [Go tests and coverage](#go-tests-and-coverage) says,
 golangci-lint lints Go as the table above says, and the surviving-mutants check mutation-tests the functions a change
-edits with gremlins (**Go's mutants**, below). The flaky-tests and passes-at-base checks do not judge Go (`TODO.md`).
+edits with gremlins (**Go's mutants**, below). The flaky-tests and passes-at-base checks do not judge Go (#82, #81).
 
 **Cognitive complexity** scores the functions the change edits, so that a change cannot pile branches into the function
 it is editing rather than split it. A function counts when the change adds a line to it, decorators included, in a
@@ -262,7 +263,7 @@ closure inside it is part of it. Its lines start at its first outer attribute, d
 exempt as Python's are, where the spec of the Rust checks places them: by default every file in a directory named
 `tests`, at any depth, or named `tests.rs`, and every `fn` in an inline module marked `#[cfg(test)]`. Nothing else is: a
 `#[test]` or `#[cfg(test)]` `fn` outside those, and a file that a `#[cfg(test)] mod name;` takes in, are judged
-(`TODO.md`). Each `if`, `else if`, `else`, `if let`, `match`, `loop`, `while`, `while let`, `for` and `let ... else`
+(#49). Each `if`, `else if`, `else`, `if let`, `match`, `loop`, `while`, `while let`, `for` and `let ... else`
 scores as Python's branches do; a `match` arm adds nothing, as a `switch`'s case does not in the paper; a run of `&&`
 and `||` is a sequence of boolean operators, a labelled `break` or `continue` a point, and `?` nothing. Recursion
 follows calls by path within the file: `f(...)`, `self.f(...)`, `Self::f(...)` and `Type::f(...)`, not `crate::f(...)`
@@ -304,7 +305,8 @@ is which. Each of these is a finding:
 
   Bodies pairing first has a cost: a copy of a function whose original the change edits keeps the old score and
   passes, as if it were the original renamed and the edited one new, even when the edit takes the original below the
-  limit, and wherever the copy is, in a file the check does not judge too. `TODO.md` holds it.
+  limit, and wherever the copy is, in a file the check does not judge too. The cost is accepted (gate-standalone/06):
+  telling a copy from a rename would take git's copy detection.
 - `not-scored`: a file the change adds lines to that could not be decoded or parsed, at the line the parser stopped
   at. Like any finding of the check, it fails the gate: a check that cannot do its work says so rather than pass. A
   base that cannot be decoded or parsed is not a finding: its file's functions are judged as new, as `test-integrity`
@@ -706,7 +708,7 @@ cargo llvm-cov nextest --locked --workspace --exclude xtask --ignore-run-fail --
   workspace's own crates that the compiler maps to code counts, the dependencies' do not. That includes the lines of
   a `#[cfg(test)]` module: the tests'
   own lines count as covered when they run, so they raise a change's coverage that adds both a function and its tests
-  (`TODO.md`).
+  (#50).
 - **Paths.** cargo-llvm-cov names each file relative to the workspace's directory, which it gives as the report's
   `<source>`, as an absolute path, so the gate reads `src/main.rs` of a workspace in `engine/` as
   `engine/src/main.rs`, as long as the report was written in the tree the gate judges; an absolute path stands as it
@@ -737,7 +739,7 @@ coverage = ["coverage-go.out"]
 
 - **Tests.** gotestsum names a test case by its package's import path and the test, a subtest after a slash, so the
   failing tests list `example.com/calc.TestAdd/negative`; a failure's detail is gotestsum's word for it, `Failed`
-  (`TODO.md`). A package that does not compile is one failing test case, `TestMain`. gotestsum exits non-zero when a
+  (#42). A package that does not compile is one failing test case, `TestMain`. gotestsum exits non-zero when a
   test fails, as the gate expects; a run that leaves no report is a failed condition naming the command.
 - **What it measures** is the statements of each package that its own tests run, unless `-coverpkg` widens it: a line
   is coverable when a block of statements holds some of it, and covered when such a block ran. Go counts no branches.
@@ -777,7 +779,8 @@ and Latin-1, and a cookie that names any other encoding makes the file one that 
 not parse is named at the line of the first token the parser could not place. Either is a finding of each check that
 needed the file, as the check's own text above says: `unreadable` or `unparsable`, `not-scored`, `not-read`.
 tree-sitter's grammars are not the compilers': tree-sitter-python also reads Python 2, so `print x` parses, and does
-not read a type parameter's default (PEP 696); `TODO.md` lists what else is known to be misread.
+not read a type parameter's default (PEP 696); [port-differences.md](port-differences.md) lists what else is known to
+be misread.
 
 **What is read of a Rust file:**
 

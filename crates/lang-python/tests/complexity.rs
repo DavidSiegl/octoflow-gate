@@ -908,8 +908,8 @@ fn a_function_moved_unchanged_out_of_a_file_that_keeps_its_twin_keeps_its_base()
 
 #[test]
 fn a_copy_of_a_function_the_change_edits_takes_its_base_as_bodies_first_decides() {
-    // The cost TODO.md records ("A copy of a function whose original the change edits keeps the old score and
-    // passes"): the copy is taken for the original moved unchanged, and the edited original for a new function.
+    // The accepted cost of bodies first (`base_scores` in crates/checks/src/complexity.rs): the copy is taken for the
+    // original moved unchanged, and the edited original for a new function.
     for copy in ["lib.py", "tests/helpers.py"] {
         let files = vec![edited(CALC, &base(), &big_edited()), added(copy, &big_as("big"))];
         assert_eq!(found_beside_fresh(files), [new_function(CALC, "big", 20)], "{copy}");

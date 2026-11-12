@@ -136,7 +136,7 @@ fn changed_tests(rust: &RustChange) -> (Vec<ChangedTest>, Vec<Finding>) {
 
 /// Whether the change touches a test that spans `lines` in the working tree, by adding one of them (`added`) or
 /// removing lines at one of the `removal_points` from just above its first line, as an `#[ignore]` taken off its
-/// top, to just below its last (TODO.md, "A removal just below").
+/// top, to just below its last; a removal just below its last line does not count yet (#57).
 fn touches(lines: Lines, added: &BTreeSet<u32>, removal_points: &BTreeSet<u32>) -> bool {
     added.iter().any(|&n| lines.holds(n))
         || removal_points.iter().any(|&n| lines.first.saturating_sub(1) <= n && n <= lines.last)

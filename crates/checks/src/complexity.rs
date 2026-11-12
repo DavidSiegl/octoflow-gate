@@ -230,8 +230,8 @@ const BODY_STEPS: [(bool, bool); 4] = [(true, true), (true, false), (false, true
 /// unchanged among the tests is still itself and lends its base to no copy, whatever the copy's name.
 ///
 /// The cost of bodies first: a copy of a function whose original the change edits takes the original's old score, as
-/// if the original were the new function under its name (TODO.md, "A copy of a function whose original the change
-/// edits keeps the old score and passes.").
+/// if the original were the new function under its name. The user accepted that cost (gate-standalone/06, review
+/// round 4); telling a copy from a rename would take git's copy detection (`git diff -C`) over the change's files.
 fn base_scores(
     files: &[ChangedFile],
     scored: &[Vec<Scored>],

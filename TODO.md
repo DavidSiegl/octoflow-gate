@@ -507,7 +507,10 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   - F9, `crates/gate/src/python_at_base.rs`, `mutants.rs`: "The Python halves and the Rust halves' modules import each
     other (`passes_at_base` <-> `python_at_base` for `budget_reached`; `mutants` <-> `python_mutants` for `KILL_WAIT`,
     `STOP_GRACE`, `SURVIVOR_EXAMPLES`), consts widened to `pub(crate)` to cross the cycle." Closes with what both halves
-    of a check share in a module neither half is.
+    of a check share in a module neither half is. The dependency-cycles check (structural-checks/01) fails a change that closes such a
+    cycle from now on, but reports none the base has, so these two stay until a change breaks them. The run over 50
+    commits found more such cycles in `crates/gate` (`judge` holds `Change` and calls every check that imports it;
+    `report` <-> `config_edits`, `golangci` <-> `linters`).
   - F10, `crates/gate/src/python_mutants.rs`, `on_copy`: "The set-up closure returns `Result<Option<Table>, String>` and
     also pushes into the captured `out`, which the `Ok(None)` arm then discards; correct only because nothing is pushed
     on that path. `seconds` goes u64 -> Duration -> f64 -> Duration between `mutants.rs` and here." Closes with the

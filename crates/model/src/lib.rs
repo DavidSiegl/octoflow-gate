@@ -1,8 +1,8 @@
 //! What the gate's parser checks (crates/checks) know of one source file, whatever its language: its functions and
 //! the flow of their bodies, its tests and their assertions, the skips and swallowed errors in it, the names it
-//! binds and the constants its tests name. A language's front end, such as crates/lang-rust, reads a file into a
-//! [`SourceFile`]; the checks compare the two sides of a change through these types alone, so that nothing in them is
-//! one language's.
+//! binds and the constants its tests name; and, read across a whole tree, the imports between its files
+//! ([`Import`]). A language's front end, such as crates/lang-rust, reads a file into a [`SourceFile`]; the checks
+//! compare the two sides of a change through these types alone, so that nothing in them is one language's.
 //!
 //! Lines are numbered from 1, as git and the quality file number them.
 
@@ -207,6 +207,24 @@ pub struct Binding {
     /// file's author did not choose it.
     pub fixed: bool,
 }
+
+/// One file's import of another module of the same project, as its language's front end resolves it against the
+/// whole tree: the edge from the importing file to the imported one in the dependency-cycles check's graph. An
+/// import of what the tree does not hold, a third party's, is none.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Import {
+    /// The imported module's file, from the tree's top level; never the importing file itself.
+    pub module: std::ffi::OsString,
+    /// The line of the import, where a finding on it points: of the imported name, for a statement that spans lines.
+    pub line: u32,
+    /// Whether the import runs only when a function it sits in is called, as a Python `import` inside a `def`; the
+    /// modules depend on each other all the same.
+    pub deferred: bool,
+}
+
+/// Each source file of one language in a tree, by its path from the tree's top level, with its imports of the tree's
+/// other files in the order they are written; a file that imports none of them maps to none.
+pub type ImportGraph = std::collections::BTreeMap<std::ffi::OsString, Vec<Import>>;
 
 /// `text`'s first line, clipped to 160 characters with an ellipsis, as a finding's message quotes code.
 pub fn first_line(text: &str) -> String {

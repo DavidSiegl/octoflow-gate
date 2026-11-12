@@ -3,6 +3,8 @@
 //! gives its [`Finding`]s, which the gate lists beside the linters' (gate::judge).
 //!
 //! - [`complexity`]: functions the change took over the cognitive-complexity limit.
+//! - [`cycles`]: dependency cycles between modules the change closed, judged over the imports of the whole tree on
+//!   each side (model::ImportGraph) rather than over the changed files.
 //! - [`integrity`]: tests the change removed or weakened.
 //! - [`names`]: vague names the change bound.
 
@@ -13,6 +15,7 @@ pub use model::first_line;
 use model::{SourceFile, Unreadable};
 
 pub mod complexity;
+pub mod cycles;
 pub mod integrity;
 pub mod names;
 

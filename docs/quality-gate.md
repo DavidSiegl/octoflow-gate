@@ -61,7 +61,8 @@ ruff's rules are the project's; the gate caps each at warn, so that a lint at `d
 crate's build and stop cargo before the crates after it, is a finding like the rest. The cap also lets an
 `#[allow(...)]` override a `forbid`, which rustc otherwise refuses, so such an allow silences its lint for the gate;
 it is listed under the suppressions added only where its added line holds the allow itself, not a lint added inside an
-existing wrapped `#[allow(` list, left so since no workspace the gate judges sets a lint to forbid. The top-level
+existing wrapped `#[allow(` list. That gap is left open: this repository sets no lint to `forbid`, and a test command
+that builds uncapped, as `cargo llvm-cov nextest` does, still fails such a workspace. The top-level
 `Cargo.toml` sets its `[workspace.lints]`, which every member takes, to `warn` all the same, since rustc's
 `unsafe_code` at `deny` would stop `cargo test`. Its
 table adds to clippy's defaults the lints `main` passed when it was set, so that clippy found nothing on old lines. A

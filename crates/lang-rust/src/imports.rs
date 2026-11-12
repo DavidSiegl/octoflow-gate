@@ -90,7 +90,6 @@ fn parse(source: &[u8]) -> Option<Parsed> {
 /// Adds to `out` what `node` and below declare and import, `scope` being the inline modules it sits in and `test`
 /// whether it is test code.
 fn walk(node: Node, text: Text, scope: &mut Vec<String>, test: bool, out: &mut Parsed) {
-    let test = test || preceding_attributes(node).into_iter().any(|a| holds_only_under_test(a, text));
     match node.kind() {
         "mod_item" => {
             let name = node.child_by_field_name("name").map(|n| unraw(text.of(n)).to_string()).unwrap_or_default();
@@ -118,11 +117,27 @@ fn walk(node: Node, text: Text, scope: &mut Vec<String>, test: bool, out: &mut P
                     out.paths.push(UsedPath { scope: scope.clone(), segments, line: line(node) });
                 }
             }
-            None => named(node).into_iter().for_each(|child| walk(child, text, scope, test, out)),
+            None => walk_children(node, text, scope, test, out),
         },
         "use_declaration" | "scoped_identifier" | "scoped_type_identifier" | "attribute_item"
         | "inner_attribute_item" | "visibility_modifier" => {}
-        _ => named(node).into_iter().for_each(|child| walk(child, text, scope, test, out)),
+        _ => walk_children(node, text, scope, test, out),
+    }
+}
+
+/// [`walk`]s each of `node`'s named children in order, as test code where `test` or where an attribute right before
+/// it holds only under `cfg(test)`: tree-sitter makes an item's outer attributes its siblings.
+fn walk_children(node: Node, text: Text, scope: &mut Vec<String>, test: bool, out: &mut Parsed) {
+    let mut marked = false;
+    for child in named(node) {
+        match child.kind() {
+            "attribute_item" => marked |= holds_only_under_test(child, text),
+            "line_comment" | "block_comment" => {}
+            _ => {
+                walk(child, text, scope, test || marked, out);
+                marked = false;
+            }
+        }
     }
 }
 

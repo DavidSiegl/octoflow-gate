@@ -331,8 +331,10 @@ edited. Two imports that close cycles of the same files are one finding. A cycle
 goes through such an import, also where every file of it was in a cycle at the base: an import from `a` of `c`, added
 where `a` → `b` → `c` → `a` was already, closes `a` → `c` → `a`. A cycle the change only adds an import to between
 two files already joined is not one, nor is a cycle the base holds that the change adds no import to, as nothing
-outside a change's added lines is a finding anywhere else in the gate. The files the settings exempt, by default the
-tests, take part in no cycle.
+outside a change's added lines is a finding anywhere else in the gate. Nor is a cycle closed by an edit only to a line
+outside the import's statement that decides whether it is read at all, as `#[cfg(test)]` above a `use` rewritten to
+`#[cfg(feature = "x")]`, or `if TYPE_CHECKING:` to `if FLAG:`. The files the settings exempt, by default the tests,
+take part in no cycle.
 
 - Python: `import a.b` and `from a import b`, absolute from the tree's top or from `src/`, and relative ones (`from .
   import x`, `from ..a import b`), are imports of the file `a/b.py` or `a/b/__init__.py`: `import a.b.c` of the

@@ -668,3 +668,11 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
 - **`a_finding_on_an_old_line_counts_as_elsewhere` failed once.** `crates/gate/tests/golangci_lint.rs`: in a full local
   `cargo nextest run --workspace` (2026-11-12, structural-checks/01), it failed, then passed run alone; the message was
   not kept. A second failure gets a ticket.
+- **dependency-cycles does not read an edit to the line that decides whether an import counts.** As cross-review 24 put
+  it (F11, 2026-11-12): "Base `src/a.rs`: `#[cfg(test)]\nuse crate::b::X;`, `src/b.rs`: `use crate::a::Y;`. The change
+  edits only line 1 to `#[cfg(feature = "x")]`. a → b is now an edge the base lacked, but `added` for a.rs is {1},
+  the statement is 2..=2, `added_line` is None, and a → b → a passes with OK." Python's `if TYPE_CHECKING:` rewritten
+  to `if FLAG:` likewise; docs/quality-gate.md says so. Such a line may sit far from the import: an inline module's or
+  a file's `#![cfg(test)]`, or the `#[cfg(test)] mod x;` in another file that makes all of `x.rs` test code. Closes
+  with `model::Import::statement` taking in the lines that gate it (`cycles::added_line`), each front end giving the
+  attribute, `if` or declaration lines it read the import under.

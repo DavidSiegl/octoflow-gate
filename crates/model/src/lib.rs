@@ -219,7 +219,9 @@ pub struct Import {
     /// statement that spans lines.
     pub line: u32,
     /// The lines of the statement that writes the import, both ends included, `line` among them: a change to any of
-    /// them, as to the module path of `from a import (` above the name, can change what it imports.
+    /// them, as to the module path of `from a import (` above the name, can change what it imports. Not among them are
+    /// the lines that decide whether the import is read at all, as a `#[cfg(test)]` on it or an `if TYPE_CHECKING:`
+    /// above it.
     pub statement: std::ops::RangeInclusive<u32>,
     /// Whether the import runs only when a function it sits in is called, as a Python `import` inside a `def`; the
     /// modules depend on each other all the same.

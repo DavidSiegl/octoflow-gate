@@ -4,18 +4,18 @@
 //! run a change's Rust too, as passes_at_base.
 
 use std::cell::OnceCell;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::io::Read;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
-use checks::{complexity, integrity, names, ChangedFile, Finding, Side};
+use checks::{complexity, cycles, integrity, names, ChangedFile, Finding, Side};
 use lang_python::{Unit, FIRST_LINE_BYTES};
-use model::{SourceFile, Unreadable};
+use model::{Import, ImportGraph, SourceFile, Unreadable};
 
 use crate::diff::{removal_points, removed_lines, ChangedLines};
-use crate::judge::Change;
+use crate::judge::{under_mutmut_state, Change};
 use crate::settings::Settings;
 use crate::{git, text, Unjudged};
 
@@ -239,6 +239,80 @@ pub fn vague_names(sources: &Sources) -> Vec<Finding> {
     // Go names its types and its variables in MixedCaps, as `runInfo` and `RunInfo`.
     out.extend(names::vague_names(&sources.go.files, true));
     by_path_and_line(out)
+}
+
+/// The dependency-cycles check's findings on `sources`, by path and line: on Python where the change holds Python,
+/// and on Rust where it holds Rust, each language's imports read (lang_python::imports, lang_rust::imports) over all
+/// the tree's tracked files of its name, `.py` or `.rs`, outside mutmut's state, at the base and in the working tree.
+/// The files gate.toml's `dependency-cycles.exempt` names take part in no cycle. Errs when git cannot list the tree's
+/// files or show one at the base, or one cannot be read in the working tree.
+pub fn dependency_cycles(sources: &Sources) -> Result<Vec<Finding>, Unjudged> {
+    let mut out = vec![];
+    if !sources.python.files.is_empty() {
+        out.extend(new_cycles_in(sources.change, b".py", lang_python::imports)?);
+    }
+    if !sources.rust.files.is_empty() {
+        out.extend(new_cycles_in(sources.change, b".rs", lang_rust::imports)?);
+    }
+    Ok(by_path_and_line(out))
+}
+
+/// The dependency-cycles check's findings on `change`'s files whose paths end in `suffix`, which `imports` reads, as
+/// [`dependency_cycles`] says.
+fn new_cycles_in(change: &Change, suffix: &[u8], imports: ReadImports) -> Result<Vec<Finding>, Unjudged> {
+    let (base, now) = trees(change, suffix)?;
+    let renamed: HashMap<&OsStr, &OsString> = change
+        .files
+        .iter()
+        .filter_map(|f| Some((f.before.as_deref()?, f.after.as_ref()?)))
+        .filter(|(before, after)| before != after)
+        .collect();
+    let named_now = |path: OsString| renamed.get(path.as_os_str()).map_or(path, |&after| after.clone());
+    let base_graph: ImportGraph = imports(&base)
+        .into_iter()
+        .map(|(path, found)| {
+            let found = found.into_iter().map(|i| Import { module: named_now(i.module), ..i }).collect();
+            (named_now(path), found)
+        })
+        .collect();
+    let exempt = |path: &OsStr| change.settings.cycles_exempt.matches(path);
+    Ok(cycles::new_cycles(&base_graph, &imports(&now), &change.changed, &exempt))
+}
+
+/// A front end's reading of a tree's files into the imports between them, as lang_python::imports.
+type ReadImports = fn(&[(OsString, Vec<u8>)]) -> ImportGraph;
+
+/// Files of a tree, as the front ends' imports take them: (path from the tree's top level, bytes).
+type TreeFiles = Vec<(OsString, Vec<u8>)>;
+
+/// (path, bytes) of each of the tree's tracked regular files outside mutmut's state ([`under_mutmut_state`]) whose
+/// path ends in `suffix`, as `change`'s base holds them and as its working tree does. A base path is the file's there,
+/// which the change may rename. Errs when git cannot list the files or show one at the base, or one cannot be read in the working tree.
+fn trees(change: &Change, suffix: &[u8]) -> Result<(TreeFiles, TreeFiles), Unjudged> {
+    let listed = git::output(&change.root, &["ls-files", "-z"])?;
+    let mut now = vec![];
+    for path in listed.split(|&b| b == 0).filter(|p| p.ends_with(suffix)).map(OsStr::from_bytes) {
+        let full = change.root.join(path);
+        if under_mutmut_state(path) || !regular_file(&full) {
+            continue;
+        }
+        let read = std::fs::read(&full);
+        let bytes = read.map_err(|e| Unjudged(format!("{} could not be read: {e}", text::path(full.as_os_str()))))?;
+        now.push((path.to_os_string(), bytes));
+    }
+    // A file the change leaves alone is the same at the base; one it touches is git's there, under its base path.
+    let touched: HashSet<&OsStr> = change.files.iter().filter_map(|f| f.after.as_deref()).collect();
+    let mut base: TreeFiles =
+        now.iter().filter(|(path, _)| !touched.contains(path.as_os_str())).cloned().collect();
+    let before: Vec<OsString> =
+        change.files.iter().filter_map(|f| f.before.clone()).filter(|p| p.as_bytes().ends_with(suffix)).collect();
+    for path in regular_files_at_base(change, &before)? {
+        let mut spec = OsString::from(format!("{}:", change.base));
+        spec.push(&path);
+        let bytes = git::output(&change.root, &[OsStr::new("cat-file"), OsStr::new("blob"), &spec])?;
+        base.push((path, bytes));
+    }
+    Ok((base, now))
 }
 
 /// `findings` by path and line, a lineless one first, those of one place in the order given.

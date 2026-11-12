@@ -11,7 +11,7 @@ use crate::diff::{change_diff, changed_files, changed_lines, ChangedFile, Change
 use crate::flaky_tests::flaky_tests;
 use crate::linters::{tracked_from, Linter, LINTERS};
 use crate::mutants::surviving_mutants;
-use crate::parser_checks::{too_complex, vague_names, weakened_tests, Sources};
+use crate::parser_checks::{dependency_cycles, too_complex, vague_names, weakened_tests, Sources};
 use crate::passes_at_base::passes_at_base;
 use crate::process::tool_env;
 use crate::python_mutants::Mutmut;
@@ -215,11 +215,11 @@ pub fn judge_change(cwd: &Path, base: &str, given: &Given) -> Result<QualityRepo
     })
 }
 
-/// Runs the checks beside the linters on `change`, in this order: test-integrity, cognitive-complexity, flaky-tests,
-/// surviving-mutants and passes-at-base, the last two's runs within the seconds `budgets` gives, (mutation, base
-/// run), mutmut set up as `mutmut` says, and vague-names. Appends to `conditions` a failed condition for each check
-/// with findings of severity "error", in that order, and to `issues` those findings; returns the others, to weigh.
-/// Errs as [`Sources::read`] does, having appended nothing.
+/// Runs the checks beside the linters on `change`, in this order: test-integrity, cognitive-complexity,
+/// dependency-cycles, flaky-tests, surviving-mutants and passes-at-base, the last two's runs within the seconds
+/// `budgets` gives, (mutation, base run), mutmut set up as `mutmut` says, and vague-names. Appends to `conditions` a
+/// failed condition for each check with findings of severity "error", in that order, and to `issues` those findings;
+/// returns the others, to weigh. Errs as [`Sources::read`] and [`dependency_cycles`] do, having appended nothing.
 fn judge_checks(
     change: &Change,
     mutmut: &Mutmut,
@@ -231,6 +231,7 @@ fn judge_checks(
     let found = [
         weakened_tests(&sources),
         too_complex(&sources),
+        dependency_cycles(&sources)?,
         named("flaky-tests", flaky_tests(&sources.python)),
         named("surviving-mutants", surviving_mutants(&sources, mutmut, mutation_budget)),
         named("passes-at-base", passes_at_base(&sources, base_run_budget)),

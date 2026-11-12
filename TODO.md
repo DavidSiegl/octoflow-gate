@@ -172,3 +172,9 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   by where it starts and ends, not by its lines, so `go_profile_lines` (`crates/gate/src/coverage.rs`) counts every
   line between, covered or not as the block is, as gocover-cobertura and Codecov read profiles too. Found with
   go-support/01 (2026-11-11). Closes with each such line read from the file and left out when it holds no token.
+- **Two golangci-lint runs at once fail the later one.** golangci-lint takes a lock file on start and, without
+  `--allow-serial-runners`, exits 3 with "parallel golangci-lint is running" when it cannot, so `lint_module`
+  (`crates/gate/src/golangci.rs`) reports a failed condition whenever another golangci-lint runs on the machine. The
+  gate's own tests hit it: `crates/gate/tests/golangci_lint.rs` run in parallel fails up to three of its nine tests,
+  and one failed `scripts/gate` on 2026-11-12 (todo-tickets triage); with one test thread all nine pass. Closes with
+  `--allow-serial-runners` among `lint_module`'s arguments, so a run waits for the lock rather than fail.

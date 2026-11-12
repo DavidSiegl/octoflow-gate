@@ -50,6 +50,16 @@ struct Parsed {
     paths: Vec<UsedPath>,
 }
 
+impl Parsed {
+    /// Adds to [`Parsed::paths`] the path `segments`, written in the inline modules `scope` at `line` of `statement`,
+    /// where it starts at `crate`, `self` or `super`, the only paths [`imports`] reads.
+    fn add_path(&mut self, scope: &[String], segments: Vec<String>, line: u32, statement: RangeInclusive<u32>) {
+        if segments.first().is_some_and(|s| matches!(s.as_str(), "crate" | "self" | "super")) {
+            self.paths.push(UsedPath { scope: scope.to_vec(), segments, line, statement });
+        }
+    }
+}
+
 /// A `mod x;` declaration, of a module whose body is another file.
 struct Declaration {
     /// The inline modules it sits in, outermost first.
@@ -109,20 +119,11 @@ fn walk(node: Node, text: Text, scope: &mut Vec<String>, test: bool, out: &mut P
         }
         "use_declaration" if !test => {
             if let Some(argument) = node.child_by_field_name("argument") {
-                use_tree(argument, text, &[], &mut |segments, line| {
-                    if from_this_crate(&segments) {
-                        out.paths.push(UsedPath { scope: scope.clone(), segments, line, statement: lines(node) });
-                    }
-                });
+                use_tree(argument, text, &[], &mut |segments, line| out.add_path(scope, segments, line, lines(node)));
             }
         }
         "scoped_identifier" | "scoped_type_identifier" if !test => match segments(node, text) {
-            Some(segments) => {
-                if from_this_crate(&segments) {
-                    let (line, statement) = (line(node), lines(node));
-                    out.paths.push(UsedPath { scope: scope.clone(), segments, line, statement });
-                }
-            }
+            Some(segments) => out.add_path(scope, segments, line(node), lines(node)),
             None => walk_children(node, text, scope, test, out),
         },
         "use_declaration" | "scoped_identifier" | "scoped_type_identifier" | "attribute_item"
@@ -202,11 +203,6 @@ fn segments(node: Node, text: Text) -> Option<Vec<String>> {
     }
 }
 
-/// Whether the path `segments` starts at `crate`, `self` or `super`, the only paths [`imports`] reads.
-fn from_this_crate(segments: &[String]) -> bool {
-    segments.first().is_some_and(|s| matches!(s.as_str(), "crate" | "self" | "super"))
-}
-
 /// The line, from 1, `node` ends on, where the last segment of a path is.
 fn line(node: Node) -> u32 {
     u32::try_from(node.end_position().row + 1).unwrap_or(u32::MAX)
@@ -222,8 +218,8 @@ fn path_attribute(node: Node, text: Text) -> Option<String> {
     preceding_attributes(node).into_iter().find_map(|item| {
         let attribute = named(item).into_iter().find(|c| c.kind() == "attribute")?;
         let is_path = attribute.named_child(0).is_some_and(|p| text.of(p) == "path");
-        let value = attribute.child_by_field_name("value").filter(|v| is_path && v.kind() == "string_literal")?;
-        Some(text.of(value).trim_matches('"').to_string())
+        let literal = attribute.child_by_field_name("value").filter(|v| is_path && v.kind() == "string_literal")?;
+        Some(text.of(literal).trim_matches('"').to_string())
     })
 }
 
@@ -277,26 +273,7 @@ impl ModuleTree {
         let mut tree = ModuleTree { of_file: vec![vec![]; paths.len()], files: HashMap::new() };
         let mut root = 0;
         while let Some(file) = roots.pop_front() {
-            let mut queue = VecDeque::from([(file, vec![], false)]);
-            let mut seen = HashSet::new();
-            while let Some((file, path, test)) = queue.pop_front() {
-                if !seen.insert(file) {
-                    continue;
-                }
-                for (child, d) in declared(file, path.is_empty()) {
-                    let mut child_path = path.clone();
-                    child_path.extend(d.scope.iter().cloned());
-                    child_path.push(d.name.clone());
-                    queue.push_back((child, child_path, test || d.test));
-                }
-                for inline in parsed[file].iter().flat_map(|p| &p.inline) {
-                    let mut inline_path = path.clone();
-                    inline_path.extend(inline.iter().cloned());
-                    tree.files.insert((root, inline_path), file);
-                }
-                tree.files.insert((root, path.clone()), file);
-                tree.of_file[file].push(((root, path), test));
-            }
+            tree.add_crate(root, file, parsed, &declared);
             root += 1;
             // A file only declarations that loop back reach is a crate root of its own.
             if roots.is_empty() {
@@ -304,6 +281,39 @@ impl ModuleTree {
             }
         }
         tree
+    }
+
+    /// Adds the modules of crate root `root`, whose file is `file`: each file its `mod` declarations reach, as
+    /// `declared` gives a file's (the declared file and the declaration, read as in a crate root's file when asked),
+    /// and each inline module of those, by `parsed`, the files' parses. A file reached twice is a module of the first
+    /// path only.
+    fn add_crate<'p>(
+        &mut self,
+        root: usize,
+        file: usize,
+        parsed: &'p [Option<Parsed>],
+        declared: &dyn Fn(usize, bool) -> Vec<(usize, &'p Declaration)>,
+    ) {
+        let mut queue = VecDeque::from([(file, vec![], false)]);
+        let mut seen = HashSet::new();
+        while let Some((file, path, test)) = queue.pop_front() {
+            if !seen.insert(file) {
+                continue;
+            }
+            for (child, d) in declared(file, path.is_empty()) {
+                let mut child_path = path.clone();
+                child_path.extend(d.scope.iter().cloned());
+                child_path.push(d.name.clone());
+                queue.push_back((child, child_path, test || d.test));
+            }
+            for inline in parsed[file].iter().flat_map(|p| &p.inline) {
+                let mut inline_path = path.clone();
+                inline_path.extend(inline.iter().cloned());
+                self.files.insert((root, inline_path), file);
+            }
+            self.files.insert((root, path.clone()), file);
+            self.of_file[file].push(((root, path), test));
+        }
     }
 
     /// The imports of `files[i]`, whose parse is `parsed`, as [`imports`] has them.

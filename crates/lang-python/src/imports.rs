@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use model::{Import, ImportGraph};
 use tree_sitter::Node;
 
-use crate::syntax::{fields, line, named, Text};
+use crate::syntax::{end_line, fields, line, named, Text};
 
 /// The directories, from the tree's top level, that an absolute import is looked up from, in order: the top, then
 /// `src`, the two layouts a project's own packages take.
@@ -94,7 +94,8 @@ fn collect(node: Node, text: Text, resolver: &Resolver, deferred: bool, out: &mu
             for name in fields(node, "name") {
                 let dotted = name.child_by_field_name("name").unwrap_or(name);
                 if let Some(module) = resolver.absolute(text.of(dotted)) {
-                    out.push(Import { module: module.into(), line: line(name), deferred });
+                    let statement = line(node)..=end_line(node);
+                    out.push(Import { module: module.into(), line: line(name), statement, deferred });
                 }
             }
             return;
@@ -153,7 +154,7 @@ fn from_import(node: Node, text: Text, resolver: &Resolver, deferred: bool, out:
         };
         let found = dirs.iter().find_map(|dir| submodule(dir).or_else(|| resolver.module(dir, &segments)));
         if let Some(module) = found {
-            out.push(Import { module: module.into(), line: at, deferred });
+            out.push(Import { module: module.into(), line: at, statement: line(node)..=end_line(node), deferred });
         }
     }
 }

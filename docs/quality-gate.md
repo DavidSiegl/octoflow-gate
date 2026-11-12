@@ -323,11 +323,16 @@ the languages the change holds Python or Rust of, `crates/checks/src/cycles.rs` 
 ends read (`imports` in `crates/lang-python` and `crates/lang-rust`) over every file of the language the tree tracks
 outside `mutants/`, named `.py` or `.rs`: once as the base holds them and once as the working tree does, the base's
 files under the names the change gives them. Each node is a file; a `dependency-cycles` finding, which fails the gate,
-lies at an added line whose import, from one file of another the base's file did not import, closes a cycle, and names
-the cycle's files in order from it, `a.py` → `b.py` → `a.py`. Two imports that close cycles of the same files are one
-finding. A cycle the base has already is not one, even where the change adds an import to it, as nothing outside a
-change's added lines is a finding anywhere else in the gate. The files the settings exempt, by default the tests, take
-part in no cycle.
+lies on an import that closes a cycle where the import is from one file of another the base's file did not import and
+the change added a line of the statement that writes it, and names the cycle's files in order from it, `a.py` →
+`b.py` → `a.py`. It lies at the import's own line, the imported name's in a statement of several lines, where the
+change added that, else at the statement's first added line, as where only `from a import (` above the names was
+edited. Two imports that close cycles of the same files are one finding. A cycle is new, and so a finding, where it
+goes through such an import, also where every file of it was in a cycle at the base: an import from `a` of `c`, added
+where `a` → `b` → `c` → `a` was already, closes `a` → `c` → `a`. A cycle the change only adds an import to between
+two files already joined is not one, nor is a cycle the base holds that the change adds no import to, as nothing
+outside a change's added lines is a finding anywhere else in the gate. The files the settings exempt, by default the
+tests, take part in no cycle.
 
 - Python: `import a.b` and `from a import b`, absolute from the tree's top or from `src/`, and relative ones (`from .
   import x`, `from ..a import b`), are imports of the file `a/b.py` or `a/b/__init__.py`: `import a.b.c` of the

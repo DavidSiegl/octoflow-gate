@@ -108,6 +108,13 @@ fn a_change_closing_a_cycle_of_two_or_of_three_modules_is_found_at_the_closing_i
 }
 
 #[test]
+fn a_cycle_closed_by_editing_the_module_line_of_a_multi_line_import_is_found() {
+    let base = [("a.py", "from old import (\n    thing,\n)\n"), ("b.py", "import a\n"), ("old.py", "")];
+    let now = [("a.py", "from b import (\n    thing,\n)\n"), ("b.py", "import a\n"), ("old.py", "")];
+    assert_eq!(found(&base, &now, &[("a.py", &[1])]), [("a.py".into(), 1, "a.py → b.py → a.py".into())]);
+}
+
+#[test]
 fn an_import_added_to_a_cycle_the_base_has_is_not_found() {
     let base = [("a.py", "import b\n"), ("b.py", "import a\n")];
     let now = [("a.py", "import b\nfrom b import x\n"), ("b.py", "import a\n")];

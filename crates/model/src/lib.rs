@@ -215,8 +215,12 @@ pub struct Binding {
 pub struct Import {
     /// The imported module's file, from the tree's top level; never the importing file itself.
     pub module: std::ffi::OsString,
-    /// The line of the import, where a finding on it points: of the imported name, for a statement that spans lines.
+    /// The line of the import, where a finding on it points if the change added it: of the imported name, for a
+    /// statement that spans lines.
     pub line: u32,
+    /// The lines of the statement that writes the import, both ends included, `line` among them: a change to any of
+    /// them, as to the module path of `from a import (` above the name, can change what it imports.
+    pub statement: std::ops::RangeInclusive<u32>,
     /// Whether the import runs only when a function it sits in is called, as a Python `import` inside a `def`; the
     /// modules depend on each other all the same.
     pub deferred: bool,

@@ -147,6 +147,18 @@ fn a_change_closing_a_cycle_of_two_or_of_three_modules_is_found_at_the_closing_i
 }
 
 #[test]
+fn a_cycle_closed_by_editing_the_path_line_of_a_multi_line_use_is_found() {
+    let lib = ("src/lib.rs", "mod a;\nmod b;\nmod old;\n");
+    let rest = [("src/b.rs", "use crate::a::Y;\n"), ("src/old.rs", "")];
+    let base = [lib, ("src/a.rs", "use crate::old::{\n    X,\n};\n"), rest[0], rest[1]];
+    let now = [lib, ("src/a.rs", "use crate::b::{\n    X,\n};\n"), rest[0], rest[1]];
+    assert_eq!(
+        found(&base, &now, &[("src/a.rs", &[1])]),
+        [("src/a.rs".into(), 1, "src/a.rs → src/b.rs → src/a.rs".into())]
+    );
+}
+
+#[test]
 fn an_import_added_to_a_cycle_the_base_has_is_not_found() {
     let lib = ("src/lib.rs", "mod a;\nmod b;\n");
     let base = [lib, ("src/a.rs", "use crate::b::X;\n"), ("src/b.rs", "use crate::a::Y;\n")];

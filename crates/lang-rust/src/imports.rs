@@ -3,6 +3,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::ffi::OsString;
+use std::ops::RangeInclusive;
 use std::path::{Component, Path, PathBuf};
 
 use model::{Import, ImportGraph};
@@ -68,6 +69,8 @@ struct UsedPath {
     /// Its segments, `crate`, `self` or `super` first.
     segments: Vec<String>,
     line: u32,
+    /// The lines of the `use` declaration, or of the path in code, that writes it.
+    statement: RangeInclusive<u32>,
 }
 
 /// The file `source`, read as [`imports`] reads it; None where it is not UTF-8 or does not parse.
@@ -107,14 +110,17 @@ fn walk(node: Node, text: Text, scope: &mut Vec<String>, test: bool, out: &mut P
         "use_declaration" if !test => {
             if let Some(argument) = node.child_by_field_name("argument") {
                 use_tree(argument, text, &[], &mut |segments, line| {
-                    out.paths.push(UsedPath { scope: scope.clone(), segments, line });
+                    if from_this_crate(&segments) {
+                        out.paths.push(UsedPath { scope: scope.clone(), segments, line, statement: lines(node) });
+                    }
                 });
             }
         }
         "scoped_identifier" | "scoped_type_identifier" if !test => match segments(node, text) {
             Some(segments) => {
-                if matches!(segments[0].as_str(), "crate" | "self" | "super") {
-                    out.paths.push(UsedPath { scope: scope.clone(), segments, line: line(node) });
+                if from_this_crate(&segments) {
+                    let (line, statement) = (line(node), lines(node));
+                    out.paths.push(UsedPath { scope: scope.clone(), segments, line, statement });
                 }
             }
             None => walk_children(node, text, scope, test, out),
@@ -196,9 +202,19 @@ fn segments(node: Node, text: Text) -> Option<Vec<String>> {
     }
 }
 
+/// Whether the path `segments` starts at `crate`, `self` or `super`, the only paths [`imports`] reads.
+fn from_this_crate(segments: &[String]) -> bool {
+    segments.first().is_some_and(|s| matches!(s.as_str(), "crate" | "self" | "super"))
+}
+
 /// The line, from 1, `node` ends on, where the last segment of a path is.
 fn line(node: Node) -> u32 {
     u32::try_from(node.end_position().row + 1).unwrap_or(u32::MAX)
+}
+
+/// The lines, from 1, `node` starts and ends on.
+fn lines(node: Node) -> RangeInclusive<u32> {
+    u32::try_from(node.start_position().row + 1).unwrap_or(u32::MAX)..=line(node)
 }
 
 /// The value of `#[path = "..."]` on the declaration `node`, without its quotes.
@@ -299,7 +315,8 @@ impl ModuleTree {
             for used in &parsed.paths {
                 let Some(target) = self.resolve(*root, own, used) else { continue };
                 if found.insert((target, used.line)) {
-                    out.push(Import { module: files[target].0.clone(), line: used.line, deferred: false });
+                    let statement = used.statement.clone();
+                    out.push(Import { module: files[target].0.clone(), line: used.line, statement, deferred: false });
                 }
             }
         }

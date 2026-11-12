@@ -9,8 +9,10 @@ use model::{Import, ImportGraph};
 use crate::Finding;
 
 /// The check's findings, each failing the gate, by path and line: one for each cycle of imports in `now` that `base`
-/// lacks, at an import line the change added that closes it, naming the cycle's files in order from that import's
-/// and back. Two imports that close cycles of the same files make one finding, at the first.
+/// lacks, at a line the change added to an import's statement that closes it, naming the cycle's files in order from
+/// that import's and back. The finding lies at the import's [`Import::line`] where the change added that, else at the
+/// first line of the statement it added. Two imports that close cycles of the same files make one finding, at the
+/// first.
 ///
 /// `base` and `now` are one language's graphs of the tree at the base and of the working tree, `base`'s paths
 /// already those the files have in the working tree where the change renames them. `added` holds the lines the change
@@ -18,8 +20,10 @@ use crate::Finding;
 /// of it both left out.
 ///
 /// A cycle is new where it uses an import from one file of another that the base had no import of. Only such an
-/// import, on an added line, closes one: a cycle the change only adds a line to, or one the base held already, is
-/// not reported, as nothing outside a change's added lines is anywhere else in the gate.
+/// import, a line of its statement added, closes one: a cycle the change only adds an import to between two files
+/// already joined, or one the base held that it adds no import to, is not reported, as nothing outside a change's
+/// added lines is anywhere else in the gate. A cycle through such an import is new also where its files were all in a
+/// cycle at the base.
 pub fn new_cycles(
     base: &ImportGraph,
     now: &ImportGraph,
@@ -34,18 +38,26 @@ pub fn new_cycles(
     for (&from, targets) in &now_edges {
         let Some(lines) = added.get(from) else { continue };
         for (&to, imports) in targets {
-            let Some(closing) = imports.iter().find(|i| lines.contains(&i.line)).filter(|_| !had(from, to)) else {
-                continue;
-            };
+            let closing = imports.iter().find_map(|i| Some((i, added_line(i, lines)?)));
+            let Some((closing, at)) = closing.filter(|_| !had(from, to)) else { continue };
             let Some(back) = shortest_path(&now_edges, to, from) else { continue };
             if !reported.insert(back.iter().copied().collect()) {
                 continue;
             }
-            out.push(finding(from, closing, &back));
+            out.push(finding(from, closing, at, &back));
         }
     }
     out.sort_by(|a, b| (&a.path, a.line).cmp(&(&b.path, b.line)));
     out
+}
+
+/// The line a finding on `import` lies at, of `added`, the lines the change added to its file: the import's own where
+/// it is one of them, else the first of its statement's that is; None where the change added none of its statement.
+fn added_line(import: &Import, added: &BTreeSet<u32>) -> Option<u32> {
+    if added.contains(&import.line) {
+        return Some(import.line);
+    }
+    added.range(import.statement.clone()).next().copied()
 }
 
 /// `graph`'s imports between files `exempt` leaves in, by importing file, then imported file, each pair's imports in
@@ -93,8 +105,8 @@ fn shortest_path<'g>(
     None
 }
 
-/// The finding on `closing`, an import in `from` of the first of `back`, the files leading back to `from`.
-fn finding(from: &OsStr, closing: &Import, back: &[&OsStr]) -> Finding {
+/// The finding at line `at` on `closing`, an import in `from` of the first of `back`, the files leading back to `from`.
+fn finding(from: &OsStr, closing: &Import, at: u32, back: &[&OsStr]) -> Finding {
     let shown = |path: &OsStr| format!("`{}`", path.to_string_lossy());
     let chain: Vec<String> = std::iter::once(from).chain(back.iter().copied()).map(shown).collect();
     let deferred = if closing.deferred {
@@ -107,7 +119,7 @@ fn finding(from: &OsStr, closing: &Import, back: &[&OsStr]) -> Finding {
          {deferred}",
         chain.join(" → ")
     );
-    Finding::of("dependency-cycles", "", true, Some(&from.to_os_string()), Some(closing.line), message)
+    Finding::of("dependency-cycles", "", true, Some(&from.to_os_string()), Some(at), message)
 }
 
 #[cfg(test)]
@@ -118,7 +130,7 @@ mod tests {
     fn graph(edges: &[(&str, &str, u32)]) -> ImportGraph {
         let mut out = ImportGraph::new();
         for &(from, to, line) in edges {
-            let import = Import { module: to.into(), line, deferred: false };
+            let import = Import { module: to.into(), line, statement: line..=line, deferred: false };
             out.entry(from.into()).or_default().push(import);
         }
         out
@@ -173,7 +185,7 @@ mod tests {
     #[test]
     fn a_deferred_import_is_found_and_said_to_be_deferred() {
         let mut now = graph(&[("b.py", "a.py", 1)]);
-        now.insert("a.py".into(), vec![Import { module: "b.py".into(), line: 5, deferred: true }]);
+        now.insert("a.py".into(), vec![Import { module: "b.py".into(), line: 5, statement: 5..=5, deferred: true }]);
         let found = found(&ImportGraph::new(), &now, &[("a.py", 5)]);
         assert_eq!(found.len(), 1, "{found:?}");
         assert!(found[0].2.ends_with("The import is deferred, inside a function, but the modules depend on each other \

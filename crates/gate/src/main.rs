@@ -33,11 +33,11 @@ const HELP: &str = "
 Judges the change the git working tree around the current directory makes since --base: by ruff, mypy, pymarkdown,
 shellcheck, actionlint, clippy and golangci-lint over the files the repository tracks, the checks test-integrity,
 cognitive-complexity, vague-names and surviving-mutants over Python, Rust and Go, dependency-cycles, flaky-tests and
-passes-at-base over Python and Rust, gate.toml's [[test]] commands, the tests and coverage they report, files committed under mutmut's
-mutants/, stray line ends, suppressions added and edited build configuration. It writes the quality file: GATE: OK or
-GATE: ERROR on its first line, then the failed conditions, the findings on lines added since --base, failing tests,
-coverage of new code, suppressions added and edited build configuration. Exit status 0 for OK, 1 for ERROR, 2 when it
-could not judge, writing nothing. --out FILE also writes quality.json, the same report as data.
+passes-at-base over Python and Rust, gate.toml's [[test]] commands, the tests and coverage they report, files committed
+under mutmut's mutants/, stray line ends, suppressions added and edited build configuration. It writes the quality file:
+GATE: OK or GATE: ERROR on its first line, then the failed conditions, the findings on lines added since --base, failing
+tests, coverage of new code, suppressions added and edited build configuration. Exit status 0 for OK, 1 for ERROR, 2
+when it could not judge, writing nothing. --out FILE also writes quality.json, the same report as data.
 
 options:
   --help                  show this help and exit

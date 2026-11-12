@@ -507,10 +507,11 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   - F9, `crates/gate/src/python_at_base.rs`, `mutants.rs`: "The Python halves and the Rust halves' modules import each
     other (`passes_at_base` <-> `python_at_base` for `budget_reached`; `mutants` <-> `python_mutants` for `KILL_WAIT`,
     `STOP_GRACE`, `SURVIVOR_EXAMPLES`), consts widened to `pub(crate)` to cross the cycle." Closes with what both halves
-    of a check share in a module neither half is. The dependency-cycles check (structural-checks/01) fails a change that closes such a
-    cycle from now on, but reports none the base has, so these two stay until a change breaks them. The run over 50
-    commits found more such cycles in `crates/gate` (`judge` holds `Change` and calls every check that imports it;
-    `report` <-> `config_edits`, `golangci` <-> `linters`).
+    of a check share in a module neither half is. The dependency-cycles check (structural-checks/01) fails a change
+    that closes such a cycle from now on, but not one the base has that the change adds no import of a new file to, so
+    these two stay until a change breaks them; an import a change adds between two files of such a cycle that were not
+    yet joined does fail it. The run over 50 commits found more such cycles in `crates/gate` (`judge` holds `Change`
+    and calls every check that imports it; `report` <-> `config_edits`, `golangci` <-> `linters`).
   - F10, `crates/gate/src/python_mutants.rs`, `on_copy`: "The set-up closure returns `Result<Option<Table>, String>` and
     also pushes into the captured `out`, which the `Ok(None)` arm then discards; correct only because nothing is pushed
     on that path. `seconds` goes u64 -> Duration -> f64 -> Duration between `mutants.rs` and here." Closes with the
@@ -646,3 +647,24 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   `crates/gate/src/go_mutants.rs`), after the run over spf13/cobra found it so (go-support/01, 2026-11-11); a body
   digest alone would miss an edit to the signature only. Closes with Python's units compared with their base the
   same way, as `lang_python::Unit` gains a digest of its signature (parameters, defaults, decorators) and body.
+- **A file tree-sitter cannot parse goes unread by dependency-cycles, saying nothing.** `imports` in
+  `crates/lang-rust/src/imports.rs` and `crates/lang-python/src/imports.rs` read such a file as making no imports and
+  declaring no modules. A changed file that does not parse already fails the gate, cognitive-complexity's `not-scored`
+  finding (`crates/checks/src/complexity.rs`); a file the change leaves alone does not, and as cross-review 24 put it
+  (F3, 2026-11-12): "one construct it rejects anywhere in `src/lib.rs` drops all its `mod` declarations, every module
+  becomes its own crate root, `crate::` paths stop resolving, and a cycle the change closes among them is passed with
+  OK. The gate's verdict then says nothing about the check not having read the crate." Closes with the front ends
+  saying which files they could not read, and the gate naming those in a note that fails nothing.
+- **dependency-cycles reads and parses every tracked file of a language twice a run.** As cross-review 24 put it (F6,
+  2026-11-12): "Every untouched file's bytes are cloned into `base` and each tree is parsed in full by `imports`, so a
+  one-line change parses the repository's whole `.py`/`.rs` set twice; `git ls-files -z` repeats `judge_change`'s
+  listing, and the base side reruns `ls-tree`/`cat-file` for files `Stored` already read" (`trees` in
+  `crates/gate/src/parser_checks.rs`). Closes with an untouched file's imports read once for both sides, and the
+  listing and the base's files taken from what the gate already read.
+- **lang-rust reads an item's outer attributes two ways.** As cross-review 24 put it (F7, 2026-11-12): `path_attribute`
+  (`crates/lang-rust/src/imports.rs`) "looks back through siblings, the pattern e7f9115 removed for test detection",
+  via `syntax::preceding_attributes`, while `walk_children` passes each item's attributes as it walks them. Closes with
+  `walk_children` collecting a `mod` declaration's `#[path]` as it collects `cfg(test)`.
+- **`a_finding_on_an_old_line_counts_as_elsewhere` failed once.** `crates/gate/tests/golangci_lint.rs`: in a full local
+  `cargo nextest run --workspace` (2026-11-12, structural-checks/01), it failed, then passed run alone; the message was
+  not kept. A second failure gets a ticket.

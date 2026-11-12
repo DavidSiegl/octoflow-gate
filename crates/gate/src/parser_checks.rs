@@ -287,7 +287,8 @@ type TreeFiles = Vec<(OsString, Vec<u8>)>;
 
 /// (path, bytes) of each of the tree's tracked regular files outside mutmut's state ([`under_mutmut_state`]) whose
 /// path ends in `suffix`, as `change`'s base holds them and as its working tree does. A base path is the file's there,
-/// which the change may rename. Errs when git cannot list the files or show one at the base, or one cannot be read in the working tree.
+/// which the change may rename. Errs when git cannot list the files or show one at the base, or one cannot be read in
+/// the working tree.
 fn trees(change: &Change, suffix: &[u8]) -> Result<(TreeFiles, TreeFiles), Unjudged> {
     let listed = git::output(&change.root, &["ls-files", "-z"])?;
     let mut now = vec![];

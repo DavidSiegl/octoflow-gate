@@ -665,9 +665,9 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   (`crates/lang-rust/src/imports.rs`) "looks back through siblings, the pattern e7f9115 removed for test detection",
   via `syntax::preceding_attributes`, while `walk_children` passes each item's attributes as it walks them. Closes with
   `walk_children` collecting a `mod` declaration's `#[path]` as it collects `cfg(test)`.
-- **`a_finding_on_an_old_line_counts_as_elsewhere` failed once.** `crates/gate/tests/golangci_lint.rs`: in a full local
-  `cargo nextest run --workspace` (2026-11-12, structural-checks/01), it failed, then passed run alone; the message was
-  not kept. A second failure gets a ticket.
+- **`crates/gate/tests/golangci_lint.rs` is flaky.** `a_finding_on_an_old_line_counts_as_elsewhere` failed once in a
+  full local `cargo nextest run --workspace` (2026-11-12), and `a_finding_on_an_added_line_is_an_issue` on Jenkins
+  (PR-41 #1): golangci-lint exited 3 with "Error: parallel golangci-lint is running". Ticket load-flakes/02.
 - **dependency-cycles does not read an edit to the line that decides whether an import counts.** As cross-review 24 put
   it (F11, 2026-11-12): "Base `src/a.rs`: `#[cfg(test)]\nuse crate::b::X;`, `src/b.rs`: `use crate::a::Y;`. The change
   edits only line 1 to `#[cfg(feature = "x")]`. a → b is now an edge the base lacked, but `added` for a.rs is {1},

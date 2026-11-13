@@ -169,9 +169,10 @@ pub struct TestGroup {
 pub struct Weakening {
     pub line: u32,
     pub kind: WeakeningKind,
-    /// The code that weakens, whole, with every whitespace character left out: the attribute or decorator with its
-    /// arguments, the call, the clause or the comment. Two weakenings of the same code have the same one however each
-    /// is indented or wrapped; test-integrity tells a test's old weakening from a new one by it.
+    /// The code that weakens, whole, in a form that only that code has: the attribute or decorator with its
+    /// arguments, the call, the clause or the comment. Two writings of the same code have the same one however each is
+    /// laid out, and the same as far as the language's reader takes two test bodies for the same ([`Test::body`]);
+    /// test-integrity tells a test's old weakening from a new one by it.
     pub code: String,
     /// The finding's message: what was added and what it does, as "`#[ignore]` added: it skips a test or turns it
     /// off."
@@ -236,7 +237,7 @@ pub struct Import {
 /// other files in the order they are written; a file that imports none of them maps to none.
 pub type ImportGraph = std::collections::BTreeMap<std::ffi::OsString, Vec<Import>>;
 
-/// `text` with every whitespace character left out, as [`Weakening::code`] holds code.
+/// `text` with every whitespace character left out: the same for two layouts of code, as for [`Weakening::code`].
 pub fn without_whitespace(text: &str) -> String {
     text.chars().filter(|c| !c.is_whitespace()).collect()
 }

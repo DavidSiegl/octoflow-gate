@@ -179,6 +179,22 @@ fn a_test_moved_with_the_decorators_it_had_adds_no_skip_but_one_added_on_the_way
     // A skip in the body moves with it when the body is the same.
     let base = "import pytest\n\n\ndef test_b():\n    pytest.skip('no')\n    assert 1\n";
     assert_eq!(found(&[deleted(OTHER_PATH, base), added("tests/test_new.py", base)]).0, []);
+    // However its quotes, trailing commas and comments are rewritten on the way, as black and an editor do.
+    let rewritten = base.replace("'no')", "\"no\",)  # still");
+    assert_eq!(found(&[deleted(OTHER_PATH, base), added("tests/test_new.py", &rewritten)]).0, []);
+}
+
+#[test]
+fn a_kept_test_s_mark_moved_to_another_parametrized_case_is_found() {
+    let base = "import pytest\n\n\n@pytest.mark.parametrize('n', [\n    pytest.param(1, marks=pytest.mark.xfail),\n    \
+                pytest.param(2),\n])\ndef test_b(n):\n    assert n\n";
+    let moved = base
+        .replace("pytest.param(1, marks=pytest.mark.xfail)", "pytest.param(1)")
+        .replace("pytest.param(2)", "pytest.param(2, marks=pytest.mark.xfail)");
+    assert_eq!(found(&[edited(OTHER_PATH, base, &moved)]).0, [at(OTHER_PATH, 6, "skip")]);
+    // A case added beside it leaves the mark its own.
+    let added_case = base.replace("    pytest.param(2),\n", "    pytest.param(2),\n    pytest.param(3),\n");
+    assert_eq!(found(&[edited(OTHER_PATH, base, &added_case)]).0, []);
 }
 
 #[test]

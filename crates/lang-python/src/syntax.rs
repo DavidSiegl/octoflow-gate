@@ -289,6 +289,12 @@ fn prefix(string: Node, text: Text) -> String {
 /// What `root`'s code does, without its comments or its layout, as 16 hexadecimal digits: equal for two pieces of
 /// code with the same [`tokens`]. 64-bit FNV-1a (<http://www.isthe.com/chongo/tech/comp/fnv/>), as lang-rust's.
 pub fn digest(root: Node, text: Text) -> String {
+    digest_of(&[root], text)
+}
+
+/// [`digest`] of the code of `roots` read one after the other, as of the head of an `except` clause without its
+/// body.
+pub fn digest_of(roots: &[Node], text: Text) -> String {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     let mut add = |bytes: &[u8]| {
         // Each token ends with a byte no token holds, so that no two runs of tokens hash as one.
@@ -297,18 +303,20 @@ pub fn digest(root: Node, text: Text) -> String {
             hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
         }
     };
-    tokens(root, text, &mut |token| match token {
-        Token::Open(kind) => {
-            add(b"(");
-            add(kind.as_bytes());
-        }
-        Token::Close => add(b")"),
-        Token::Word(word) => add(word.as_bytes()),
-        Token::Literal(literal) => {
-            add(b"$");
-            add(literal.as_bytes());
-        }
-    });
+    for root in roots {
+        tokens(*root, text, &mut |token| match token {
+            Token::Open(kind) => {
+                add(b"(");
+                add(kind.as_bytes());
+            }
+            Token::Close => add(b")"),
+            Token::Word(word) => add(word.as_bytes()),
+            Token::Literal(literal) => {
+                add(b"$");
+                add(literal.as_bytes());
+            }
+        });
+    }
     format!("{hash:016x}")
 }
 

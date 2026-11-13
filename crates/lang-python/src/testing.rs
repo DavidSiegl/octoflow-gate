@@ -9,7 +9,7 @@ use tree_sitter::Node;
 
 use crate::binds::{binds, declared, deleted, How, SCOPES};
 use crate::syntax::{
-    children, decorated, digest, end_line, fields, line, named, of_kind, on_one_line, tokens, undecorated,
+    children, decorated, digest, digest_of, end_line, fields, line, named, of_kind, on_one_line, tokens, undecorated,
     unparenthesized, Text, Token,
 };
 
@@ -195,7 +195,8 @@ fn names_bound_in<'t>(node: Node, text: Text<'t>) -> HashSet<&'t str> {
 }
 
 /// The code that `node`, the name of a skip, is written in, whole: the decorator or call it names, with its
-/// arguments, or `node` itself where it is neither's.
+/// arguments, or `node` itself where it is neither's; and where that is passed in a call's arguments, as a mark in
+/// `pytest.param(2, marks=[pytest.mark.xfail])`, that call, which tells the parametrized case it marks.
 fn written_whole(node: Node) -> Node {
     let mut whole = node;
     while let Some(parent) = whole.parent() {
@@ -204,6 +205,14 @@ fn written_whole(node: Node) -> Node {
             break;
         }
         whole = parent;
+    }
+    let mut passed = whole;
+    while let Some(parent) = passed.parent() {
+        match parent.kind() {
+            "keyword_argument" | "list" | "tuple" => passed = parent,
+            "argument_list" => return parent.parent().unwrap_or(whole),
+            _ => break,
+        }
     }
     whole
 }
@@ -224,19 +233,20 @@ pub fn weakenings(root: Node, text: Text) -> Vec<Weakening> {
             out.push(Weakening {
                 line: line(node),
                 kind: WeakeningKind::Skip,
-                code: model::without_whitespace(text.of(written_whole(node))),
+                code: digest(written_whole(node), text),
                 message: format!("`{}` added: it skips a test or expects it to fail.", first_line(text.of(node))),
             });
         }
         if matches!(node.kind(), "except_clause" | "except_group_clause") && swallows(node, text) {
             // The clause up to the colon that opens its body.
             let colon = children(node).into_iter().find(|c| c.kind() == ":").map_or(node.end_byte(), |c| c.end_byte());
-            let head = text.0.get(node.start_byte()..colon).unwrap_or_default();
+            let written = text.0.get(node.start_byte()..colon).unwrap_or_default();
+            let head: Vec<Node> = children(node).into_iter().take_while(|c| c.end_byte() <= colon).collect();
             out.push(Weakening {
                 line: line(node),
                 kind: WeakeningKind::SwallowedError,
-                code: model::without_whitespace(head),
-                message: format!("`{}` added in a test: it hides the failure it catches.", first_line(head)),
+                code: digest_of(&head, text),
+                message: format!("`{}` added in a test: it hides the failure it catches.", first_line(written)),
             });
         }
         todo.extend(named(node).into_iter().rev());

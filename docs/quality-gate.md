@@ -152,10 +152,12 @@ change cannot weaken its tests unseen. Each of these is a finding:
   is none.
 
 A test kept, renamed or moved carries what weakened its old self: a `skip`, `platform-only` or `swallowed-error` on an
-added line is no finding when its old self had the same code there, its arguments included, whatever the layout. On
-the test's own decorators or attributes, above its `def` or `fn`, that holds always; in its body only when the body is
-the same, since an edited body's `cfg` or skip may now cover other statements. So moving a test with its `#[cfg(unix)]`
-or its `t.Skip` adds no skip, but an `#[ignore]` added on the way is still one, and so is a `skipif` whose condition
+added line is no finding when its old self had the same code there, its arguments included, whatever the layout,
+and in Go and Python whatever its comments, a string's quotes or a list's closing comma. A mark in a parametrized
+case, `pytest.param(2, marks=pytest.mark.xfail)`, is that case's, so one moved to another case is new. On the test's
+own decorators or attributes, above its `def` or `fn`, that holds always; in its body only when the body is the same,
+since an edited body's `cfg` or skip may now cover other statements. So moving a test with its `#[cfg(unix)]` or its
+`t.Skip` adds no skip, but an `#[ignore]` added on the way is still one, and so is a `skipif` whose condition
 changed.
 
 It reads Python, Rust and Go, and golden files whatever their language; another language is another front end beside
@@ -998,15 +1000,15 @@ line-length and inline-HTML rules. Only lines a change adds count, so what `main
 
 ## The report as a contract
 
-The gate writes one report two ways. `quality.json` is the contract with a program that reads it back: the JSON
-Schema [schema/quality-v1.json](../schema/quality-v1.json) says what each field holds, and its `schema_version` is
-raised on any change a reader could notice; adding an optional field does not raise it, so a reader ignores fields it
-does not know, and neither does a change to the words of a text field, as a finding's message or a failing test's
-detail, which may change in any release. It holds everything the quality file shows, as data and without the file's limits: every finding, with
-`fails` saying whether it fails the gate and a `fingerprint` that stays the same when the finding moves to another
-line or its message counts something else; every failing test, with its whole detail; and the strings as the gate read
-them, line breaks included. The failed conditions, and the text each fingerprint is taken over, are instead as the
-quality file writes them, a line break escaped, so that a reader gets the same condition and fingerprint from either
+The gate writes one report two ways. `quality.json` is the contract with a program that reads it back: the JSON Schema
+[schema/quality-v1.json](../schema/quality-v1.json) says what each field holds, and its `schema_version` is raised on
+any change a reader could notice; adding an optional field does not raise it, so a reader ignores fields it does not
+know, and neither does a change to the words of a text field, as a finding's message or a failing test's detail, which
+may change in any release. It holds everything the quality file shows, as data and without the file's limits: every
+finding, with `fails` saying whether it fails the gate and a `fingerprint` that stays the same when the finding moves to
+another line or its message counts something else; every failing test, with its whole detail; and the strings as the
+gate read them, line breaks included. The failed conditions, and the text each fingerprint is taken over, are instead as
+the quality file writes them, a line break escaped, so that a reader gets the same condition and fingerprint from either
 file. A reader checks itself against the `tests/golden/*.json` files, which the gate's tests hold its report to
 (`crates/gate/tests/golden_reports.rs`) and a release ships as `golden/`, each beside the quality file of the same
 report.

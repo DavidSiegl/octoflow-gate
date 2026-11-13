@@ -285,7 +285,7 @@ impl<'t> Walk<'t> {
             self.weakenings.push(Weakening {
                 line: line(node),
                 kind: WeakeningKind::Skip,
-                code: model::without_whitespace(self.text.of(node)),
+                code: digest(node, self.text),
                 message: format!("`{}` added: it skips a test.", first_line(self.text.of(node))),
             });
         }
@@ -316,7 +316,7 @@ impl<'t> Walk<'t> {
             self.weakenings.push(Weakening {
                 line: line(node),
                 kind: WeakeningKind::SwallowedError,
-                code: model::without_whitespace(self.text.of(node)),
+                code: digest(node, self.text),
                 message: format!(
                     "`{}` added in `{}`: its empty block throws away the error that would fail the test.",
                     first_line(self.text.of(node)),
@@ -381,7 +381,7 @@ impl<'t> Walk<'t> {
                 self.weakenings.push(Weakening {
                     line: line(node),
                     kind: WeakeningKind::SwallowedError,
-                    code: model::without_whitespace(self.text.of(node)),
+                    code: digest(node, self.text),
                     message: format!(
                         "`{}` added in `{}`: it throws away the error that would fail the test.",
                         first_line(self.text.of(node)),

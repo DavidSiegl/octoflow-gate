@@ -213,3 +213,11 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   a file's `#![cfg(test)]`, or the `#[cfg(test)] mod x;` in another file that makes all of `x.rs` test code. Closes
   with `model::Import::statement` taking in the lines that gate it (`cycles::added_line`), each front end giving the
   attribute, `if` or declaration lines it read the import under.
+- **test-integrity carries only a test's own weakenings, and in Rust compares them as text.** As cross-review 30 put it
+  (round 2, 2026-11-13): weakenings on a group or file (a class decorator, `pytestmark`, `#[cfg(..)] mod tests`,
+  `//go:build`) are not carried when the group moves, so a moved class's `skipif` is reported as new; and Rust's
+  `Weakening::code` is the attribute's text without whitespace (`skip` in `crates/lang-rust/src/skips.rs` joins every
+  skipping attribute on a line into one), so `#[cfg(unix)] #[ignore]` on one line before a move and on two after it, or
+  a comment edited inside an attribute, never match. Each is reported as under 0.11.1. Closes with `carried_weakenings`
+  (`crates/checks/src/integrity.rs`) matching groups as it matches tests, and lang-rust taking `code` from each
+  attribute's tokens, as lang-python and lang-go take it from their digest.

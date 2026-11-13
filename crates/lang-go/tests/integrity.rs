@@ -189,6 +189,10 @@ fn a_test_moved_with_its_skip_adds_none() {
                    if Add(1, 2) != 3 {\n\t\tt.Fatal(\"no\")\n\t}\n}\n";
     let moved = [deleted(TEST_PATH, skipped), added("calc/network_test.go", skipped)];
     assert_eq!(check(&moved), vec![]);
+    // However the comments in what weakens it are edited on the way.
+    let skipping = skipped.replace("t.Skip(\"needs network\")", "t.Skip( /* offline */ \"needs network\")");
+    let moved = [deleted(TEST_PATH, skipped), added("calc/network_test.go", &skipping)];
+    assert_eq!(check(&moved), vec![]);
 }
 
 #[test]

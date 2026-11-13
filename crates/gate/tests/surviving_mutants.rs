@@ -115,7 +115,7 @@ fn the_budget_running_out_is_a_finding() {
     // The unmutated tests pass at once, and each of checked's mutants makes them wait for cargo-mutants' 60-second
     // timeout: of the 60 seconds, less the 15 the stop may take, the baseline, a build of the package, has 45 however
     // loaded the machine is, and the first such mutant outlasts what is left. The numbers are mutants.rs's TEST_TIMEOUT
-    // and STOP_GRACE plus KILL_WAIT; a TEST_TIMEOUT under 45 would let the mutants finish inside the budget.
+    // and STOP_GRACE plus KILL_WAIT; a shorter TEST_TIMEOUT can let the mutants all finish inside the budget.
     let wait = "while calc::checked(3) != 6 {\n        std::thread::sleep(std::time::Duration::from_secs(1));\n    }";
     add_functions(&repo, "", "calc", wait);
     let found = findings(&repo, Some(60), &[]);

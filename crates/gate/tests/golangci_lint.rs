@@ -4,6 +4,10 @@
 //! No test here has golangci-lint outlive its timeout: that is a constant of ten minutes, and process.rs's own tests
 //! hold that a process past its timeout is killed with what it started.
 
+use std::ffi::CString;
+use std::io::Read;
+use std::os::fd::FromRawFd;
+use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -47,13 +51,36 @@ fn a_finding_on_an_added_line_is_an_issue() {
                           checked\n"), "{out}");
 }
 
-/// Whether a process named golangci-lint runs with `dir` as its working directory, as /proc shows.
-fn golangci_lint_runs_in(dir: &Path) -> bool {
-    let processes = std::fs::read_dir("/proc").expect("listing /proc for golangci-lint's process");
-    processes.flatten().any(|process| {
-        let comm = std::fs::read(process.path().join("comm")).unwrap_or_default();
-        comm == b"golangci-lint\n" && std::fs::read_link(process.path().join("cwd")).is_ok_and(|cwd| cwd == dir)
-    })
+/// A watch on one file through inotify(7) for its being opened, by any process. Dropping it ends the watch.
+struct Opens(std::fs::File);
+
+impl Opens {
+    /// Watches `path`, which must exist; opens before the call are not seen. Panics when inotify refuses.
+    fn of(path: &Path) -> Opens {
+        // SAFETY: inotify_init1 reads no memory, and the descriptor it returns is the File's alone.
+        #[allow(unsafe_code, reason = "inotify(7) has no wrapper in std")]
+        let fd = unsafe { libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC) };
+        assert!(fd >= 0, "inotify_init1: {}", std::io::Error::last_os_error());
+        // SAFETY: fd is the open descriptor inotify_init1 returned, owned by nothing else.
+        #[allow(unsafe_code, reason = "inotify(7) has no wrapper in std")]
+        let watch = unsafe { std::fs::File::from_raw_fd(fd) };
+        let name = CString::new(path.as_os_str().as_bytes()).unwrap();
+        // SAFETY: name is a NUL-terminated string that outlives the call.
+        #[allow(unsafe_code, reason = "inotify(7) has no wrapper in std")]
+        let added = unsafe { libc::inotify_add_watch(fd, name.as_ptr(), libc::IN_OPEN) };
+        assert!(added >= 0, "inotify_add_watch on {}: {}", path.display(), std::io::Error::last_os_error());
+        Opens(watch)
+    }
+
+    /// Whether the file was opened since the watch began or since this last answered true; it does not wait.
+    fn seen(&mut self) -> bool {
+        let mut events = [0; 4096];
+        match self.0.read(&mut events) {
+            Ok(n) => n > 0,
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => false,
+            Err(err) => panic!("reading the lock's inotify events: {err}"),
+        }
+    }
 }
 
 #[test]
@@ -66,27 +93,26 @@ fn another_golangci_lint_running_makes_it_wait_not_fail() {
     std::fs::create_dir_all(&tmp).unwrap();
     let lock = std::fs::File::create(tmp.join("golangci-lint.lock")).unwrap();
     lock.lock().unwrap();
-    // Held for ten seconds from when the gate's golangci-lint is seen in the module, or until the gate is done.
-    // golangci-lint takes the lock seconds into its run, after loading the packages, and one that waits for it shows
-    // nothing of that, holding no descriptor of the file between tries; one that fails on it fails within the ten.
-    // The holder answers whether it held the lock for all ten seconds with the gate still running, the one sign that
-    // the gate met the lock; returning early drops the file, which lets the lock go.
-    let module = repo.repo.join("calc").canonicalize().unwrap();
+    // Held for ten seconds from the gate's golangci-lint first trying it, which it does as it starts, opening the file
+    // and trying again each second: without --allow-serial-runners it gives up after five seconds, with it it waits
+    // (acquireFileLock in golangci-lint's pkg/commands/run.go). The holder answers whether the gate met the lock and
+    // outlasted the hold; returning early drops the file, which lets the lock go.
+    let mut opens = Opens::of(&tmp.join("golangci-lint.lock"));
     let gate_done = Arc::new(AtomicBool::new(false));
     let holder = std::thread::spawn({
         let gate_done = Arc::clone(&gate_done);
         move || {
             let seen_by = Instant::now() + Duration::from_secs(120);
-            while !golangci_lint_runs_in(&module) {
+            while !opens.seen() {
                 if gate_done.load(Ordering::SeqCst) || Instant::now() > seen_by {
-                    return Err("no golangci-lint was seen in calc/ while the gate ran, within two minutes");
+                    return Err("nothing opened the lock while the gate ran, within two minutes");
                 }
                 std::thread::sleep(Duration::from_millis(20));
             }
-            let deadline = Instant::now() + Duration::from_secs(10);
-            while Instant::now() < deadline {
+            let release = Instant::now() + Duration::from_secs(10);
+            while Instant::now() < release {
                 if gate_done.load(Ordering::SeqCst) {
-                    return Err("the gate was done within ten seconds of its golangci-lint starting");
+                    return Err("the gate was done while the lock its golangci-lint asked for was held");
                 }
                 std::thread::sleep(Duration::from_millis(20));
             }

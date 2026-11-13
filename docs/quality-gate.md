@@ -1001,7 +1001,8 @@ line-length and inline-HTML rules. Only lines a change adds count, so what `main
 The gate writes one report two ways. `quality.json` is the contract with a program that reads it back: the JSON
 Schema [schema/quality-v1.json](../schema/quality-v1.json) says what each field holds, and its `schema_version` is
 raised on any change a reader could notice; adding an optional field does not raise it, so a reader ignores fields it
-does not know. It holds everything the quality file shows, as data and without the file's limits: every finding, with
+does not know, and neither does a change to the words of a text field, as a finding's message or a failing test's
+detail, which may change in any release. It holds everything the quality file shows, as data and without the file's limits: every finding, with
 `fails` saying whether it fails the gate and a `fingerprint` that stays the same when the finding moves to another
 line or its message counts something else; every failing test, with its whole detail; and the strings as the gate read
 them, line breaks included. The failed conditions, and the text each fingerprint is taken over, are instead as the

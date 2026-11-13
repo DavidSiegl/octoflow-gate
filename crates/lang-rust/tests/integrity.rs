@@ -108,6 +108,23 @@ fn a_test_moved_into_another_file_under_another_name_is_not_removed() {
 }
 
 #[test]
+fn a_test_moved_with_the_skips_it_had_adds_none_but_a_skip_added_on_the_way_is_found() {
+    let large = "    #[test]\n    fn adds_large() {\n        assert_eq!(add(10, 20), 30);\n    }\n";
+    let moved = |attributes: &str| {
+        edit(IT, "use tiny::add;\n", &format!("use tiny::add;\n\n#[test]\n{attributes}fn large() {{\n    assert_eq!(add(10, 20), 30);\n}}\n"))
+    };
+    let had = |attributes: &str| edit(LIB, large, &format!("    #[test]\n{attributes}    fn adds_large() {{\n        assert_eq!(add(10, 20), 30);\n    }}\n"));
+    let lib = edit(LIB, large, "");
+    let base = had("    #[cfg(unix)]\n    #[ignore]\n");
+    let it = moved("#[cfg(unix)]\n#[ignore]\n");
+    assert_eq!(check(&[edited(LIB_PATH, &base, &lib), edited(IT_PATH, IT, &it)]), vec![]);
+    let base = had("    #[cfg(unix)]\n");
+    let found = check(&[edited(LIB_PATH, &base, &lib), edited(IT_PATH, IT, &it)]);
+    assert_eq!(wheres(&found), vec![at(IT_PATH, Some(5), "skip")]);
+    assert_eq!(found[0].message, "`#[ignore]` added: it skips a test or turns it off.");
+}
+
+#[test]
 fn an_inline_module_whose_tests_all_went_is_one_finding() {
     let lib = &LIB[..LIB.find("\n#[cfg(test)]").unwrap()];
     let found = check(&[edited(LIB_PATH, LIB, lib)]);

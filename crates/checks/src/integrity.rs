@@ -2,10 +2,10 @@
 //! and the expected values it changed together with the code under test, for the languages whose front ends give the
 //! model; docs/quality-gate.md, "Test integrity", says what each finding means.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::ffi::OsString;
 
-use model::{first_line, Assertion, SourceFile, Test, WeakeningKind};
+use model::{first_line, Assertion, SourceFile, Test, Weakening, WeakeningKind};
 
 use crate::{ChangedFile, Finding};
 
@@ -21,7 +21,8 @@ const CHECK: &str = "test-integrity";
 ///   it stayed, the assertions of the two sides aligned as Python's difflib aligns sequences; and a constant of the
 ///   file's base ([`model::Constant`]) that a kept test's assertions name on both sides and that the change edited or
 ///   made no constant, at the first assertion now naming it;
-/// - skip, platform-only and swallowed-error: each [`model::Weakening`] on a line the change added;
+/// - skip, platform-only and swallowed-error: each [`model::Weakening`] on a line the change added, but for one on a
+///   test's own attributes that its old self, kept or renamed or moved, already carried;
 /// - unreadable: a test file, one the settings place among the tests or with test code on a side, that its front end
 ///   could not read as a whole on a side ([`model::Unreadable`] with no line, as for one that is not UTF-8), which is
 ///   all the check says of it: which tests the change removed or weakened cannot be told;
@@ -37,6 +38,8 @@ pub fn weakened_tests(files: &[ChangedFile], code_changed: bool) -> Vec<Finding>
     // The tests of each file the check reads, at the base and in the working tree, by its index in files.
     let mut before: Vec<Keyed> = vec![];
     let mut after: Vec<Keyed> = vec![];
+    // The indices in files of the files whose tests it reads.
+    let mut read = vec![];
     for (k, file) in files.iter().enumerate() {
         let (base, now) = (file.base(), file.now());
         let held = |source: Option<&SourceFile>| source.is_some_and(|s| !s.test_lines.is_empty());
@@ -57,22 +60,24 @@ pub fn weakened_tests(files: &[ChangedFile], code_changed: bool) -> Vec<Finding>
         }
         before.extend(keyed(k, base));
         after.extend(keyed(k, now));
-        out.extend(added_weakenings(file));
+        read.push(k);
     }
-    out.extend(removed_tests(files, &before, &after));
-    out.extend(kept_tests(files, &before, &after, code_changed));
+    let matching = Matching::of(&before, &after);
+    let carried = carried_weakenings(files, &matching);
+    for k in read {
+        out.extend(added_weakenings(&files[k], &carried));
+    }
+    out.extend(removed_tests(files, &matching.removed));
+    out.extend(kept_tests(files, &matching.kept, code_changed));
     out.sort_by(|a, b| (&a.path, a.line.unwrap_or(0)).cmp(&(&b.path, b.line.unwrap_or(0))));
     out
 }
 
-/// The findings on the tests the change kept, those of `after`, the tests of `files` in the working tree, with a test
-/// of their key in `before`, the tests at the base: what [`kept_test`] finds of each and, when `code_changed`, what
-/// [`changed_constants`] does.
-fn kept_tests(files: &[ChangedFile], before: &[Keyed], after: &[Keyed], code_changed: bool) -> Vec<Finding> {
-    let at_base: HashMap<Key, &Keyed> = before.iter().map(|t| (t.key(), t)).collect();
+/// The findings on the tests of `files` the change kept, `kept` as [`Matching::kept`] pairs them: what [`kept_test`]
+/// finds of each and, when `code_changed`, what [`changed_constants`] does.
+fn kept_tests(files: &[ChangedFile], kept: &[(&Keyed, &Keyed)], code_changed: bool) -> Vec<Finding> {
     let mut out = vec![];
-    for t in after {
-        let Some(was) = at_base.get(&t.key()) else { continue };
+    for (was, t) in kept {
         let file = &files[t.file];
         let path = file.after.as_ref().map(|a| &a.path);
         out.extend(kept_test(path, was.test, t.test, code_changed));
@@ -148,25 +153,71 @@ fn keyed(file: usize, source: Option<&SourceFile>) -> Vec<Keyed<'_>> {
         .collect()
 }
 
-/// The removed-test findings: `before` and `after` are the tests of `files` at the base and in the working tree, as
-/// [`weakened_tests`] reads them. A test whose body reappears in a test of a new key, in any file, is not removed:
-/// each such new test accounts for one.
-fn removed_tests(files: &[ChangedFile], before: &[Keyed], after: &[Keyed]) -> Vec<Finding> {
-    let now: Vec<Key> = after.iter().map(Keyed::key).collect();
-    let was: Vec<Key> = before.iter().map(Keyed::key).collect();
-    let mut bodies: HashMap<&str, usize> = HashMap::new();
-    for t in after.iter().filter(|t| !was.contains(&t.key())) {
-        *bodies.entry(t.test.body.as_str()).or_default() += 1;
+/// How the tests of a change's files match their old selves, `before` and `after` as [`weakened_tests`] reads them.
+struct Matching<'k, 't> {
+    /// (at the base, in the working tree) for each test of one key on both sides, in the working tree's order.
+    kept: Vec<(&'k Keyed<'t>, &'k Keyed<'t>)>,
+    /// (at the base, in the working tree) for each test gone from its key whose body a test of a new key has, in any
+    /// file: renamed or moved. Each test of a new key is the new self of one at most, the first of its body in turn.
+    moved: Vec<(&'k Keyed<'t>, &'k Keyed<'t>)>,
+    /// The tests of the base that match none: removed.
+    removed: Vec<&'k Keyed<'t>>,
+}
+
+impl<'k, 't> Matching<'k, 't> {
+    /// The matching of `before`, the tests at the base, with `after`, those in the working tree.
+    fn of(before: &'k [Keyed<'t>], after: &'k [Keyed<'t>]) -> Self {
+        let at_base: HashMap<Key, &Keyed> = before.iter().map(|t| (t.key(), t)).collect();
+        let now: HashSet<Key> = after.iter().map(Keyed::key).collect();
+        let mut kept = vec![];
+        // The tests of a new key, by body, in the working tree's order.
+        let mut new: HashMap<&str, VecDeque<&Keyed>> = HashMap::new();
+        for t in after {
+            match at_base.get(&t.key()) {
+                Some(was) => kept.push((*was, t)),
+                None => new.entry(t.test.body.as_str()).or_default().push_back(t),
+            }
+        }
+        let (mut moved, mut removed) = (vec![], vec![]);
+        for t in before.iter().filter(|t| !now.contains(&t.key())) {
+            match new.get_mut(t.test.body.as_str()).and_then(VecDeque::pop_front) {
+                Some(again) => moved.push((t, again)),
+                None => removed.push(t),
+            }
+        }
+        Matching { kept, moved, removed }
     }
-    let mut removed: BTreeMap<usize, Vec<&Keyed>> = BTreeMap::new();
-    for t in before.iter().filter(|t| !now.contains(&t.key())) {
-        match bodies.get_mut(t.test.body.as_str()) {
-            Some(n) if *n > 0 => *n -= 1,
-            _ => removed.entry(t.file).or_default().push(t),
+}
+
+/// The weakenings in the working tree of `files` that a test the change kept, renamed or moved carried at the base,
+/// as `matching` pairs them: of those on a test's own attributes or decorators, from its first line to that of its
+/// `fn` or `def`, each that equals one on its old self's, in kind and message. Each of the base's is carried by one.
+fn carried_weakenings<'f>(files: &'f [ChangedFile], matching: &Matching) -> Vec<&'f Weakening> {
+    let on = |source: Option<&'f SourceFile>, test: &Test| {
+        let lines = test.lines.first..=test.line;
+        source.into_iter().flat_map(|s| &s.weakenings).filter(move |w| lines.contains(&w.line))
+    };
+    let mut out = vec![];
+    for (was, now) in matching.kept.iter().chain(&matching.moved) {
+        let mut had: Vec<&Weakening> = on(files[was.file].base(), was.test).collect();
+        for w in on(files[now.file].now(), now.test) {
+            if let Some(k) = had.iter().position(|h| h.kind == w.kind && h.message == w.message) {
+                had.swap_remove(k);
+                out.push(w);
+            }
         }
     }
+    out
+}
+
+/// The removed-test findings on `removed`, tests of `files` at the base that match none in the working tree.
+fn removed_tests(files: &[ChangedFile], removed: &[&Keyed]) -> Vec<Finding> {
+    let mut by_file: BTreeMap<usize, Vec<&Keyed>> = BTreeMap::new();
+    for t in removed {
+        by_file.entry(t.file).or_default().push(t);
+    }
     let mut out = vec![];
-    for (k, gone) in removed {
+    for (k, gone) in by_file {
         let file = &files[k];
         let Some(base) = file.base() else { continue };
         let path = file.before.as_ref().map(|b| &b.path);
@@ -281,10 +332,12 @@ fn changed_constants(path: Option<&OsString>, was: (&Test, &SourceFile), now: (&
     out
 }
 
-/// The findings on the [`model::Weakening`]s of `file` in the working tree that lie on lines the change added.
-fn added_weakenings(file: &ChangedFile) -> Vec<Finding> {
+/// The findings on the [`model::Weakening`]s of `file` in the working tree that lie on lines the change added, but
+/// for those among `carried`, which [`carried_weakenings`] gives.
+fn added_weakenings(file: &ChangedFile, carried: &[&Weakening]) -> Vec<Finding> {
     let (Some(now), Some(side)) = (file.now(), &file.after) else { return vec![] };
-    let added = now.weakenings.iter().filter(|w| file.added.contains(&w.line));
+    let added = (now.weakenings.iter())
+        .filter(|w| file.added.contains(&w.line) && !carried.iter().any(|c| std::ptr::eq(*c, *w)));
     added
         .map(|w| {
             let fails = w.kind != WeakeningKind::PlatformOnly;

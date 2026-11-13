@@ -169,6 +169,16 @@ fn added_skips_are_found_at_their_lines() {
 }
 
 #[test]
+fn a_test_moved_with_the_decorators_it_had_adds_no_skip_but_one_added_on_the_way_is_found() {
+    let base = "import pytest\n\n\n@pytest.mark.xfail\ndef test_b():\n    assert 1\n";
+    let moved = "import pytest\n\n\n@pytest.mark.slow\n@pytest.mark.xfail\ndef test_bee():\n    assert 1\n";
+    assert_eq!(found(&[deleted(OTHER_PATH, base), added("tests/test_new.py", moved)]).0, []);
+    let skipped = moved.replace("@pytest.mark.slow\n", "@pytest.mark.skip\n");
+    let (place, _) = found(&[deleted(OTHER_PATH, base), added("tests/test_new.py", &skipped)]);
+    assert_eq!(place, [at("tests/test_new.py", 4, "skip")]);
+}
+
+#[test]
 fn a_skip_is_a_name_python_reads_not_one_it_binds_or_passes_by_keyword() {
     let other =
         format!("{OTHER_TESTS}\n\nfrom unittest import skip as skipIf\n\n\ndef test_c(xfail=1):\n\

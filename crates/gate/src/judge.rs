@@ -260,12 +260,16 @@ fn judge_checks(
 /// The lines the change added that its coverage is judged on: all but those of Rust test code in the working tree, as
 /// its front end reads it (model::SourceFile::test_lines), a `#[cfg(test)]` item or a file among the tests whole. A
 /// passing test runs its own lines, so they would cover the code it lacks tests of. A file the front end could not
-/// read keeps every line.
+/// read keeps every line, unless the project's settings place it among the tests (checks::Side::among_tests).
 fn lines_to_cover(rust: &RustChange) -> ChangedLines {
     let mut out = rust.change.changed.clone();
     for side in rust.files.iter().filter_map(|f| f.after.as_ref()) {
-        let (Some(added), Ok(source)) = (out.get_mut(&side.path), &side.source) else { continue };
-        added.retain(|&n| !source.test_lines.iter().any(|l| l.holds(n)));
+        let Some(added) = out.get_mut(&side.path) else { continue };
+        match &side.source {
+            Ok(source) => added.retain(|&n| !source.test_lines.iter().any(|l| l.holds(n))),
+            Err(_) if side.among_tests => added.clear(),
+            Err(_) => {}
+        }
     }
     out
 }

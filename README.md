@@ -108,8 +108,9 @@ change](docs/quality-gate.md#whose-rules-judge-a-change) says.
 ## Settings: `gate.toml`
 
 Which files are tests, which go with them, which hold expected output, which the complexity check leaves alone, which
-take part in no dependency cycle, which further files are build configuration, which files each linter reads, the
-checks' time budgets and the commands that run the tests: a `gate.toml` at the project's top level says each, or the
+take part in no dependency cycle, which duplicated-blocks leaves alone and the shortest block it reports, which further
+files are build configuration, which files each linter reads, the checks' time budgets and the commands that run the
+tests: a `gate.toml` at the project's top level says each, or the
 file `--config` names. Every key has a default, so a project without one is judged as the gate always judged; [the
 gate's settings](docs/quality-gate.md#the-gates-settings) lists them. An unknown key or a value of the wrong kind
 exits 2.

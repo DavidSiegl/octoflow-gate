@@ -357,20 +357,23 @@ take part in no cycle.
 **Duplicated blocks** finds a block of code a change adds that the tree already holds elsewhere, or that the change
 adds twice: a copy is logic that has to be fixed twice, and a change is where it enters. It runs on the languages the
 change holds Python, Rust or Go of, `crates/checks/src/duplicates.rs` comparing the tokens the front ends read
-(`code_tokens` in `crates/lang-python`, `crates/lang-rust` and `crates/lang-go`) of every file of the language the
-working tree tracks outside `mutants/`, by its name (`.py`, `.rs`, or `.go` where the Go front end reads it, generated
-files left out). A name stands for what kind of name it is and a literal for what kind of literal, so a copy whose
-names and values were changed is still a copy; keywords, operators and punctuation stand for themselves. Comments,
-`use` and `import` statements, Go's `package` clause and Rust's test code (`#[cfg(test)]` items) are no tokens.
+(`code_tokens` in `crates/lang-python`, `crates/lang-rust` and `crates/lang-go`) of every file the working tree
+tracks outside `mutants/` that holds the language as the other checks tell it: a `.py` name or a `#!` line naming
+python, a `.rs` name, a `.go` name inside a Go module, generated Go left out. A name stands for what kind of name it is
+and a literal for what kind of literal, so a copy whose names and values were changed is still a copy; keywords,
+operators and punctuation stand for themselves. Comments, `use`, `extern crate` and `import` statements, Go's
+`package` clause and Rust's test code (whatever `#[cfg(test)]` marks) are no tokens.
 
 A `duplicated-blocks` finding, never failing, lies at the first line of a run of at least `min-tokens` tokens, 50 by
 default, all on lines the change added, that equal a run elsewhere: in another file, in the same file where the two do
 not overlap, or a second time in the change. It names the other place as `path:line` and the run's length in tokens.
 Overlapping copied runs of a file are one finding, naming the place that matches most of them, one the tree held before
-one the change added. A block the change adds twice is one finding, at the later copy by path and line. The files the
-settings exempt, by default the tests, fixtures and `testdata`, are neither judged nor matched: tests of one shape
-repeat each other by design. Nothing is read at the base: a block the change moves leaves no copy behind. No comment
-suppresses a finding; it is one to weigh.
+one the change added. A block the change adds twice, and the tree holds nowhere else, is one finding, at the later copy
+by path and line; where the tree holds it too, each copy is a finding naming the tree's. A stretch of `min-tokens`
+tokens that the judged files hold more than 32 times is a pattern, a table or a row of like statements, not a copy. The
+files the settings exempt, by default the tests, fixtures and `testdata`, are neither judged nor matched: tests of one
+shape repeat each other by design. Nothing is read at the base: a block the change moves leaves no copy behind. No
+comment suppresses a finding; it is one to weigh.
 
 **Flaky tests** reruns the tests the change adds or edits, so a test that passed the build's one run by luck of
 the order is caught. A test counts when the change adds or removes a line of it in a test file outside `mutants/`, as

@@ -252,7 +252,8 @@ removing one or changing its output is not seen (#73). The findings are Python's
 - `swallowed-error`: on an added line anywhere in the file, `_ = err`, or an `if err != nil {}` whose block holds no
   statement, its lines those from the `if` to the block's `{`, `err` being a name Go gives an error by habit: `err`,
   `err` then a capital or a digit, or a name ending in `Err`. A parser knows no types, so an error thrown away under
-  another name, or as `v, _ := f()`, is not seen;
+  another name, or as `v, _ := f()`, is not seen; nor is a block the change empties by deleting or commenting out its
+  statements, since that adds no line from its `if` to its `{`;
 - `expected-value-changed`: as Rust's, an assertion whose literals (numbers, runes and strings) changed while its shape
   stayed, an `if`'s initializer and condition included, in a change that also edits Go code outside the tests.
   Constants and a table-driven test's table of cases are not followed, so an expected value held there is not seen;

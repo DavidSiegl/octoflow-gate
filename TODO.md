@@ -150,6 +150,13 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   `crates/lang-go/src/testing.rs` reports `_ = err` alone, an identifier named as an error: left out on purpose, since
   a parser knows no types and both forms are common for values that are no error (`v, _ := m[k]`). Found with
   go-support/01 (2026-11-11). Closes only with the types, which the gate does not read.
+- **A Go error block emptied by the change is not seen.** As cross-review 30 put it (R9-1, 2026-11-13): a change that
+  turns `if err != nil { t.Fatal(err) }` into the same block with `// t.Fatal(err)`, or deletes the statement, "adds
+  only the comment line, which is no line of the weakening, and the `if` and `{` lines are kept". An
+  `if err != nil {}`'s lines end at its block's `{` (`if_statement` in `crates/lang-go/src/testing.rs`), so that an
+  edit to a comment in the block or to an `else` after it is none; 0.11.1, which looked at the `if` line alone, missed
+  both too. Deferred by the user (2026-11-13). Closes with test-integrity finding an empty error block whose block held
+  a statement at the base, when the change edited the block.
 - **A dot-imported testify package's calls are not assertions.** `Imports::of` in `crates/lang-go/src/testing.rs`
   skips an import named `.` or `_`, so with `import . "github.com/stretchr/testify/assert"` a test's
   `Equal(t, 3, Add(1, 2))` is no assertion, and removing it or changing its 3 beside the code is not seen. Rare, and

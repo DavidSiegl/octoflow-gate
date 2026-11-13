@@ -1,4 +1,5 @@
-<!-- The languages badge repeats the languages the first sentence below names: a change to one changes both. -->
+<!-- The languages badge repeats the languages the first sentence below names, and docs/quality-gate.md's "It reads
+     Python, Rust and Go": a change to one changes all three. -->
 <!-- pyml disable-next-line first-line-heading -->
 <p align="center">
   <a href="https://github.com/DavidSiegl/octoflow-gate/releases/latest"><img src="https://img.shields.io/github/v/release/DavidSiegl/octoflow-gate" alt="Latest release"></a>

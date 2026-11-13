@@ -252,7 +252,7 @@ fn a_platform_cfg_with_another_condition_or_inside_a_test_is_a_skip() {
         "#[test]\n#[cfg(feature = \"slow\")]\n#[cfg(all(unix, feature = \"x\"))]\nfn negative",
     );
     let it = edit(&it, "#[tokio::test]\n", "#[tokio::test]\n#[cfg(all(unix, not(test)))]\n");
-    // A skip after a wrapped platform cfg's closing bracket, on a line that does not start with `#`.
+    // A skip after a wrapped platform cfg's closing bracket, at its own line, the platform cfg weighed at its.
     let lib = edit(LIB, "#[cfg(test)]\n", "#[cfg(test)]\n#[cfg(any(\n    unix,\n))] #[cfg(miri)]\n");
     let lib = edit(&lib, "    #[test]\n    fn adds_small", "    #[test] #[cfg(unix)] #[ignore]\n    fn adds_small");
     let lib =
@@ -262,7 +262,8 @@ fn a_platform_cfg_with_another_condition_or_inside_a_test_is_a_skip() {
     assert_eq!(
         wheres(&found),
         vec![
-            at(LIB_PATH, Some(6), "skip"),
+            at(LIB_PATH, Some(6), "platform-only"),
+            at(LIB_PATH, Some(8), "skip"),
             at(LIB_PATH, Some(12), "skip"),
             at(LIB_PATH, Some(19), "skip"),
             at(LIB_PATH, Some(21), "skip"),
@@ -271,8 +272,8 @@ fn a_platform_cfg_with_another_condition_or_inside_a_test_is_a_skip() {
             at(IT_PATH, Some(11), "skip"),
         ]
     );
-    assert_eq!(found[0].message, "`#[cfg(miri)]` added: it skips a test or turns it off.");
-    assert_eq!(found[1].message, "`#[ignore]` added: it skips a test or turns it off.");
+    assert_eq!(found[1].message, "`#[cfg(miri)]` added: it skips a test or turns it off.");
+    assert_eq!(found[2].message, "`#[ignore]` added: it skips a test or turns it off.");
 }
 
 #[test]
@@ -543,6 +544,32 @@ fn brackets_in_a_string_literal_do_not_hide_a_skip_after_it_on_the_line() {
 }
 
 #[test]
-fn an_attribute_inside_a_string_is_read_as_one() {
-    assert_eq!(module_skips("#[doc = \"#[ignore]\"]").len(), 1);
+fn an_attribute_inside_a_string_is_none() {
+    assert_eq!(module_skips("#[doc = \"#[ignore]\"]"), Vec::<String>::new());
+}
+
+#[test]
+fn a_module_s_and_a_statement_s_attributes_are_found_wherever_they_are_written_on_their_lines() {
+    let found = |after: &str| wheres(&check(&[edited(LIB_PATH, LIB, after)]));
+    // On the line of the `mod` it turns off, before the `mod`.
+    assert_eq!(found(&edit(LIB, "mod tests {", "#[cfg(miri)] mod tests {")), vec![at(LIB_PATH, Some(6), "skip")]);
+    // After code on a test's line, and wrapped with its `ignore` on a later line.
+    let large = "        assert_eq!(add(10, 20), 30);\n";
+    let after = edit(LIB, large, "        let x = 30; #[cfg(miri)] assert_eq!(add(10, 20), x);\n");
+    assert_eq!(found(&after), vec![at(LIB_PATH, Some(17), "skip")]);
+    let after = edit(LIB, large, &format!("        #[cfg_attr(\n            miri,\n            ignore\n        )]\n{large}"));
+    assert_eq!(found(&after), vec![at(LIB_PATH, Some(17), "skip")]);
+}
+
+#[test]
+fn an_attribute_in_a_string_literal_skips_nothing() {
+    let large = "        assert_eq!(add(10, 20), 30);\n";
+    // A line of a multi-line string in a test's body that starts as an attribute.
+    let after = edit(LIB, large, &format!("        let fixture = \"\n#[ignore]\n#[cfg(miri)]\nfn f() {{}}\n\";\n{large}"));
+    assert_eq!(check(&[edited(LIB_PATH, LIB, &after)]), vec![]);
+    // A raw string ending in `\` before a test's existing skip whose body holds a `]` in a string.
+    let base = edit(LIB, "    #[test]\n    fn adds_large", "    #[test]\n    #[ignore]\n    fn adds_large");
+    let base = edit(&base, large, &format!("        let s = \"a]b\";\n{large}"));
+    let after = edit(&base, "#[cfg(test)]\n", "#[doc = r\"C:\\\"]\n#[cfg(test)]\n");
+    assert_eq!(check(&[edited(LIB_PATH, &base, &after)]), vec![]);
 }

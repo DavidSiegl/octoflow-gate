@@ -1,86 +1,53 @@
-//! The attributes that skip a Rust test or turn it off, read off the source text line by line, so that an attribute
-//! the parser places nowhere, such as one inside a test's body, is still seen. docs/quality-gate.md, "Test
+//! The attributes that skip a Rust test or turn it off, as the parser places them. docs/quality-gate.md, "Test
 //! integrity", says which attributes are skips and where.
+
+use std::collections::BTreeMap;
 
 use model::{first_line, Lines, Weakening, WeakeningKind};
 
-use crate::syntax::{Fn, Mod};
+use crate::syntax::{Attr, Fn, Mod};
 
-/// The skips in a Rust file, by the line they start on, `text` being the file: the attributes [`skipping`] matches
-/// of each of `tests`; on a line of its own inside a test's body, as a statement's; among the outer attributes of a
-/// module of `holding`, the inline modules that hold a test; or an inner attribute, `#![...]`, on a line of its own
-/// inside such a module, or anywhere in the file when `among_tests` places it among the tests. A cfg naming only
-/// platforms ([`platform_only`]) is a platform-only weakening instead, but never a statement's: in a test's body it
-/// turns an assertion off on a platform where the test still runs. A line with any other skip on it is a skip.
-pub fn skips(text: &str, tests: &[&Fn], holding: &[&Mod], among_tests: bool) -> Vec<Weakening> {
-    let lines: Vec<&str> = text.split('\n').collect();
-    let mut out = vec![];
-    for n in 1..=u32::try_from(lines.len()).unwrap_or(u32::MAX) {
-        // A test's own attributes on the line, as the parser gives them, else what the line's text holds.
-        let own: Vec<(&str, u32)> = tests
-            .iter()
-            .flat_map(|t| &t.attrs)
-            .filter(|a| a.line == n && skipping(&a.text))
-            .map(|a| (a.text.as_str(), u32::try_from(a.text.matches('\n').count()).unwrap_or(u32::MAX)))
-            .collect();
-        if !own.is_empty() {
-            out.push(skip(n, &own, true));
-            continue;
-        }
-        let i = (n - 1) as usize;
-        let line = lines[i].trim_start();
-        let Some(place) = attribute_place(among_tests, n, line, tests, holding) else { continue };
-        let found = line_attributes(line, &lines[i + 1..]);
-        let found: Vec<(&str, u32)> = found.iter().map(|(a, k)| (a.as_str(), *k)).filter(|(a, _)| skipping(a)).collect();
-        if !found.is_empty() {
-            out.push(skip(n, &found, place != Place::Statement));
-        }
+/// The skips in a Rust file, one for each line an attribute [`skipping`] matches starts on: an attribute of one of
+/// `tests`, its own or one written in its body; an outer attribute of a module of `holding`, the inline modules that
+/// hold a test; or one of `inner`, the file's inner attributes, `#![...]`, inside such a module, or anywhere in the file
+/// when `among_tests` places it among the tests. A cfg naming only platforms ([`platform_only`]) is a platform-only
+/// weakening instead, but never in a test's body: there it turns an assertion off on a platform where the test still
+/// runs. A line with any other skip on it is a skip.
+pub fn skips(tests: &[&Fn], holding: &[&Mod], inner: &[Attr], among_tests: bool) -> Vec<Weakening> {
+    let inside = |line: u32| among_tests || holding.iter().any(|m| m.line <= line && line <= m.end);
+    // Each attribute judged, and whether a platform-only cfg is weighed there rather than a skip.
+    let judged = tests
+        .iter()
+        .flat_map(|t| t.attrs.iter().map(|a| (a, true)).chain(t.body_attrs.iter().map(|a| (a, false))))
+        .chain(holding.iter().flat_map(|m| m.attrs.iter().map(|a| (a, true))))
+        .chain(inner.iter().filter(|a| inside(a.line)).map(|a| (a, true)));
+    let mut by_line: BTreeMap<u32, (Vec<&Attr>, bool)> = BTreeMap::new();
+    for (a, weighed) in judged.filter(|(a, _)| skipping(&a.text)) {
+        let (attributes, all_weighed) = by_line.entry(a.line).or_insert((vec![], true));
+        attributes.push(a);
+        *all_weighed &= weighed;
     }
-    out
+    by_line.into_iter().map(|(n, (attributes, weighed))| skip(n, &attributes, weighed)).collect()
 }
 
-/// Where [`skips`] judges the attributes on a line of a file.
-#[derive(PartialEq, Eq)]
-enum Place {
-    /// On a line of its own in a test's body.
-    Statement,
-    /// Among a module's outer attributes, or an inner attribute of a module or file of tests.
-    Module,
-}
-
-/// Where [`skips`] judges the attributes on line `n`, `line` being its text without its indentation; None where it
-/// judges none, as on a line not starting with `#`.
-fn attribute_place(among_tests: bool, n: u32, line: &str, tests: &[&Fn], holding: &[&Mod]) -> Option<Place> {
-    if line.starts_with("#!") {
-        let inside = among_tests || holding.iter().any(|m| m.line <= n && n <= m.end);
-        return inside.then_some(Place::Module);
-    }
-    if !line.starts_with('#') {
-        return None;
-    }
-    if tests.iter().any(|t| t.line < n && n <= t.end) {
-        return Some(Place::Statement);
-    }
-    holding.iter().any(|m| m.attrs_line <= n && n < m.line).then_some(Place::Module)
-}
-
-/// The weakening starting at line `n` whose skipping attributes are `attributes`, each whole with how many lines after
-/// `n` it ends on: platform-only when `weighed` and each is [`platform_only`], else a skip naming the first that is not.
-fn skip(n: u32, attributes: &[(&str, u32)], weighed: bool) -> Weakening {
-    let code = model::without_whitespace(&attributes.iter().map(|(a, _)| *a).collect::<String>());
-    let lines = Lines { first: n, last: n.saturating_add(attributes.iter().map(|(_, k)| *k).max().unwrap_or(0)) };
-    match attributes.iter().map(|(a, _)| *a).find(|a| !(weighed && platform_only(a))) {
+/// The weakening starting at line `n` whose skipping attributes are `attributes`: platform-only when `weighed` and each
+/// is [`platform_only`], else a skip naming the first that is not.
+fn skip(n: u32, attributes: &[&Attr], weighed: bool) -> Weakening {
+    let code = model::without_whitespace(&attributes.iter().map(|a| a.text.as_str()).collect::<String>());
+    let wraps = |a: &&Attr| u32::try_from(a.text.matches('\n').count()).unwrap_or(u32::MAX);
+    let lines = Lines { first: n, last: n.saturating_add(attributes.iter().map(wraps).max().unwrap_or(0)) };
+    match attributes.iter().find(|a| !(weighed && platform_only(&a.text))) {
         Some(failing) => Weakening {
             lines,
             kind: WeakeningKind::Skip,
             code,
-            message: format!("`{}` added: it skips a test or turns it off.", first_line(failing)),
+            message: format!("`{}` added: it skips a test or turns it off.", first_line(&failing.text)),
         },
         None => Weakening {
             lines,
             kind: WeakeningKind::PlatformOnly,
             code,
-            message: format!("`{}` added: it turns a test off on the other platforms.", first_line(attributes[0].0)),
+            message: format!("`{}` added: it turns a test off on the other platforms.", first_line(&attributes[0].text)),
         },
     }
 }
@@ -119,73 +86,6 @@ pub fn skipping(attribute: &str) -> bool {
 
 fn is_word(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
-}
-
-/// The attribute that `first` starts with, whole: `first` up to its closing `]`, or, when it wraps as rustfmt wraps a
-/// long one, joined by single spaces with the trimmed lines of `following` up to the one holding that `]`; and how
-/// many lines of `following` it wraps onto, None when it never closes, the attribute then being `first` and all of
-/// `following`. Brackets inside a string literal (`"..."`, its `\"` escapes skipped) are not counted; a char literal
-/// or a raw string is read as a plain string, so one holding a `"` or a bracket may leave the attribute unclosed.
-fn attribute(first: &str, following: &[&str]) -> (String, Option<usize>) {
-    let mut depth = 0i64;
-    let mut quoted = false;
-    let mut parts: Vec<&str> = vec![];
-    for (used, text) in std::iter::once(first).chain(following.iter().map(|l| l.trim())).enumerate() {
-        let mut escaped = false;
-        for (j, c) in text.char_indices() {
-            if quoted {
-                (quoted, escaped) = (escaped || c != '"', !escaped && c == '\\');
-                continue;
-            }
-            quoted = c == '"';
-            depth += match c {
-                '[' => 1,
-                ']' => -1,
-                _ => 0,
-            };
-            if c == ']' && depth == 0 {
-                parts.push(&text[..j + 1]);
-                return (parts.join(" "), Some(used));
-            }
-        }
-        parts.push(text);
-    }
-    (parts.join(" "), None)
-}
-
-/// Each attribute, whole ([`attribute`]), that starts at a `#[` or `#![` on `line`, followed in the file by the
-/// lines `following`, or on a line one of them wraps onto before it closes, so that a wrapped attribute hides none;
-/// with how many lines after `line` it ends on, or starts on for one that never closes.
-/// Every `#[` is read, also one inside another attribute's string, as in `#[doc = "#[ignore]"]`: a literal
-/// [`attribute`] misreads then cannot hide a skip after it, at the cost of reporting such a string's text.
-fn line_attributes(line: &str, following: &[&str]) -> Vec<(String, u32)> {
-    let mut out = vec![];
-    // Each line to read, as its index in following (-1 for `line`), and the last line of following that the
-    // attributes read so far wrap onto (-1 for none).
-    let mut read: Vec<isize> = vec![-1];
-    let mut reached: isize = -1;
-    let mut k = 0;
-    while let Some(&i) = read.get(k) {
-        k += 1;
-        let text = if i < 0 { line } else { following[i.unsigned_abs()].trim() };
-        let rest = &following[(i + 1).unsigned_abs()..];
-        for (start, _) in text.match_indices('#') {
-            let after = &text[start + 1..];
-            if !(after.starts_with('[') || after.starts_with("![")) {
-                continue;
-            }
-            let (found, used) = attribute(&text[start..], rest);
-            let last = used.map(|used| i + used.cast_signed());
-            // One that never closes, likely a `#[` misread in a string, ends where it starts.
-            let ends = last.map_or(i + 1, |last| last + 1).unsigned_abs();
-            out.push((found, u32::try_from(ends).unwrap_or(u32::MAX)));
-            if let Some(last) = last.filter(|&last| last > reached) {
-                read.extend(i.max(reached) + 1..=last);
-                reached = last;
-            }
-        }
-    }
-    out
 }
 
 /// The platforms a platform-only cfg is judged over: the `target_os` values of common targets, each with its
@@ -383,19 +283,5 @@ mod tests {
         }
         let deep = format!("#[cfg({}unix{})]", "not(".repeat(200), ")".repeat(200));
         assert!(!platform_only(&deep));
-    }
-
-    #[test]
-    fn an_attribute_is_read_whole_across_the_lines_it_wraps_onto() {
-        assert_eq!(attribute("#[cfg(unix)] fn f() {}", &[]), ("#[cfg(unix)]".into(), Some(0)));
-        assert_eq!(attribute("#[cfg(any(", &["  unix,", "  windows", "))]"]), ("#[cfg(any( unix, windows ))]".into(), Some(3)));
-        assert_eq!(attribute("#[doc = \"]\"]", &[]), ("#[doc = \"]\"]".into(), Some(0)));
-        assert_eq!(attribute("#[doc = \"\\\"]\"]", &[]), ("#[doc = \"\\\"]\"]".into(), Some(0)));
-        assert_eq!(attribute("#[cfg(", &["unix"]), ("#[cfg( unix".into(), None));
-        assert_eq!(
-            line_attributes("#[cfg(any(", &["  unix,", "  #[ignore] windows", "))]"]),
-            vec![("#[cfg(any( unix, #[ignore] windows ))]".to_string(), 3), ("#[ignore]".into(), 2)]
-        );
-        assert_eq!(line_attributes("#[doc = \"#[ignore]\"]", &[]).len(), 2);
     }
 }

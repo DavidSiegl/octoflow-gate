@@ -183,21 +183,20 @@ order. The findings are Python's, read of Rust:
   that is no longer Rust;
 - `skip`: an attribute added that skips a test or turns it off: `#[ignore]`, a `cfg` other than `cfg(test)` itself,
   `cfg(all(test, feature = "slow"))` included, which turns tests off as Python's `skipIf` does, or a `cfg_attr` that
-  writes `ignore`, as an argument after its predicate. It counts among a test's attributes; on a line of its own
-  inside a test's body, where a statement's `cfg` turns an assertion off; among the outer attributes of an inline
-  module holding a test; and as an inner attribute, `#![...]`, on a line of its own inside such a module or anywhere
-  in a file under `tests/`. A `cfg` on a helper `fn` is no skip, nor `#[cfg(test)]` on a new test module. Lines are
-  read for attributes only where they start with `#`, so an attribute after other code on its line, or one written
-  over several lines whose `ignore` is not on its first, is not seen there; a test's own attributes the parser gives
-  whole;
+  writes `ignore`, as an argument after its predicate. It counts among a test's attributes; inside a test's body, on
+  a statement or an expression, where a `cfg` turns an assertion off; among the outer attributes of an inline module
+  holding a test, those on its `mod` line included; and as an inner attribute, `#![...]`, inside such a module or
+  anywhere in a file under `tests/`. A `cfg` on a helper `fn` is no skip, nor `#[cfg(test)]` on a new test module.
+  The parser places each attribute, whole however it wraps, so one inside a string literal is none. Attributes that
+  start on one line are one finding, at that line;
 - `platform-only`: a `cfg` that would be a `skip` but names only platforms (`unix`, `windows`, `target_os = "…"`,
   `target_family = "…"`, and `any`, `all` and `not` of them, `test` allowed beside them in an outermost `all`) and holds
   on at least one, on a test, a test module or a file of tests, read whole when rustfmt wraps it. It leaves a test out
   only on platforms where what it tests is not built, as a test of a Linux-only system call, so it is one to weigh: the
   reviewer checks that the code under test is as limited. The platforms are a list of common `target_os` values with
   their families (`TARGET_OSES` in `crates/lang-rust/src/skips.rs`); one it lacks, as a misspelt os, and a predicate
-  that holds on none of them, as `all(unix, windows)`, are still a `skip`. So is a platform `cfg` on a line of its own
-  inside a test's body, and a line that also holds another skip;
+  that holds on none of them, as `all(unix, windows)`, are still a `skip`. So is a platform `cfg` inside a test's
+  body, and one starting on a line where another skip starts;
 - `fewer-assertions`: a kept test with fewer of the assertion macros (`assert!`,
   `assert_eq!`, `assert_ne!`, their `debug_` forms, and `panic!`) than at the base. It is one to weigh, as Python's;
 - `swallowed-error`: on an added line, a `#[should_panic]` without `expected` on a test, which any panic passes, a

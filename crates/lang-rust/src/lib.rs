@@ -56,7 +56,7 @@ pub fn read(source: &[u8], among_tests: bool) -> Result<SourceFile, Unreadable> 
         return Err(Unreadable { line: Some(line), why: format!("does not parse as Rust ({what})") });
     }
     let items = syntax::collect(&tree, Text::of_file(source), &lines, &mut parser);
-    Ok(model(&items, text, among_tests, lines.count()))
+    Ok(model(&items, among_tests, lines.count()))
 }
 
 /// The first node, in the order the file is written, that tree-sitter could not parse: an error, or a token it took
@@ -75,8 +75,8 @@ fn first_error(root: Node) -> Option<Node> {
     }
 }
 
-/// The model of a file of `n` lines whose text is `text` and whose items are `items`.
-fn model(items: &Items, text: &str, among_tests: bool, n: u32) -> SourceFile {
+/// The model of a file of `n` lines whose items are `items`.
+fn model(items: &Items, among_tests: bool, n: u32) -> SourceFile {
     let test_lines: Vec<Lines> = if among_tests {
         vec![Lines { first: 1, last: n }]
     } else {
@@ -90,7 +90,7 @@ fn model(items: &Items, text: &str, among_tests: bool, n: u32) -> SourceFile {
         .collect();
     let holding: Vec<&syntax::Mod> =
         items.mods.iter().filter(|m| tests.iter().any(|t| m.attrs_line <= t.line && t.line <= m.end)).collect();
-    let mut weakenings = skips::skips(text, &tests, &holding, among_tests);
+    let mut weakenings = skips::skips(&tests, &holding, &items.inner_attrs, among_tests);
     weakenings.extend(swallowed_errors(items, &tests, &in_tests));
     let scored: Vec<&Fn> = items.fns.iter().filter(|f| f.flow.is_some()).collect();
     let calls = calls(&scored);

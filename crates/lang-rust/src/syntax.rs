@@ -91,13 +91,14 @@ pub enum Holder {
     Static(String),
 }
 
-/// One of a `fn`'s outer attributes, doc comments left out.
+/// An attribute, outer or inner, as the parser places it; doc comments are none.
 #[derive(Clone, Debug)]
 pub struct Attr {
     /// Its path, as `should_panic` or `tokio::test`.
     pub path: String,
     /// The attribute, from its `#` to its `]`, as written.
     pub text: String,
+    /// The line its `#` is on.
     pub line: u32,
 }
 
@@ -124,6 +125,9 @@ pub struct Fn {
     pub attrs_line: u32,
     pub end: u32,
     pub attrs: Vec<Attr>,
+    /// The outer attributes written in its body, on its statements, expressions and the items it holds, those inside
+    /// the bodies of the fns it holds left out.
+    pub body_attrs: Vec<Attr>,
     /// The assertion macros its body calls, those of the closures it holds included and of the fns it holds not.
     pub asserts: Vec<Assertion>,
     pub discards: Vec<Discard>,
@@ -143,6 +147,8 @@ pub struct Mod {
     pub line: u32,
     pub attrs_line: u32,
     pub end: u32,
+    /// Its outer attributes.
+    pub attrs: Vec<Attr>,
     /// Whether it is compiled only under `cfg(test)`, by a `cfg` whose predicate needs `test`.
     pub cfg_test: bool,
 }
@@ -154,6 +160,8 @@ pub struct Items {
     pub fns: Vec<Fn>,
     pub mods: Vec<Mod>,
     pub bindings: Vec<Binding>,
+    /// Every inner attribute, `#![...]`, wherever it is written.
+    pub inner_attrs: Vec<Attr>,
 }
 
 /// What `tree`, parsed from `text`, the whole file whose line numbers `lines` gives, holds; `parser` parses macro
@@ -184,7 +192,13 @@ impl Walk<'_> {
     fn node(&mut self, node: Node, text: Text, assoc: bool) {
         match node.kind() {
             "function_item" | "function_signature_item" => self.function(node, text),
-            "foreign_mod_item" | "macro_definition" | "attribute_item" | "inner_attribute_item" => {}
+            "foreign_mod_item" | "macro_definition" => {}
+            "attribute_item" => {
+                if let (Some(i), Some(attr)) = (self.current_fn, attribute(node, text, self.lines)) {
+                    self.items.fns[i].body_attrs.push(attr);
+                }
+            }
+            "inner_attribute_item" => self.items.inner_attrs.extend(attribute(node, text, self.lines)),
             "mod_item" => self.module(node, text),
             "impl_item" => {
                 let compact = |n: Node| compact_tokens(n, text);
@@ -349,6 +363,7 @@ impl Walk<'_> {
             attrs_line: attrs_line.unwrap_or(line),
             end: self.lines.line(text.end(node).saturating_sub(1)),
             attrs,
+            body_attrs: vec![],
             asserts: vec![],
             discards: vec![],
             body: body.map(|b| digest(&tokens(b, text).join(" "))),
@@ -364,13 +379,14 @@ impl Walk<'_> {
     fn module(&mut self, node: Node, text: Text) {
         let Some(body) = node.child_by_field_name("body") else { return };
         let line = self.line(text, node);
-        let (attrs_line, _) = outer_attributes(node, text, self.lines);
+        let (attrs_line, attrs) = outer_attributes(node, text, self.lines);
         let name = node.child_by_field_name("name").map(|n| unraw(text.of(n)).to_string()).unwrap_or_default();
         self.items.mods.push(Mod {
             name: name.clone(),
             line,
             attrs_line: attrs_line.unwrap_or(line),
             end: self.lines.line(text.end(body).saturating_sub(1)),
+            attrs,
             // Its inner attributes, `#![cfg(test)]` at the top of its body, mark it too.
             cfg_test: preceding_attributes(node)
                 .into_iter()
@@ -842,16 +858,16 @@ fn outer_attributes(node: Node, text: Text, lines: &Lines) -> (Option<u32>, Vec<
         }
         at = sibling.prev_sibling();
     }
-    let attrs = preceding_attributes(node)
-        .into_iter()
-        .filter_map(|item| {
-            let attribute = named(item).into_iter().find(|c| c.kind() == "attribute")?;
-            let path = attribute.named_child(0)?;
-            let path = path_segments(path, text).join("::");
-            (path != "doc").then(|| Attr { path, text: text.of(item).into(), line: lines.line(text.start(item)) })
-        })
-        .collect();
+    let attrs = preceding_attributes(node).into_iter().filter_map(|item| attribute(item, text, lines)).collect();
     (first.map(|f| lines.line(text.start(f))), attrs)
+}
+
+/// The attribute item `item`, an `attribute_item` or an `inner_attribute_item`, as an [`Attr`]; None for a `doc`
+/// attribute or one the parser gives no path.
+fn attribute(item: Node, text: Text, lines: &Lines) -> Option<Attr> {
+    let attribute = named(item).into_iter().find(|c| c.kind() == "attribute")?;
+    let path = path_segments(attribute.named_child(0)?, text).join("::");
+    (path != "doc").then(|| Attr { path, text: text.of(item).into(), line: lines.line(text.start(item)) })
 }
 
 /// The segments of the path `node`, unraw, outermost first.

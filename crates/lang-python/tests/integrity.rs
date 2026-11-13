@@ -176,6 +176,19 @@ fn a_test_moved_with_the_decorators_it_had_adds_no_skip_but_one_added_on_the_way
     let skipped = moved.replace("@pytest.mark.slow\n", "@pytest.mark.skip\n");
     let (place, _) = found(&[deleted(OTHER_PATH, base), added("tests/test_new.py", &skipped)]);
     assert_eq!(place, [at("tests/test_new.py", 4, "skip")]);
+    // A skip in the body moves with it when the body is the same.
+    let base = "import pytest\n\n\ndef test_b():\n    pytest.skip('no')\n    assert 1\n";
+    assert_eq!(found(&[deleted(OTHER_PATH, base), added("tests/test_new.py", base)]).0, []);
+}
+
+#[test]
+fn a_kept_test_s_skip_with_another_condition_or_a_second_one_stacked_above_is_found() {
+    let base = "import sys\n\nimport pytest\n\n\n@pytest.mark.skipif(sys.platform == 'win32', reason='x')\ndef test_b():\n    \
+                assert 1\n";
+    let always = base.replace("sys.platform == 'win32'", "True");
+    assert_eq!(found(&[edited(OTHER_PATH, base, &always)]).0, [at(OTHER_PATH, 6, "skip")]);
+    let stacked = base.replace("@pytest", "@pytest.mark.skipif(True, reason='y')\n@pytest");
+    assert_eq!(found(&[edited(OTHER_PATH, base, &stacked)]).0, [at(OTHER_PATH, 6, "skip")]);
 }
 
 #[test]

@@ -85,16 +85,19 @@ pub fn weakening(comment: &str, line: u32) -> Option<Weakening> {
     }
     let platform_only = parse(expression).is_some_and(|e| e.names_no_custom_tag() && e.holds_on_some_build());
     let written = first_line(comment.trim_end());
+    let code = model::without_whitespace(comment);
     Some(if platform_only {
         Weakening {
             line,
             kind: WeakeningKind::PlatformOnly,
+            code,
             message: format!("`{written}` added: it turns the file's tests off on the other platforms and toolchains."),
         }
     } else {
         Weakening {
             line,
             kind: WeakeningKind::Skip,
+            code,
             message: format!("`{written}` added: it turns the file's tests off."),
         }
     })

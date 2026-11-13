@@ -194,6 +194,20 @@ fn names_bound_in<'t>(node: Node, text: Text<'t>) -> HashSet<&'t str> {
     out
 }
 
+/// The code that `node`, the name of a skip, is written in, whole: the decorator or call it names, with its
+/// arguments, or `node` itself where it is neither's.
+fn written_whole(node: Node) -> Node {
+    let mut whole = node;
+    while let Some(parent) = whole.parent() {
+        let named_call = parent.kind() == "call" && parent.child_by_field_name("function") == Some(whole);
+        if !(named_call || parent.kind() == "decorator") {
+            break;
+        }
+        whole = parent;
+    }
+    whole
+}
+
 /// What weakens a test in the test module `root`: each name or attribute that skips a test or expects it to fail
 /// ([`SKIP_NAMES`]), once per line and name, and each `except` that swallows what it catches ([`swallows`]).
 pub fn weakenings(root: Node, text: Text) -> Vec<Weakening> {
@@ -210,6 +224,7 @@ pub fn weakenings(root: Node, text: Text) -> Vec<Weakening> {
             out.push(Weakening {
                 line: line(node),
                 kind: WeakeningKind::Skip,
+                code: model::without_whitespace(text.of(written_whole(node))),
                 message: format!("`{}` added: it skips a test or expects it to fail.", first_line(text.of(node))),
             });
         }
@@ -220,6 +235,7 @@ pub fn weakenings(root: Node, text: Text) -> Vec<Weakening> {
             out.push(Weakening {
                 line: line(node),
                 kind: WeakeningKind::SwallowedError,
+                code: model::without_whitespace(head),
                 message: format!("`{}` added in a test: it hides the failure it catches.", first_line(head)),
             });
         }

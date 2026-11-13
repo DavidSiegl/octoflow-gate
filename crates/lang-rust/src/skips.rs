@@ -67,15 +67,18 @@ fn attribute_place(among_tests: bool, n: u32, line: &str, tests: &[&Fn], holding
 /// The weakening at line `n` whose skipping attributes are `attributes`, each whole: platform-only when `weighed`
 /// and each is [`platform_only`], else a skip naming the first that is not.
 fn skip(n: u32, attributes: &[&str], weighed: bool) -> Weakening {
+    let code = model::without_whitespace(&attributes.concat());
     match attributes.iter().find(|a| !(weighed && platform_only(a))) {
         Some(failing) => Weakening {
             line: n,
             kind: WeakeningKind::Skip,
+            code,
             message: format!("`{}` added: it skips a test or turns it off.", first_line(failing)),
         },
         None => Weakening {
             line: n,
             kind: WeakeningKind::PlatformOnly,
+            code,
             message: format!("`{}` added: it turns a test off on the other platforms.", first_line(attributes[0])),
         },
     }

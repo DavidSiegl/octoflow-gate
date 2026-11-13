@@ -115,13 +115,31 @@ fn a_test_moved_with_the_skips_it_had_adds_none_but_a_skip_added_on_the_way_is_f
     };
     let had = |attributes: &str| edit(LIB, large, &format!("    #[test]\n{attributes}    fn adds_large() {{\n        assert_eq!(add(10, 20), 30);\n    }}\n"));
     let lib = edit(LIB, large, "");
-    let base = had("    #[cfg(unix)]\n    #[ignore]\n");
-    let it = moved("#[cfg(unix)]\n#[ignore]\n");
-    assert_eq!(check(&[edited(LIB_PATH, &base, &lib), edited(IT_PATH, IT, &it)]), vec![]);
-    let base = had("    #[cfg(unix)]\n");
-    let found = check(&[edited(LIB_PATH, &base, &lib), edited(IT_PATH, IT, &it)]);
+    let check_move = |base: &str, it: &str| check(&[edited(LIB_PATH, base, &lib), edited(IT_PATH, IT, it)]);
+    for attributes in ["#[cfg(unix)]\n", "#[ignore]\n", "#[cfg(unix)]\n#[ignore]\n"] {
+        let indented: String = attributes.lines().map(|a| format!("    {a}\n")).collect();
+        assert_eq!(check_move(&had(&indented), &moved(attributes)), vec![], "{attributes}");
+    }
+    let found = check_move(&had("    #[cfg(unix)]\n"), &moved("#[cfg(unix)]\n#[ignore]\n"));
     assert_eq!(wheres(&found), vec![at(IT_PATH, Some(5), "skip")]);
+    assert_eq!(found[0].severity, "error");
     assert_eq!(found[0].message, "`#[ignore]` added: it skips a test or turns it off.");
+    // The same attribute's first line, wrapped as rustfmt wraps it, with another platform after it.
+    let wrapped = |os: &str| format!("#[cfg(all(\n    unix,\n    target_os = \"{os}\"\n))]\n");
+    let indented: String = wrapped("linux").lines().map(|a| format!("    {a}\n")).collect();
+    let found = check_move(&had(&indented), &moved(&wrapped("macos")));
+    assert_eq!(wheres(&found), vec![at(IT_PATH, Some(4), "platform-only")]);
+}
+
+#[test]
+fn a_kept_test_carries_its_skips_but_not_one_whose_condition_changed() {
+    let with = |attributes: &str| edit(LIB, "    #[test]\n    fn adds_large", &format!("    #[test]\n{attributes}    fn adds_large"));
+    let base = with("    #[ignore]\n    #[cfg(unix)]\n");
+    let reordered = with("    #[cfg(unix)]\n    #[ignore]\n");
+    assert_eq!(check(&[edited(LIB_PATH, &base, &reordered)]), vec![]);
+    let base = with("    #[cfg_attr(miri, ignore)]\n");
+    let found = check(&[edited(LIB_PATH, &base, &with("    #[cfg_attr(unix, ignore)]\n"))]);
+    assert_eq!(wheres(&found), vec![at(LIB_PATH, Some(16), "skip")]);
 }
 
 #[test]

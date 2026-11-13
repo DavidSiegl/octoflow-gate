@@ -141,6 +141,7 @@ fn swallowed_errors(items: &Items, tests: &[&Fn], in_tests: &dyn std::ops::Fn(u3
             out.push(Weakening {
                 line: a.line,
                 kind: WeakeningKind::SwallowedError,
+                code: model::without_whitespace(&a.text),
                 message: format!(
                     "`{}` without `expected` added on `{}`: any panic passes it, a failed assertion's too.",
                     first_line(&a.text),
@@ -156,6 +157,7 @@ fn swallowed_errors(items: &Items, tests: &[&Fn], in_tests: &dyn std::ops::Fn(u3
                 out.push(Weakening {
                     line: d.line,
                     kind: WeakeningKind::SwallowedError,
+                    code: model::without_whitespace(&written),
                     message: format!(
                         "`{}` added in `{}`: it throws away the panic or the `Err` that would fail the test.",
                         first_line(&written),

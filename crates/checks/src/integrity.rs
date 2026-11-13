@@ -21,8 +21,8 @@ const CHECK: &str = "test-integrity";
 ///   it stayed, the assertions of the two sides aligned as Python's difflib aligns sequences; and a constant of the
 ///   file's base ([`model::Constant`]) that a kept test's assertions name on both sides and that the change edited or
 ///   made no constant, at the first assertion now naming it;
-/// - skip, platform-only and swallowed-error: each [`model::Weakening`] on a line the change added, but for one on a
-///   test's own attributes that its old self, kept or renamed or moved, already carried;
+/// - skip, platform-only and swallowed-error: each [`model::Weakening`] on a line the change added, but for one that a
+///   test kept, renamed or moved already carried, as [`carried_weakenings`] tells;
 /// - unreadable: a test file, one the settings place among the tests or with test code on a side, that its front end
 ///   could not read as a whole on a side ([`model::Unreadable`] with no line, as for one that is not UTF-8), which is
 ///   all the check says of it: which tests the change removed or weakened cannot be told;
@@ -189,21 +189,30 @@ impl<'k, 't> Matching<'k, 't> {
     }
 }
 
-/// The weakenings in the working tree of `files` that a test the change kept, renamed or moved carried at the base,
-/// as `matching` pairs them: of those on a test's own attributes or decorators, from its first line to that of its
-/// `fn` or `def`, each that equals one on its old self's, in kind and message. Each of the base's is carried by one.
+/// The weakenings on lines the change added to `files` that a test it kept, renamed or moved already carried at the
+/// base, as `matching` pairs them: each equal in kind and [`Weakening::code`] to one its old self carried, each of
+/// those carrying one, after the weakenings on lines the change kept took theirs. A test carries those on its own
+/// attributes or decorators, from its first line to that of its `fn` or `def`, and, when its body is the same as its
+/// old self's, those in its body too; an edited body's are new, since a statement's `cfg` moved within it turns off
+/// another statement.
 fn carried_weakenings<'f>(files: &'f [ChangedFile], matching: &Matching) -> Vec<&'f Weakening> {
-    let on = |source: Option<&'f SourceFile>, test: &Test| {
-        let lines = test.lines.first..=test.line;
-        source.into_iter().flat_map(|s| &s.weakenings).filter(move |w| lines.contains(&w.line))
-    };
     let mut out = vec![];
     for (was, now) in matching.kept.iter().chain(&matching.moved) {
+        let same_body = was.test.body == now.test.body;
+        let on = |source: Option<&'f SourceFile>, test: &Test| {
+            let lines = test.lines.first..=if same_body { test.lines.last } else { test.line };
+            source.into_iter().flat_map(|s| &s.weakenings).filter(move |w| lines.contains(&w.line))
+        };
         let mut had: Vec<&Weakening> = on(files[was.file].base(), was.test).collect();
-        for w in on(files[now.file].now(), now.test) {
-            if let Some(k) = had.iter().position(|h| h.kind == w.kind && h.message == w.message) {
+        let file = &files[now.file];
+        let (added, kept): (Vec<&Weakening>, Vec<&Weakening>) =
+            on(file.now(), now.test).partition(|w| file.added.contains(&w.line));
+        for w in kept.into_iter().chain(added) {
+            if let Some(k) = had.iter().position(|h| h.kind == w.kind && h.code == w.code) {
                 had.swap_remove(k);
-                out.push(w);
+                if file.added.contains(&w.line) {
+                    out.push(w);
+                }
             }
         }
     }

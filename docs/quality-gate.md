@@ -151,9 +151,12 @@ change cannot weaken its tests unseen. Each of these is a finding:
   tests gets one such finding per file, on the whole file, also to weigh. A golden file added, or renamed unedited,
   is none.
 
-A `skip`, `platform-only` or `swallowed-error` on a test's own decorators or attributes, above its `def` or `fn`, is
-no finding when the test is kept, renamed or moved and its old self carried the same one: moving a test with its
-`#[cfg(unix)]` adds no skip, but an `#[ignore]` added on the way is still one.
+A test kept, renamed or moved carries what weakened its old self: a `skip`, `platform-only` or `swallowed-error` on an
+added line is no finding when its old self had the same code there, its arguments included, whatever the layout. On
+the test's own decorators or attributes, above its `def` or `fn`, that holds always; in its body only when the body is
+the same, since an edited body's `cfg` or skip may now cover other statements. So moving a test with its `#[cfg(unix)]`
+or its `t.Skip` adds no skip, but an `#[ignore]` added on the way is still one, and so is a `skipif` whose condition
+changed.
 
 It reads Python, Rust and Go, and golden files whatever their language; another language is another front end beside
 `crates/lang-python`, `crates/lang-rust` and `crates/lang-go` ([reading the source](#reading-the-source)).

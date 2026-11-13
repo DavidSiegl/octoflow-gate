@@ -184,6 +184,14 @@ fn a_test_renamed_with_its_body_is_not_removed_and_a_deleted_test_file_is_one_fi
 }
 
 #[test]
+fn a_test_moved_with_its_skip_adds_none() {
+    let skipped = "package calc\n\nimport \"testing\"\n\nfunc TestNetwork(t *testing.T) {\n\tt.Skip(\"needs network\")\n\t\
+                   if Add(1, 2) != 3 {\n\t\tt.Fatal(\"no\")\n\t}\n}\n";
+    let moved = [deleted(TEST_PATH, skipped), added("calc/network_test.go", skipped)];
+    assert_eq!(check(&moved), vec![]);
+}
+
+#[test]
 fn fewer_assertions_are_found_at_the_test() {
     let test = edit(CALC_TEST, "\t\tif Add(a, 0) != a {\n\t\t\tt.Fail()\n\t\t}\n", "\t\tAdd(a, 0)\n");
     assert_eq!(wheres(&check(&[edited(TEST_PATH, CALC_TEST, &test)])), [at(31, "fewer-assertions")]);

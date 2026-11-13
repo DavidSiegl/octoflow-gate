@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/DavidSiegl/octoflow-gate/blob/main/schema/quality-v1.json",
   "title": "quality.json",
-  "description": "The gate's report on one change, as data: what the gate writes beside the quality file (`--out`) or where `--json` names. Its schema_version is raised on any change a reader could notice; a new optional field does not raise it, so a reader ignores fields it does not know. Strings hold the text as the gate read it, line breaks included, but for each byte that is not UTF-8, written as the four characters `\\xNN`.",
+  "description": "The gate's report on one change, as data: what the gate writes beside the quality file (`--out`) or where `--json` names. Its schema_version is raised on any change a reader could notice; a new optional field does not raise it, so a reader ignores fields it does not know, and neither does a change to the words of a text field, a finding's message or a failing test's detail, which are the gate's or the tool's and may change in any release. Strings hold the text as the gate read it, line breaks included, but for each byte that is not UTF-8, written as the four characters `\\xNN`.",
   "type": "object",
   "required": ["schema_version", "gate", "gate_version", "base", "head", "failed_conditions", "findings",
                "findings_total", "failing_tests", "coverage", "suppressions", "build_config"],
@@ -50,7 +50,7 @@
         "required": ["name", "detail"],
         "properties": {
           "name": {"description": "The test's name as its report gives it.", "type": "string"},
-          "detail": {"description": "The whole of the failure's message and text, empty when the report gives none.", "type": "string"}
+          "detail": {"description": "What the report says failed, whole: the failure's message, or its text where the message is missing or says only that the test failed (gotestsum's Failed), go test -v's === RUN and --- FAIL: lines left out; empty when the report gives none.", "type": "string"}
         }
       }
     },

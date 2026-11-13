@@ -167,8 +167,16 @@ pub struct TestGroup {
 /// Something written in a file that weakens a test ([`SourceFile::weakenings`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Weakening {
-    pub line: u32,
+    /// The lines its code spans, as [`Weakening::code`] takes it; a finding on it points at the first of them the
+    /// change added.
+    pub lines: Lines,
     pub kind: WeakeningKind,
+    /// The code that weakens, whole, in a form that only that code has: the attribute or decorator with its
+    /// arguments, the call, the clause or the comment. Two writings of the same code that differ only in whitespace
+    /// have the same one; a front end may leave out more that does not change what the code does, as lang-go leaves
+    /// out comments and lang-python comments, a string's quotes and a list's closing comma, as in [`Test::body`].
+    /// test-integrity tells a test's old weakening from a new one by it.
+    pub code: String,
     /// The finding's message: what was added and what it does, as "`#[ignore]` added: it skips a test or turns it
     /// off."
     pub message: String,
@@ -231,6 +239,11 @@ pub struct Import {
 /// Each source file of one language in a tree, by its path from the tree's top level, with its imports of the tree's
 /// other files in the order they are written; a file that imports none of them maps to none.
 pub type ImportGraph = std::collections::BTreeMap<std::ffi::OsString, Vec<Import>>;
+
+/// `text` with every whitespace character left out: the same for two layouts of code, as for [`Weakening::code`].
+pub fn without_whitespace(text: &str) -> String {
+    text.chars().filter(|c| !c.is_whitespace()).collect()
+}
 
 /// `text`'s first line, clipped to 160 characters with an ellipsis, as a finding's message quotes code.
 pub fn first_line(text: &str) -> String {

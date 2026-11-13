@@ -184,6 +184,22 @@ fn a_test_renamed_with_its_body_is_not_removed_and_a_deleted_test_file_is_one_fi
 }
 
 #[test]
+fn a_test_moved_with_its_skip_adds_none() {
+    let skipped = "package calc\n\nimport \"testing\"\n\nfunc TestNetwork(t *testing.T) {\n\tt.Skip(\"needs network\")\n\t\
+                   if Add(1, 2) != 3 {\n\t\tt.Fatal(\"no\")\n\t}\n}\n";
+    let moved = [deleted(TEST_PATH, skipped), added("calc/network_test.go", skipped)];
+    assert_eq!(check(&moved), vec![]);
+    // However the comments in what weakens it are edited on the way.
+    let skipping = skipped.replace("t.Skip(\"needs network\")", "t.Skip( /* offline */ \"needs network\")");
+    let moved = [deleted(TEST_PATH, skipped), added("calc/network_test.go", &skipping)];
+    assert_eq!(check(&moved), vec![]);
+    // A wrapped skip whose argument line alone changed is found at that line.
+    let wrapped = edit(skipped, "t.Skip(\"needs network\")", "t.Skip(\n\t\t\"needs network\",\n\t)");
+    let found = check(&[edited(TEST_PATH, &wrapped, &edit(&wrapped, "\"needs network\"", "\"always\""))]);
+    assert_eq!(found.iter().map(|f| (f.line, f.rule.as_str())).collect::<Vec<_>>(), [(Some(7), "test-integrity skip")]);
+}
+
+#[test]
 fn fewer_assertions_are_found_at_the_test() {
     let test = edit(CALC_TEST, "\t\tif Add(a, 0) != a {\n\t\t\tt.Fail()\n\t\t}\n", "\t\tAdd(a, 0)\n");
     assert_eq!(wheres(&check(&[edited(TEST_PATH, CALC_TEST, &test)])), [at(31, "fewer-assertions")]);
@@ -272,6 +288,15 @@ func mustAdd(t testing.TB) int {
         "`if closeErr := shut(); closeErr != nil {` added in `mustAdd`: its empty block throws away the error that \
          would fail the test."
     );
+    // The weakening is the `if` up to its block's `{`: below that line, an edit to a comment in the empty block, or to
+    // an else after it, the path that did not fail, adds none.
+    let commented = edit(&test, "\tif err != nil { /* fine */ }\n", "\tif err != nil {\n\t\t// fine\n\t}\n");
+    assert_eq!(check(&[edited(TEST_PATH, &commented, &edit(&commented, "// fine", "// ok"))]), vec![]);
+    let empty = edit(&test, "\tif err != nil { /* fine */ }\n", "\tif err != nil {\n\t}\n");
+    let with_else = edit(&empty, "\tif err != nil {\n\t}\n", "\tif err != nil {\n\t} else {\n\t\tuse(1)\n\t}\n");
+    assert_eq!(check(&[edited(TEST_PATH, &empty, &with_else)]), vec![]);
+    assert_eq!(check(&[edited(TEST_PATH, &with_else, &edit(&with_else, "} else {", "} else if ok {"))]), vec![]);
+    assert_eq!(check(&[edited(TEST_PATH, &with_else, &edit(&with_else, "use(1)", "use(2)"))]), vec![]);
 }
 
 #[test]

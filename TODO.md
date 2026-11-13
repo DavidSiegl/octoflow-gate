@@ -150,6 +150,13 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   `crates/lang-go/src/testing.rs` reports `_ = err` alone, an identifier named as an error: left out on purpose, since
   a parser knows no types and both forms are common for values that are no error (`v, _ := m[k]`). Found with
   go-support/01 (2026-11-11). Closes only with the types, which the gate does not read.
+- **A Go error block emptied by the change is not seen.** As cross-review 30 put it (R9-1, 2026-11-13): a change that
+  turns `if err != nil { t.Fatal(err) }` into the same block with `// t.Fatal(err)`, or deletes the statement, "adds
+  only the comment line, which is no line of the weakening, and the `if` and `{` lines are kept". An
+  `if err != nil {}`'s lines end at its block's `{` (`if_statement` in `crates/lang-go/src/testing.rs`), so that an
+  edit to a comment in the block or to an `else` after it is none; 0.11.1, which looked at the `if` line alone, missed
+  both too. Deferred by the user (2026-11-13). Closes with test-integrity finding an empty error block whose block held
+  a statement at the base, when the change edited the block.
 - **A dot-imported testify package's calls are not assertions.** `Imports::of` in `crates/lang-go/src/testing.rs`
   skips an import named `.` or `_`, so with `import . "github.com/stretchr/testify/assert"` a test's
   `Equal(t, 3, Add(1, 2))` is no assertion, and removing it or changing its 3 beside the code is not seen. Rare, and
@@ -178,6 +185,13 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   by where it starts and ends, not by its lines, so `go_profile_lines` (`crates/gate/src/coverage.rs`) counts every
   line between, covered or not as the block is, as gocover-cobertura and Codecov read profiles too. Found with
   go-support/01 (2026-11-11). Closes with each such line read from the file and left out when it holds no token.
+- **A Go package that does not compile is listed without the compiler's words.** gotestsum's report holds only
+  `FAIL <package> [build failed]` for it, under the test case `TestMain`, which `junit_outcomes`
+  (`crates/gate/src/junit.rs`) takes as the detail; the compiler's lines go to the command's standard output, which
+  `run_test_command` (`crates/gate/src/test_commands.rs`) passes to stderr unread. Narrowed from failing-test-detail/02
+  (2026-11-13), whose Done when asked for the compiler's first lines. Closes with the gate keeping a `[[test]]`
+  command's output and giving a build-failed case the lines that name the package's files, or by deciding the
+  command's log in the build is enough.
 - **A file tree-sitter cannot parse goes unread by dependency-cycles, saying nothing.** `imports` in
   `crates/lang-rust/src/imports.rs` and `crates/lang-python/src/imports.rs` read such a file as making no imports and
   declaring no modules. A changed file that does not parse already fails the gate, cognitive-complexity's `not-scored`
@@ -206,3 +220,11 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   a file's `#![cfg(test)]`, or the `#[cfg(test)] mod x;` in another file that makes all of `x.rs` test code. Closes
   with `model::Import::statement` taking in the lines that gate it (`cycles::added_line`), each front end giving the
   attribute, `if` or declaration lines it read the import under.
+- **test-integrity carries only a test's own weakenings, and in Rust compares them as text.** As cross-review 30 put it
+  (round 2, 2026-11-13): weakenings on a group or file (a class decorator, `pytestmark`, `#[cfg(..)] mod tests`,
+  `//go:build`) are not carried when the group moves, so a moved class's `skipif` is reported as new; and Rust's
+  `Weakening::code` is the attribute's text without whitespace (`skip` in `crates/lang-rust/src/skips.rs` joins every
+  skipping attribute on a line into one), so `#[cfg(unix)] #[ignore]` on one line before a move and on two after it, or
+  a comment edited inside an attribute, never match. Each is reported as under 0.11.1. Closes with `carried_weakenings`
+  (`crates/checks/src/integrity.rs`) matching groups as it matches tests, and lang-rust taking `code` from each
+  attribute's tokens, as lang-python and lang-go take it from their digest.

@@ -15,18 +15,24 @@ import contextlib
 import json
 import os
 import sys
+from typing import TYPE_CHECKING
+
+# Only for mypy, so the annotations naming them are strings: pytest exports these from 7.0 on, and the judged project's
+# pytest may be older, on a Python too old for `from __future__ import annotations` (3.6).
+if TYPE_CHECKING:
+    from pytest import Parser, Session
 
 
-def pytest_addoption(parser):
+def pytest_addoption(parser: "Parser") -> None:
     """Add the two options the gate gives each run at the base."""
     parser.addoption("--gate-imports-root")
     parser.addoption("--gate-imports-report")
 
 
-def pytest_sessionfinish(session):
+def pytest_sessionfinish(session: "Session") -> None:
     """Write the report of the modules imported from under the root."""
     root = os.path.realpath(session.config.getoption("gate_imports_root"))
-    found = {}
+    found: dict[str, str] = {}
     for name, module in list(sys.modules.items()):
         where = None
         # A module that computes its attributes, as a lazy loader's, may raise anything.

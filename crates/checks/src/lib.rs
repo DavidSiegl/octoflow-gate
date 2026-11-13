@@ -29,8 +29,9 @@ pub struct Finding {
     pub path: Option<OsString>,
     /// The line, from 1; None for a finding about the whole file.
     pub line: Option<u32>,
-    /// What the gate does with it: "error" fails the gate, and the gate lists a check's "warning" for the Reviewer to
-    /// weigh; a linter's finding has the linter's own grade, and fails the gate whatever it is.
+    /// What the gate does with it: "error" fails the gate, and the gate lists a check's "warning" for the change's
+    /// author to answer and its reviewer to weigh; a linter's finding has the linter's own grade, and fails the gate
+    /// whatever it is.
     pub severity: String,
     /// The tool or check that found it, then its own rule, space-separated: `ruff F401`, `test-integrity skip`.
     pub rule: String,
@@ -44,7 +45,7 @@ impl Finding {
     }
 
     /// A finding of the check named `check`, of its own `rule` ("" for none): one that fails the gate when `fails`,
-    /// else one the gate lists for the Reviewer to weigh, as what a spec may have asked for.
+    /// else one the gate lists for the change's reviewer to weigh, as what a spec may have asked for.
     fn of(check: &str, rule: &str, fails: bool, path: Option<&OsString>, line: Option<u32>, message: String) -> Finding {
         Finding {
             path: path.cloned(),

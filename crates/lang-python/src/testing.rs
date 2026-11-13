@@ -9,7 +9,7 @@ use tree_sitter::Node;
 
 use crate::binds::{binds, declared, deleted, How, SCOPES};
 use crate::syntax::{
-    children, decorated, digest, end_line, fields, line, named, of_kind, on_one_line, tokens, undecorated,
+    children, decorated, digest, digest_of, end_line, fields, line, named, of_kind, on_one_line, tokens, undecorated,
     unparenthesized, Text, Token,
 };
 
@@ -194,11 +194,37 @@ fn names_bound_in<'t>(node: Node, text: Text<'t>) -> HashSet<&'t str> {
     out
 }
 
+/// The code that `node`, the name of a skip, is written in, whole: the decorator or call it names, with its
+/// arguments, or `node` itself where it is neither's; and where that is passed in a call's arguments, as a mark in
+/// `pytest.param(2, marks=[pytest.mark.xfail])`, that call, which tells the parametrized case it marks.
+fn written_whole(node: Node) -> Node {
+    let mut whole = node;
+    while let Some(parent) = whole.parent() {
+        let named_call = parent.kind() == "call" && parent.child_by_field_name("function") == Some(whole);
+        if !(named_call || parent.kind() == "decorator") {
+            break;
+        }
+        whole = parent;
+    }
+    let mut passed = whole;
+    while let Some(parent) = passed.parent() {
+        match parent.kind() {
+            "keyword_argument" | "list" | "tuple" => passed = parent,
+            "argument_list" => return parent.parent().unwrap_or(whole),
+            _ => break,
+        }
+    }
+    whole
+}
+
 /// What weakens a test in the test module `root`: each name or attribute that skips a test or expects it to fail
-/// ([`SKIP_NAMES`]), once per line and name, and each `except` that swallows what it catches ([`swallows`]).
+/// ([`SKIP_NAMES`]), once per code it is written in ([`written_whole`]), so that each parametrized case's marks are
+/// one however they are wrapped; and each `except` that swallows what it catches ([`swallows`]), its lines those of
+/// its head, up to the colon.
 pub fn weakenings(root: Node, text: Text) -> Vec<Weakening> {
     let mut out = vec![];
-    let mut seen: HashSet<(u32, &str)> = HashSet::new();
+    // The ids of the nodes `written_whole` gave for the skips read so far.
+    let mut seen: HashSet<usize> = HashSet::new();
     let mut todo = vec![root];
     while let Some(node) = todo.pop() {
         let skip = match node.kind() {
@@ -206,26 +232,31 @@ pub fn weakenings(root: Node, text: Text) -> Vec<Weakening> {
             "attribute" => node.child_by_field_name("attribute").map(|a| text.of(a)),
             _ => None,
         };
-        if skip.is_some_and(|name| SKIP_NAMES.contains(&name) && seen.insert((line(node), name))) {
+        let whole = skip.filter(|name| SKIP_NAMES.contains(name)).map(|_| written_whole(node));
+        if let Some(whole) = whole.filter(|whole| seen.insert(whole.id())) {
             out.push(Weakening {
-                line: line(node),
+                lines: Lines { first: line(whole), last: end_line(whole) },
                 kind: WeakeningKind::Skip,
+                code: digest(whole, text),
                 message: format!("`{}` added: it skips a test or expects it to fail.", first_line(text.of(node))),
             });
         }
         if matches!(node.kind(), "except_clause" | "except_group_clause") && swallows(node, text) {
             // The clause up to the colon that opens its body.
-            let colon = children(node).into_iter().find(|c| c.kind() == ":").map_or(node.end_byte(), |c| c.end_byte());
-            let head = text.0.get(node.start_byte()..colon).unwrap_or_default();
+            let mut head: Vec<Node> = children(node);
+            head.truncate(head.iter().position(|c| c.kind() == ":").map_or(head.len(), |colon| colon + 1));
+            let end = head.last().map_or(node.start_byte(), |c| c.end_byte());
+            let written = text.0.get(node.start_byte()..end).unwrap_or_default();
             out.push(Weakening {
-                line: line(node),
+                lines: Lines { first: line(node), last: head.last().map_or(line(node), |c| end_line(*c)) },
                 kind: WeakeningKind::SwallowedError,
-                message: format!("`{}` added in a test: it hides the failure it catches.", first_line(head)),
+                code: digest_of(&head, text),
+                message: format!("`{}` added in a test: it hides the failure it catches.", first_line(written)),
             });
         }
         todo.extend(named(node).into_iter().rev());
     }
-    out.sort_by_key(|w| w.line);
+    out.sort_by_key(|w| w.lines.first);
     out
 }
 

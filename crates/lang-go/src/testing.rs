@@ -6,7 +6,7 @@ use model::{first_line, Assertion, Lines, Test, Weakening, WeakeningKind};
 use tree_sitter::Node;
 
 use crate::constraint;
-use crate::syntax::{children, digest, doc_line, end_line, function_name, is_literal, line, named, tokens, Text};
+use crate::syntax::{children, digest, digest_of, doc_line, end_line, function_name, is_literal, line, named, tokens, Text};
 
 /// The methods of `testing.T`, `B` and `F` that fail the test they are called on.
 const FAILING: &[&str] = &["Error", "Errorf", "Fatal", "Fatalf", "Fail", "FailNow"];
@@ -283,8 +283,9 @@ impl<'t> Walk<'t> {
         let method = self.testing_method(node);
         if method.is_some_and(|m| SKIPPING.contains(&m)) {
             self.weakenings.push(Weakening {
-                line: line(node),
+                lines: Lines { first: line(node), last: end_line(node) },
                 kind: WeakeningKind::Skip,
+                code: digest(node, self.text),
                 message: format!("`{}` added: it skips a test.", first_line(self.text.of(node))),
             });
         }
@@ -312,9 +313,17 @@ impl<'t> Walk<'t> {
             .filter(|s| s.kind() != "comment")
             .collect();
         if statements.is_empty() && node.child_by_field_name("condition").is_some_and(|c| self.error_not_nil(c)) {
+            // The weakening is the `if` up to its empty block; its lines end at the block's `{`, so that a comment
+            // in the block, or an `else` after it, the path that did not fail, is no line of it.
+            let head: Vec<&str> = children(node)
+                .into_iter()
+                .take_while(|c| c.kind() != "else")
+                .flat_map(|c| tokens(c, self.text))
+                .collect();
             self.weakenings.push(Weakening {
-                line: line(node),
+                lines: Lines { first: line(node), last: line(block) },
                 kind: WeakeningKind::SwallowedError,
+                code: digest_of(&head),
                 message: format!(
                     "`{}` added in `{}`: its empty block throws away the error that would fail the test.",
                     first_line(self.text.of(node)),
@@ -377,8 +386,9 @@ impl<'t> Walk<'t> {
         if let ([blank], [thrown], Some("=")) = (left.as_slice(), right.as_slice(), operator) {
             if self.text.of(*blank) == "_" && thrown.kind() == "identifier" && names_an_error(self.text.of(*thrown)) {
                 self.weakenings.push(Weakening {
-                    line: line(node),
+                    lines: Lines { first: line(node), last: end_line(node) },
                     kind: WeakeningKind::SwallowedError,
+                    code: digest(node, self.text),
                     message: format!(
                         "`{}` added in `{}`: it throws away the error that would fail the test.",
                         first_line(self.text.of(node)),

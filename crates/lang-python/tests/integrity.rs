@@ -169,6 +169,74 @@ fn added_skips_are_found_at_their_lines() {
 }
 
 #[test]
+fn a_test_moved_with_the_decorators_it_had_adds_no_skip_but_one_added_on_the_way_is_found() {
+    let base = "import pytest\n\n\n@pytest.mark.xfail\ndef test_b():\n    assert 1\n";
+    let moved = "import pytest\n\n\n@pytest.mark.slow\n@pytest.mark.xfail\ndef test_bee():\n    assert 1\n";
+    assert_eq!(found(&[deleted(OTHER_PATH, base), added("tests/test_new.py", moved)]).0, []);
+    let skipped = moved.replace("@pytest.mark.slow\n", "@pytest.mark.skip\n");
+    let (place, _) = found(&[deleted(OTHER_PATH, base), added("tests/test_new.py", &skipped)]);
+    assert_eq!(place, [at("tests/test_new.py", 4, "skip")]);
+    // A skip in the body moves with it when the body is the same.
+    let base = "import pytest\n\n\ndef test_b():\n    pytest.skip('no')\n    assert 1\n";
+    assert_eq!(found(&[deleted(OTHER_PATH, base), added("tests/test_new.py", base)]).0, []);
+    // However its quotes, trailing commas and comments are rewritten on the way, as black and an editor do.
+    let rewritten = base.replace("'no')", "\"no\",)  # still");
+    assert_eq!(found(&[deleted(OTHER_PATH, base), added("tests/test_new.py", &rewritten)]).0, []);
+    let swallowing = "def test_b():\n    try:\n        assert 1\n    except Exception:  # why\n        pass\n";
+    let rewritten = swallowing.replace("Exception:  # why", "Exception :  # flaky");
+    assert_eq!(found(&[deleted(OTHER_PATH, swallowing), added("tests/test_new.py", &rewritten)]).0, []);
+}
+
+#[test]
+fn a_kept_test_s_mark_moved_to_another_parametrized_case_is_found() {
+    let base = "import pytest\n\n\n@pytest.mark.parametrize('n', [\n    pytest.param(1, marks=pytest.mark.xfail),\n    \
+                pytest.param(2),\n])\ndef test_b(n):\n    assert n\n";
+    let moved = base
+        .replace("pytest.param(1, marks=pytest.mark.xfail)", "pytest.param(1)")
+        .replace("pytest.param(2)", "pytest.param(2, marks=pytest.mark.xfail)");
+    assert_eq!(found(&[edited(OTHER_PATH, base, &moved)]).0, [at(OTHER_PATH, 6, "skip")]);
+    // A case added beside it leaves the mark its own.
+    let added_case = base.replace("    pytest.param(2),\n", "    pytest.param(2),\n    pytest.param(3),\n");
+    assert_eq!(found(&[edited(OTHER_PATH, base, &added_case)]).0, []);
+    // On one line, a mark added to a second case is found beside the first's.
+    let one_line = "import pytest\n\n\n@pytest.mark.parametrize('n', [pytest.param(1, marks=pytest.mark.xfail), \
+                    pytest.param(2)])\ndef test_b(n):\n    assert n\n";
+    let both = one_line.replace("pytest.param(2)", "pytest.param(2, marks=pytest.mark.xfail)");
+    assert_eq!(found(&[edited(OTHER_PATH, one_line, &both)]).0, [at(OTHER_PATH, 4, "skip")]);
+    // So is one on a second case like the first.
+    let twice = one_line.replace("pytest.param(2)", "pytest.param(1, marks=pytest.mark.xfail)");
+    assert_eq!(found(&[edited(OTHER_PATH, one_line, &twice)]).0, [at(OTHER_PATH, 4, "skip")]);
+}
+
+#[test]
+fn a_test_moved_with_a_case_s_marks_rewrapped_adds_no_skip() {
+    let base = "import pytest\n\n\n@pytest.mark.parametrize('n', [pytest.param(1, marks=[pytest.mark.skip, \
+                pytest.mark.xfail])])\ndef test_b(n):\n    assert n\n";
+    let wrapped = base.replace(
+        "marks=[pytest.mark.skip, pytest.mark.xfail]",
+        "marks=[\n        pytest.mark.skip,\n        pytest.mark.xfail,\n    ]",
+    );
+    assert_eq!(found(&[deleted(OTHER_PATH, base), added("tests/test_new.py", &wrapped)]).0, []);
+    // A mark added on its own line among them is found there.
+    let more = wrapped.replace("        pytest.mark.xfail,\n", "        pytest.mark.xfail,\n        pytest.mark.skip,\n");
+    assert_eq!(found(&[edited("tests/test_new.py", &wrapped, &more)]).0, [at("tests/test_new.py", 7, "skip")]);
+}
+
+#[test]
+fn a_kept_test_s_skip_with_another_condition_or_a_second_one_stacked_above_is_found() {
+    let base = "import sys\n\nimport pytest\n\n\n@pytest.mark.skipif(sys.platform == 'win32', reason='x')\ndef test_b():\n    \
+                assert 1\n";
+    let always = base.replace("sys.platform == 'win32'", "True");
+    assert_eq!(found(&[edited(OTHER_PATH, base, &always)]).0, [at(OTHER_PATH, 6, "skip")]);
+    let stacked = base.replace("@pytest", "@pytest.mark.skipif(True, reason='y')\n@pytest");
+    assert_eq!(found(&[edited(OTHER_PATH, base, &stacked)]).0, [at(OTHER_PATH, 6, "skip")]);
+    // A wrapped skipif whose condition line alone changed, at that line.
+    let wrapped = base.replace("skipif(sys", "skipif(\n    sys").replace(", reason", ",\n    reason");
+    let always = wrapped.replace("    sys.platform == 'win32',", "    True,");
+    assert_eq!(found(&[edited(OTHER_PATH, &wrapped, &always)]).0, [at(OTHER_PATH, 7, "skip")]);
+}
+
+#[test]
 fn a_skip_is_a_name_python_reads_not_one_it_binds_or_passes_by_keyword() {
     let other =
         format!("{OTHER_TESTS}\n\nfrom unittest import skip as skipIf\n\n\ndef test_c(xfail=1):\n\

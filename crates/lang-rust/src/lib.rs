@@ -139,8 +139,9 @@ fn swallowed_errors(items: &Items, tests: &[&Fn], in_tests: &dyn std::ops::Fn(u3
     for t in tests {
         for a in t.attrs.iter().filter(|a| a.path == "should_panic" && !a.text.contains("expected")) {
             out.push(Weakening {
-                line: a.line,
+                lines: Lines { first: a.line, last: a.line + u32::try_from(a.text.matches('\n').count()).unwrap_or(0) },
                 kind: WeakeningKind::SwallowedError,
+                code: model::without_whitespace(&a.text),
                 message: format!(
                     "`{}` without `expected` added on `{}`: any panic passes it, a failed assertion's too.",
                     first_line(&a.text),
@@ -154,8 +155,9 @@ fn swallowed_errors(items: &Items, tests: &[&Fn], in_tests: &dyn std::ops::Fn(u3
             if d.text.contains("catch_unwind") || f.asserts.iter().any(|a| d.text.contains(&a.text)) {
                 let written = d.written.replacen("{}", &d.text, 1);
                 out.push(Weakening {
-                    line: d.line,
+                    lines: d.lines,
                     kind: WeakeningKind::SwallowedError,
+                    code: model::without_whitespace(&written),
                     message: format!(
                         "`{}` added in `{}`: it throws away the panic or the `Err` that would fail the test.",
                         first_line(&written),

@@ -2,7 +2,7 @@
 //! it does to the tests of a `_test.go` file: it builds them only where `expr` holds, so it turns them off everywhere
 //! else.
 
-use model::{first_line, Weakening, WeakeningKind};
+use model::{first_line, Lines, Weakening, WeakeningKind};
 
 /// The `GOOS` values, from `go tool dist list`, with the older `nacl`.
 const GOOSES: &[&str] = &[
@@ -85,16 +85,19 @@ pub fn weakening(comment: &str, line: u32) -> Option<Weakening> {
     }
     let platform_only = parse(expression).is_some_and(|e| e.names_no_custom_tag() && e.holds_on_some_build());
     let written = first_line(comment.trim_end());
+    let code = model::without_whitespace(comment);
     Some(if platform_only {
         Weakening {
-            line,
+            lines: Lines { first: line, last: line },
             kind: WeakeningKind::PlatformOnly,
+            code,
             message: format!("`{written}` added: it turns the file's tests off on the other platforms and toolchains."),
         }
     } else {
         Weakening {
-            line,
+            lines: Lines { first: line, last: line },
             kind: WeakeningKind::Skip,
+            code,
             message: format!("`{written}` added: it turns the file's tests off."),
         }
     })

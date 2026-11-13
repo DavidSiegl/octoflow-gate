@@ -488,11 +488,14 @@ header, and mutmut skips it. The rules' `[tool.mutmut]` says what can be mutated
 (`also_copy`), and which lines are left alone (`do_not_mutate_patterns`); see [whose rules judge a
 change](#whose-rules-judge-a-change). Python files are decoded by a byte order mark or a coding cookie, as [reading the
 source](#reading-the-source) says. mutmut runs pytest in the copy's `mutants/`, where it puts the mutated code.
-Its runs get, with `-c`, the configuration of the copy's top directory, in the order the reruns look in a directory: the
-project's own, which `also_copy` puts in `mutants/` so that paths in it, such as `pythonpath`, name the mutated code, or
-an empty one; and `--confcutdir` is `mutants/`. Both are added to the table's `pytest_add_cli_args`, so these runs too
-read no `pytest.ini` or `conftest.py` from above the copy. Where the project's Python has no mutmut, or the settings
-have no `pyproject.toml` beside them, a change to a function gets a `not-run` finding.
+Its runs get, with `-c`, the configuration of the tests mutmut runs, found as the reruns find a test file's: from the
+files of the tests `--test-contexts` records (see below), or else from each path the test selection names, a directory
+looked up from itself, or from the copy's top when it names none. That is the project's own, which `also_copy` puts in
+`mutants/` so that paths in it, such as `pythonpath`, name the mutated code, or an empty one; and `--confcutdir` is
+`mutants/`. Both are added to the table's `pytest_add_cli_args`, so these runs too read no `pytest.ini` or `conftest.py`
+from above the copy. mutmut takes one configuration for all its runs, so tests under more than one get a `not-run`
+finding, as does a change to a function where the project's Python has no mutmut, or the settings have no
+`pyproject.toml` beside them.
 
 **Which tests mutmut runs.** Before it tries a mutant, mutmut runs its whole test selection three times: to find which
 tests call each function, to check that they pass, and once more with `-x` until the first test that calls a mutated

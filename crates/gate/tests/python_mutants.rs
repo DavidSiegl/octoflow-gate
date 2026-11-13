@@ -491,6 +491,51 @@ fn the_project_s_own_pytest_configuration_still_applies() {
     assert_eq!(places(&found), at(&WEAKLY_TESTED.map(|(path, line, _)| (path, line, "untested"))));
 }
 
+/// A repository like [`calc`]'s whose tests import a helper of their own, tests/support/helper.py, which only the
+/// `pythonpath` of the tests' configuration, tests/pytest.ini, puts on their path; mutmut's selection is
+/// `selection`, TOML.
+fn calc_with_helper(selection: &str) -> Repo {
+    let rules =
+        format!("[tool.mutmut]\nsource_paths = [\"calc.py\"]\npytest_add_cli_args_test_selection = {selection}\n");
+    Repo::with(&[
+        common::NO_PYTHON_LINTERS,
+        ("pyproject.toml", rules.as_bytes()),
+        ("calc.py", BASE.as_bytes()),
+        ("tests/pytest.ini", b"[pytest]\npythonpath = support\n"),
+        ("tests/support/helper.py", b"FIVE = 5\n"),
+        ("tests/test_calc.py", format!("import helper\n{TESTS}").as_bytes()),
+    ])
+}
+
+#[test]
+fn mutmut_runs_under_the_configuration_of_the_tests_below_the_top() {
+    let repo = calc_with_helper("[\"tests/\"]");
+    change_the_functions(&repo, &[]);
+    let found = findings(&repo, Gate::default());
+    assert_eq!(places(&found), at(&WEAKLY_TESTED), "{found:?}");
+    // The tests --test-contexts records choose the configuration the same way.
+    change_the_functions(&repo, &["checked", "unchecked"]);
+    let recorded: [(&str, &[u32]); 2] =
+        [("tests/test_calc.py::test_checked", &[1, 2]), ("tests/test_calc.py::test_unchecked", &[5, 6])];
+    let data_file = contexts(&repo, "test", "calc.py", &recorded);
+    let found = findings(&repo, Gate { test_contexts: Some(data_file), ..Gate::default() });
+    assert_eq!(places(&found), at(&[("calc.py", 5, "survived")]), "{found:?}");
+}
+
+#[test]
+fn tests_under_more_than_one_configuration_are_not_mutation_tested_under_either() {
+    let repo = calc_with_helper("[\"tests/\", \"more/\"]");
+    repo.commit(&[("more/pytest.ini", b"[pytest]\n"), ("more/test_more.py", b"def test_more():\n    pass\n")], "more");
+    change_the_functions(&repo, &["orphan"]);
+    let found = findings(&repo, Gate::default());
+    assert_eq!(places(&found), [whole("not-run")]);
+    assert_eq!(
+        found[0].3,
+        "the tests mutmut runs take more than one pytest configuration, `more/pytest.ini` and `tests/pytest.ini`, \
+         where mutmut runs them all under one; the change's functions were not mutation-tested."
+    );
+}
+
 #[test]
 fn a_mutmut_table_of_the_wrong_shape_is_a_finding_and_leaves_nothing_behind() {
     let repo = calc();

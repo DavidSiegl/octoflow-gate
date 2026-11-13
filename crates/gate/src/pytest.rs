@@ -70,12 +70,12 @@ impl Setup {
     }
 }
 
-/// Changed test files that take one pytest configuration, as [`groups`] finds them.
+/// Test files, or directories of them, that take one pytest configuration, as [`groups`] finds them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Group {
     /// How to run them, rooted at the configuration's directory.
     pub setup: Setup,
-    /// The files, by their paths in the copy.
+    /// The files and directories, by their paths in the copy.
     pub paths: BTreeSet<OsString>,
 }
 
@@ -102,12 +102,17 @@ impl Group {
     /// The group's tests, as a finding about all of them names them when the change's tests fall in more than one
     /// group: by their configuration file's path in the copy.
     pub fn label(&self) -> String {
-        // The empty configuration is the one file given with -c that lies outside the copy ([`config`]).
-        if !self.setup.inifile.starts_with(&self.setup.top) {
-            return "the changed tests with no pytest configuration".into();
+        match self.inifile_in_tree() {
+            Some(inifile) => format!("the changed tests configured by {}", text::path(inifile.as_os_str())),
+            None => "the changed tests with no pytest configuration".into(),
         }
-        let inifile = rel_path(&self.setup.inifile, &self.setup.top);
-        format!("the changed tests configured by {}", text::path(inifile.as_os_str()))
+    }
+
+    /// The group's configuration file by its path in the copy; None for the empty one [`groups`] writes beside it.
+    pub fn inifile_in_tree(&self) -> Option<PathBuf> {
+        // The empty configuration is the one file given with -c that lies outside the copy.
+        let in_tree = self.setup.inifile.starts_with(&self.setup.top);
+        in_tree.then(|| rel_path(&self.setup.inifile, &self.setup.top))
     }
 }
 
@@ -117,18 +122,23 @@ pub fn labels(groups: &[Group]) -> Vec<Option<String>> {
     groups.iter().map(|group| (groups.len() > 1).then(|| group.label())).collect()
 }
 
-/// `paths`, test files by their paths in `tree`, a copy of a tree, grouped by the configuration pytest takes for
-/// each, to run with `python`: the one [`inifile`] finds in the file's directory, else in the nearest directory above
-/// it that has one, up to `tree`'s top and never above it, as pytest 9's `locate_config` walks up from the files it
-/// is given (its `_pytest/config/findpaths.py`). In the order of their directories. Files with none share an empty
-/// configuration written in `tmp`, as [`config`] writes it. Errs as [`config`] does.
+/// `paths`, test files or directories by their paths in `tree`, a copy of a tree, "" for its top, grouped by the
+/// configuration pytest takes for each, to run with `python`: the one [`inifile`] finds in the file's directory, or
+/// in the directory itself, else in the nearest directory above it that has one, up to `tree`'s top and never above
+/// it, as pytest 9's `locate_config` walks up from the paths it is given (its `_pytest/config/findpaths.py`). In the
+/// order of their directories. Paths with none share an empty pytest.ini that this writes in `tmp`, the private
+/// directory beside the copy, so that pytest, given it with `-c`, looks for none above the copy, where another
+/// account may write. Errs when that file cannot be written, or `tmp` has one already.
 pub fn groups(python: &Path, tree: &Path, tmp: &Path, paths: &BTreeSet<OsString>) -> std::io::Result<Vec<Group>> {
     // Each directory read, by its path in the tree, and the configuration it holds.
     let mut seen: HashMap<PathBuf, Option<PathBuf>> = HashMap::new();
-    // The files under each configuration, by its directory's path in the tree; those with none under "".
+    // The paths under each configuration, by its directory's path in the tree; those with none under "".
     let mut found: BTreeMap<OsString, (Option<PathBuf>, BTreeSet<OsString>)> = BTreeMap::new();
     for path in paths {
-        let mut place = Path::new(path).parent().unwrap_or(Path::new(""));
+        let mut place = Path::new(path);
+        if !tree.join(place).is_dir() {
+            place = place.parent().unwrap_or(Path::new(""));
+        }
         let own = loop {
             let own = seen.entry(place.to_path_buf()).or_insert_with(|| inifile(&tree.join(place))).clone();
             match place.parent() {
@@ -149,17 +159,6 @@ pub fn groups(python: &Path, tree: &Path, tmp: &Path, paths: &BTreeSet<OsString>
         out.push(Group { setup, paths: members });
     }
     Ok(out)
-}
-
-/// The pytest configuration to run all the tests of `tree`, a copy of a tree, by from its top: its own, as
-/// [`inifile`] finds it, else an empty pytest.ini that this writes in `tmp`, the private directory beside the copy,
-/// so that pytest, given it with `-c`, looks for none above the copy, where another account may write. Errs when
-/// that file cannot be written, or `tmp` has one already.
-pub fn config(tree: &Path, tmp: &Path) -> std::io::Result<PathBuf> {
-    match inifile(tree) {
-        Some(own) => Ok(own),
-        None => empty_ini(tmp),
-    }
 }
 
 /// The path of an empty pytest.ini that this writes in `tmp`, where none is yet.
@@ -467,18 +466,15 @@ mod tests {
         let (tree, tmp) = (dir.join("tree"), dir.join("tmp"));
         write(&tree, "test_top.py", "");
         let paths: BTreeSet<OsString> = [OsString::from("test_top.py")].into();
-        let kind = |written: std::io::Result<PathBuf>| written.map_err(|e| e.kind());
         // No directory to write it in.
         assert_eq!(groups(Path::new("py"), &tree, &tmp, &paths).unwrap_err().kind(), std::io::ErrorKind::NotFound);
-        assert_eq!(kind(config(&tree, &tmp)), Err(std::io::ErrorKind::NotFound));
         // One is there already, which may be another's.
         write(&tmp, "pytest.ini", "[pytest]\n");
         assert_eq!(groups(Path::new("py"), &tree, &tmp, &paths).unwrap_err().kind(), std::io::ErrorKind::AlreadyExists);
-        assert_eq!(kind(config(&tree, &tmp)), Err(std::io::ErrorKind::AlreadyExists));
         // A tree with a configuration of its own needs none written.
         write(&tree, "pytest.ini", "");
-        assert_eq!(kind(config(&tree, &tmp)), Ok(tree.join("pytest.ini")));
-        assert_eq!(groups(Path::new("py"), &tree, &tmp, &paths).unwrap().len(), 1);
+        let found = groups(Path::new("py"), &tree, &tmp, &paths).unwrap();
+        assert_eq!(found.iter().map(|g| g.setup.inifile.clone()).collect::<Vec<_>>(), [tree.join("pytest.ini")]);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -527,6 +523,25 @@ mod tests {
         assert_eq!(found[1].in_tree(finding(None)), finding(None));
         // The empty configuration is written once: a second grouping beside the same copy cannot.
         assert!(groups(Path::new("py"), &tree, &tmp, &paths).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_directory_takes_the_configuration_found_from_itself_up() {
+        let dir = scratch("groups-dirs");
+        let (tree, tmp) = (dir.join("tree"), dir.join("tmp"));
+        std::fs::create_dir_all(&tmp).unwrap();
+        write(&tree, "tox.ini", "[pytest]\n");
+        write(&tree, "tests/pytest.ini", "");
+        write(&tree, "tests/unit/test_u.py", "");
+        let inifiles = |paths: &[&str]| -> Vec<PathBuf> {
+            let paths: BTreeSet<OsString> = paths.iter().map(OsString::from).collect();
+            groups(Path::new("py"), &tree, &tmp, &paths).unwrap().into_iter().map(|g| g.setup.inifile).collect()
+        };
+        assert_eq!(inifiles(&["tests"]), [tree.join("tests/pytest.ini")]);
+        assert_eq!(inifiles(&["tests/unit", "tests/unit/test_u.py"]), [tree.join("tests/pytest.ini")]);
+        assert_eq!(inifiles(&[""]), [tree.join("tox.ini")]);
+        assert_eq!(inifiles(&["", "tests"]), [tree.join("tox.ini"), tree.join("tests/pytest.ini")]);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

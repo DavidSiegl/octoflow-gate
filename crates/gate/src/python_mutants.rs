@@ -103,10 +103,11 @@ pub struct Mutmut<'a> {
 /// and each mutated function is an `untested` finding. A file unfit to tell them, or a collection that fails, is a
 /// `not-narrowed` finding saying why, and mutmut runs the whole selection.
 ///
-/// A mutmut that cannot start, fails, or whose results cannot be listed, rules that name no source_paths or no rules
-/// at all, a changed
-/// file that cannot be read or parsed, and a copy that cannot be made are `not-run` findings saying so; a copy that
-/// cannot be removed afterwards is a `not-removed` one.
+/// mutmut's pytest runs take the configuration pytest finds for the tests they run (pytest::groups), which must be
+/// one: tests under more than one are a `not-run` finding naming them. A mutmut that cannot start, fails, or whose
+/// results cannot be listed, rules that name no source_paths or no rules at all, a changed file that cannot be read
+/// or parsed, and a copy that cannot be made are `not-run` findings too, saying so; a copy that cannot be removed
+/// afterwards is a `not-removed` one.
 pub fn python_mutants(python: &PythonChange, mutmut: &Mutmut, seconds: f64) -> Vec<Finding> {
     let in_scope = |path: &OsStr| !python_test(&python.change.settings, path);
     let (units, unreadable) = python.changed_units(in_scope, |unit, added, removal_points| {
@@ -437,7 +438,8 @@ fn time_left(deadline: Instant) -> Option<Duration> {
 /// The findings of mutmut run on `functions` for `seconds` in `copy`, which this makes in `tmp`, an empty private
 /// directory, of the files git tracks in `root`'s working tree (copies::copy_tracked), but for what it tracks under
 /// mutmut's state; marked for mutmut to skip all but `functions`, with `table`, the rules' `[tool.mutmut]`, in
-/// place of its own, and its pytest runs taking no configuration or conftest.py from above the copy. `recorded`,
+/// place of its own, and its pytest runs taking the configuration of the tests they run ([`test_places`]) and no
+/// configuration or conftest.py from above the copy; tests under more than one are a `not-run` finding. `recorded`,
 /// when given, are the node ids of the tests `--test-contexts` records reaching `functions`: mutmut is then given
 /// those of them its selection collects ([`narrowed_table`]).
 fn on_copy(
@@ -469,9 +471,15 @@ fn on_copy(
         // to when the project has none; --confcutdir keeps it from importing a conftest.py from above mutants/. The
         // project's own configuration is read from mutmut's copy of it in mutants/, which also_copy makes, since
         // pytest takes paths in it, such as pythonpath, from where it is: there they name the mutated code.
-        let mut config = pytest::config(copy.tree, tmp).map_err(|e| start(&e))?;
+        let places = test_places(copy.tree, table, recorded);
+        let groups = pytest::groups(copy.python, copy.tree, tmp, &places).map_err(|e| start(&e))?;
+        let mut config = match &groups[..] {
+            [group] => group.setup.inifile.clone(),
+            _ => return Err(several_configurations(&groups)),
+        };
         let mut table = table.clone();
         if let Some(recorded) = recorded {
+            // Rooted at the top, not the configuration's directory, as mutmut's --rootdir=. roots its runs.
             let setup = Setup {
                 python: copy.python.to_path_buf(),
                 root: copy.tree.to_path_buf(),
@@ -485,11 +493,16 @@ fn on_copy(
             }
         }
         let mut given = table.clone();
-        if let (Some(name), true) = (config.file_name(), config.parent() == Some(copy.tree)) {
+        if let Ok(in_tree) = config.strip_prefix(copy.tree).map(Path::to_path_buf) {
             let mut also_copy = strings(&table, "also_copy");
-            also_copy.push(utf8(name.as_ref()).map_err(|e| start(&e))?);
+            also_copy.push(utf8(&in_tree).map_err(|e| start(&e))?);
             set_strings(&mut given, "also_copy", also_copy);
-            config = state.join(name);
+            // mutmut copies also_copy's files before the directories it copies by default, tests/ among them, and
+            // makes no directory for a file.
+            if let Some(dir) = in_tree.parent() {
+                std::fs::create_dir_all(state.join(dir)).map_err(|e| start(&e))?;
+            }
+            config = state.join(in_tree);
         }
         let mut args = strings(&table, "pytest_add_cli_args");
         args.extend(["-c".to_string(), utf8(&config).map_err(|e| start(&e))?]);
@@ -511,6 +524,48 @@ fn on_copy(
         Err(problem) => out.push(not_run(&problem)),
     }
     out
+}
+
+/// The paths in `tree`, a copy of a tree, that pytest under mutmut starts from to find its configuration, for
+/// pytest::groups: the files of `recorded`'s node ids when given, else the arguments of `table`'s test selection,
+/// tests_dir's among them, that name a file, a directory or a node id in the copy, each as a path normalized below
+/// the top, "" for the top itself; else the top alone, where pytest given no path starts from. Neither recorded tests
+/// that mutmut's selection leaves out nor an option's value that names a file can be told apart from the others.
+fn test_places(tree: &Path, table: &Table, recorded: Option<&BTreeSet<String>>) -> BTreeSet<OsString> {
+    let mut out = BTreeSet::new();
+    match recorded {
+        Some(recorded) => out.extend(recorded.iter().map(|id| pytest::node_parts(OsStr::new(id)).0)),
+        None => {
+            let selection = ["pytest_add_cli_args_test_selection", "tests_dir"].map(|key| strings(table, key));
+            for arg in selection.iter().flatten().filter(|arg| !arg.starts_with('-')) {
+                let path = normpath(Path::new(arg.split("::").next().unwrap_or_default()));
+                let below = path.components().all(|part| matches!(part, std::path::Component::Normal(_)));
+                if below && tree.join(&path).exists() {
+                    out.insert(path.into_os_string());
+                } else if path == Path::new(".") {
+                    out.insert(OsString::new());
+                }
+            }
+        }
+    }
+    if out.is_empty() {
+        out.insert(OsString::new());
+    }
+    out
+}
+
+/// The problem, a clause, of tests that pytest::groups puts under more than one configuration, `groups`, when mutmut
+/// runs all its tests under one.
+fn several_configurations(groups: &[pytest::Group]) -> String {
+    let named = |group: &pytest::Group| match group.inifile_in_tree() {
+        Some(inifile) => format!("`{}`", text::one_line(&text::path(inifile.as_os_str()))),
+        None => "none".into(),
+    };
+    let names: Vec<String> = groups.iter().map(named).collect();
+    format!(
+        "the tests mutmut runs take more than one pytest configuration, {}, where mutmut runs them all under one",
+        text::series(&names, None)
+    )
 }
 
 /// `path` as a `[tool.mutmut]` setting can hold it; errs, saying so, when it is not UTF-8.
@@ -1093,6 +1148,28 @@ mod tests {
         assert_eq!(time_left(Instant::now()), None);
         let left = time_left(Instant::now() + stop + Duration::from_secs(20)).unwrap();
         assert!(Duration::from_secs(19) < left && left <= Duration::from_secs(20), "{left:?}");
+    }
+
+    #[test]
+    fn pytest_starts_from_the_paths_the_selection_names_in_the_copy_else_from_the_top() {
+        let tree = std::env::temp_dir().join(format!("gate-test-places-{}", std::process::id()));
+        std::fs::create_dir_all(tree.join("tests/unit")).unwrap();
+        std::fs::write(tree.join("tests/unit/test_u.py"), "").unwrap();
+        let places = |selection: &str, recorded: Option<&[&str]>| -> Vec<String> {
+            let recorded: Option<BTreeSet<String>> = recorded.map(|ids| ids.iter().map(|id| id.to_string()).collect());
+            let found = test_places(&tree, &table(selection), recorded.as_ref());
+            found.iter().map(|path| text::path(path)).collect()
+        };
+        // An option, its value, and a path outside the copy or missing from it are not among them.
+        let selection = r#"pytest_add_cli_args_test_selection = ["-m", "slow", "./tests/", "/abs", "../up", "gone"]"#;
+        assert_eq!(places(selection, None), ["tests"]);
+        let selection = r#"pytest_add_cli_args_test_selection = ["tests/unit/test_u.py::test_x"]
+                           tests_dir = ["."]"#;
+        assert_eq!(places(selection, None), ["", "tests/unit/test_u.py"]);
+        assert_eq!(places("", None), [""]);
+        // Recorded tests stand in for the selection.
+        assert_eq!(places(selection, Some(&["t/test_a.py::test_x", "t/test_a.py::T::test_y"])), ["t/test_a.py"]);
+        std::fs::remove_dir_all(&tree).unwrap();
     }
 
     #[test]

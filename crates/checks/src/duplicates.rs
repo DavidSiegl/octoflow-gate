@@ -18,10 +18,12 @@ use crate::Finding;
 /// the lines the change added to each file. `min_tokens` is at least 1.
 ///
 /// A window of `min_tokens` tokens is the change's when every one of its tokens lies on a line the change added. It
-/// is copied when an equal window lies anywhere else in `files`, in the same file too where the two do not overlap.
-/// Copied windows of a file that overlap make one run, reported once, naming the place that matches most of its
-/// windows: of two such, one the change did not wholly add before one it did, then the first by path and line. A
-/// block the change adds twice is reported once, at the later copy by path and line, naming the earlier.
+/// is copied when an equal window lies anywhere else in `files`, in the same file too where the two do not overlap,
+/// and `files` hold no more than [`MOST_PLACES`] windows of its shape. Copied windows of a file that overlap make one
+/// run, reported once, naming the place that matches most of its windows: of two such, one the change did not wholly
+/// add before one it did, then the first by path and line. A block the change adds twice, and `files` hold nowhere
+/// else, is reported once, at the later copy by path and line, naming the earlier; where `files` hold it elsewhere
+/// too, each copy is reported, naming that place.
 pub fn copied_blocks(
     files: &[(OsString, Vec<CodeToken>)],
     added: &BTreeMap<OsString, BTreeSet<u32>>,
@@ -57,6 +59,12 @@ pub fn copied_blocks(
     out.sort_by(|a, b| (&a.path, a.line).cmp(&(&b.path, b.line)));
     out
 }
+
+/// The most windows of one shape, in all the files, of which one the change added is still a copy. A shape held more
+/// often is a pattern, a table or a run of like statements, rather than logic to share, and naming one of its places
+/// says nothing; it also bounds the places a window is compared with, which for a table of one shape thousands of
+/// tokens long would otherwise be every other window of it.
+const MOST_PLACES: usize = 32;
 
 /// A window's place: the file's index in `files` and the window's first token's index in it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -123,8 +131,9 @@ fn changes_windows(tokens: &[CodeToken], added: Option<&BTreeSet<u32>>, n: usize
 /// windows share.
 fn window_hashes(shapes: &[Vec<u64>], n: usize) -> impl Iterator<Item = (usize, usize, u64)> + '_ {
     const BASE: u64 = 0x0000_0100_0000_01b3;
-    // BASE to the power n - 1, to take a window's first shape out of its hash.
-    let top = (1..n).fold(1u64, |acc, _| acc.wrapping_mul(BASE));
+    // BASE to the power n - 1, to take a window's first shape out of its hash. A file shorter than n has no window,
+    // so where n - 1 exceeds u32 the power is never used.
+    let top = BASE.wrapping_pow(u32::try_from(n - 1).unwrap_or(u32::MAX));
     shapes.iter().enumerate().flat_map(move |(f, shapes)| {
         let mut hash = 0u64;
         shapes.iter().enumerate().filter_map(move |(i, &shape)| {
@@ -138,7 +147,8 @@ fn window_hashes(shapes: &[Vec<u64>], n: usize) -> impl Iterator<Item = (usize, 
 }
 
 /// The runs of file `f` of `files`: its windows that are the change's ([`changes_windows`]) and match a window
-/// elsewhere in `index` of equal shapes, not overlapping it, those that overlap joined.
+/// elsewhere in `index` of equal shapes, not overlapping it, where `index` holds no more than [`MOST_PLACES`] windows
+/// of their hash; those that overlap joined.
 ///
 /// A match with a window the change also added that comes later by path and start is left out: that later copy's run
 /// names this one. Kept, it would join the two copies of a block added twice back to back into one run that repeats
@@ -156,10 +166,9 @@ fn runs(
         let window = &shapes[f][i..i + n];
         let later_copy = |p: &Place| ours[p.file][p.start] && (&files[p.file].0, p.start) > (&files[f].0, i);
         let elsewhere = |p: &&Place| (p.file != f || p.start.abs_diff(i) >= n) && !later_copy(p);
-        let places: Vec<Place> = index
-            .get(&hash)
-            .into_iter()
-            .flatten()
+        let Some(all) = index.get(&hash).filter(|all| all.len() <= MOST_PLACES) else { continue };
+        let places: Vec<Place> = all
+            .iter()
             .filter(elsewhere)
             .filter(|p| shapes[p.file][p.start..p.start + n] == *window)
             .copied()
@@ -242,6 +251,29 @@ mod tests {
         let found = found(&[("a.rs", &[1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3])], &[("a.rs", 1, 13)]);
         assert_eq!(found.iter().map(|f| (f.0.as_str(), f.1)).collect::<Vec<_>>(), [("a.rs", 6)]);
         assert!(found[0].2.starts_with("these 8 tokens repeat `a.rs:1`"), "{}", found[0].2);
+    }
+
+    #[test]
+    fn a_block_the_files_hold_more_than_most_places_times_is_a_pattern_and_not_found() {
+        let block: &[u64] = &[1, 2, 3, 4];
+        let with = |copies: usize| {
+            let names: Vec<String> = (0..copies).map(|k| format!("f{k:02}.rs")).collect();
+            let files: Vec<(&str, &[u64])> = names.iter().map(|name| (name.as_str(), block)).collect();
+            found(&files, &[("f00.rs", 1, 4)]).len()
+        };
+        assert_eq!((with(MOST_PLACES), with(MOST_PLACES + 1)), (1, 0));
+    }
+
+    #[test]
+    fn a_long_table_of_one_shape_is_not_found() {
+        let table = vec![7; 100_000];
+        assert_eq!(found(&[("a.rs", &table)], &[("a.rs", 1, 100_000)]), []);
+    }
+
+    #[test]
+    fn a_window_longer_than_every_file_finds_nothing_at_once() {
+        let files = vec![(OsString::from("a.rs"), tokens(&[1, 2, 1, 2]))];
+        assert_eq!(copied_blocks(&files, &added(&[("a.rs", 1, 4)]), usize::MAX), []);
     }
 
     #[test]

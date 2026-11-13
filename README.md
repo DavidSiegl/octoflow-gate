@@ -65,8 +65,8 @@ written whole or not at all. `gate --help` describes each option.
 [schema/quality-v1.json](schema/quality-v1.json): the gate, its failed conditions, every finding with whether it fails
 the gate and a fingerprint that survives the finding moving, the failing tests, coverage of new code, the suppressions
 added and the build configuration edited. Its `schema_version` is raised on any change a reader could notice; a new
-optional field does not raise it. The quality file is prose, whose wording may change in any release: read the JSON,
-not the Markdown. [The report as a contract](docs/quality-gate.md#the-report-as-a-contract) says more.
+optional field does not raise it, nor does a change to the words of a finding's message or a failing test's detail.
+The quality file is prose, whose wording may change in any release: read the JSON, not the Markdown. [The report as a contract](docs/quality-gate.md#the-report-as-a-contract) says more.
 
 ## Running the gate in a project
 

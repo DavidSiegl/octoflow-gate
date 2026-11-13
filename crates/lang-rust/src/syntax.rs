@@ -149,8 +149,6 @@ pub struct Mod {
     pub end: u32,
     /// Its outer attributes.
     pub attrs: Vec<Attr>,
-    /// Whether it is compiled only under `cfg(test)`, by a `cfg` whose predicate needs `test`.
-    pub cfg_test: bool,
 }
 
 /// What [`collect`] gathers of a file.
@@ -162,6 +160,10 @@ pub struct Items {
     pub bindings: Vec<Binding>,
     /// Every inner attribute, `#![...]`, wherever it is written.
     pub inner_attrs: Vec<Attr>,
+    /// The lines of each item compiled only under `cfg(test)`, its outer attributes and doc comments included: one
+    /// marked by a `cfg` whose predicate needs `test`, or an inline module whose body opens with such a `#![cfg]`.
+    /// An item inside another is listed too.
+    pub test_code: Vec<model::Lines>,
     /// The file's constants, as [`model::SourceFile::constants`] has them: each `const` or `static` that only inline
     /// modules hold, if any, whose name no other such item in the file binds, and whose value calls nothing. A call of
     /// a path whose last name starts with a capital, as `Some(3)`, is a constructor by Rust's naming, not a call; a
@@ -201,6 +203,7 @@ impl Walk<'_> {
 
     /// Walks `node`; `assoc` says whether it is an item of an `impl` or a `trait`.
     fn node(&mut self, node: Node, text: Text, assoc: bool) {
+        self.test_item(node, text);
         match node.kind() {
             "function_item" | "function_signature_item" => self.function(node, text),
             "foreign_mod_item" | "macro_definition" => {}
@@ -257,6 +260,23 @@ impl Walk<'_> {
         }
     }
 
+    /// Records `node`'s lines in [`Items::test_code`] when it is an item compiled only under `cfg(test)`.
+    fn test_item(&mut self, node: Node, text: Text) {
+        let kind = node.kind();
+        if !kind.ends_with("_item") || matches!(kind, "attribute_item" | "inner_attribute_item") {
+            return;
+        }
+        let body = node.child_by_field_name("body").filter(|_| kind == "mod_item");
+        let marked = preceding_attributes(node).into_iter().any(|a| holds_only_under_test(a, text))
+            || body.is_some_and(|b| opens_test_only(b, text));
+        if marked {
+            let line = self.line(text, node);
+            let first = outer_attributes(node, text, self.lines).0.unwrap_or(line);
+            let last = self.lines.line(text.end(node).saturating_sub(1));
+            self.items.test_code.push(model::Lines { first, last });
+        }
+    }
+
     fn children(&mut self, node: Node, text: Text) {
         for child in named(node) {
             self.node(child, text, false);
@@ -267,8 +287,8 @@ impl Walk<'_> {
     fn const_or_static(&mut self, node: Node, text: Text, assoc: bool) {
         let name = self.bind_name(node, text, false);
         if !assoc && self.holders.iter().all(|h| matches!(h, Holder::Mod(_))) {
-            let value = node.child_by_field_name("value").filter(|v| !calls(*v, text));
-            let constant = value.map(|v| Constant {
+            let spelled = node.child_by_field_name("value").filter(|v| !calls(*v, text));
+            let constant = spelled.map(|v| Constant {
                 name: name.clone(),
                 line: self.line(text, node),
                 expression: digest(&tokens(v, text).join(" ")),
@@ -407,11 +427,6 @@ impl Walk<'_> {
             attrs_line: attrs_line.unwrap_or(line),
             end: self.lines.line(text.end(body).saturating_sub(1)),
             attrs,
-            // Its inner attributes, `#![cfg(test)]` at the top of its body, mark it too.
-            cfg_test: preceding_attributes(node)
-                .into_iter()
-                .chain(named(body).into_iter().filter(|n| n.kind() == "inner_attribute_item"))
-                .any(|a| holds_only_under_test(a, text)),
         });
         self.inside(Holder::Mod(name), |w| w.node(body, text, false));
     }

@@ -198,15 +198,17 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   finding (`crates/checks/src/complexity.rs`); a file the change leaves alone does not, and as cross-review 24 put it
   (F3, 2026-11-12): "one construct it rejects anywhere in `src/lib.rs` drops all its `mod` declarations, every module
   becomes its own crate root, `crate::` paths stop resolving, and a cycle the change closes among them is passed with
-  OK. The gate's verdict then says nothing about the check not having read the crate." Closes with the front ends
-  saying which files they could not read, and the gate naming those in a note that fails nothing.
+  OK. The gate's verdict then says nothing about the check not having read the crate." `test_modules` (same file)
+  reads such a file alike, so the files its `#[cfg(test)] mod name;` declarations take in are judged as code. Closes
+  with the front ends saying which files they could not read, and the gate naming those in a note that fails nothing.
 - **dependency-cycles reads and parses every tracked file of a language twice a run.** As cross-review 24 put it (F6,
   2026-11-12): "Every untouched file's bytes are cloned into `base` and each tree is parsed in full by `imports`, so a
   one-line change parses the repository's whole `.py`/`.rs` set twice; `git ls-files -z` repeats `judge_change`'s
   listing, and the base side reruns `ls-tree`/`cat-file` for files `Stored` already read" (`trees` in
   `crates/gate/src/parser_checks.rs`). duplicated-blocks (structural-checks/03) lists and reads the working tree's
-  files of each language a third time, and parses them once more (`duplicated_blocks`, same file). Closes with an
-  untouched file's imports read once for both sides, the listing and the base's files taken from what the gate
+  files of each language a third time, and parses them once more (`duplicated_blocks`, same file); and, for Rust,
+  `RustChange::of` (same file) reads both trees once more and parses them for `lang_rust::test_modules`. Closes with
+  an untouched file's imports and modules read once for both sides, the listing and the base's files taken from what the gate
   already read, and each working-tree file read once for both checks.
 - **lang-rust reads an item's outer attributes two ways.** As cross-review 24 put it (F7, 2026-11-12): `path_attribute`
   (`crates/lang-rust/src/imports.rs`) "looks back through siblings, the pattern e7f9115 removed for test detection",

@@ -37,13 +37,20 @@ impl<'a> Sources<'a> {
     /// the working tree cannot be read.
     pub fn read(change: &'a Change) -> Result<Sources<'a>, Unjudged> {
         let stored = Stored::of(change)?;
-        let (python, bases_not_python) = stored.files(&PYTHON)?;
-        let (rust, _) = stored.files(&RUST)?;
-        let (go, _) = stored.files(&GO)?;
+        let settings = &change.settings;
+        // A file is a Python test file by either of its paths, so that a rename into or out of the tests loses none
+        // of them unseen.
+        let python_tests = |path: &OsStr, other: Option<&OsStr>| {
+            python_test(settings, path) || other.is_some_and(|o| python_test(settings, o))
+        };
+        let (python, bases_not_python) = stored.files(&PYTHON, &python_tests)?;
+        let mut rust = RustChange::of(change, stored.gone.clone())?;
+        rust.files = stored.files(&RUST, &|path, _| rust.among_tests(path))?.0;
+        let (go, _) = stored.files(&GO, &|path, _| lang_go::among_tests(path.as_bytes()))?;
         Ok(Sources {
             change,
             python: PythonChange { change, files: python, bases_not_python },
-            rust: RustChange { change, files: rust, gone: stored.gone.clone() },
+            rust,
             go: GoChange { change, files: go, gone: stored.gone },
         })
     }
@@ -128,21 +135,44 @@ impl PythonChange<'_> {
 pub struct RustChange<'a> {
     pub change: &'a Change,
     /// Each file of the change with a .rs path on a side, in the change's order, read with crates/lang-rust as
-    /// [`Sources`] says. A file gate.toml's `test-files.rust` matches is read as test code whole.
+    /// [`Sources`] says. A side [`RustChange::among_tests`] places among the tests is read as test code whole.
     pub files: Vec<ChangedFile>,
     /// The base paths the change deletes or renames, where a Cargo.toml may have stood.
     gone: HashSet<PathBuf>,
+    /// The paths of the tree's .rs files that only test code takes in (lang_rust::test_modules), at the base or in
+    /// the working tree; none when the change touches no .rs path.
+    test_modules: HashSet<OsString>,
 }
 
-impl RustChange<'_> {
+impl<'a> RustChange<'a> {
+    /// `change`'s Rust, `gone` its base paths it deletes or renames, without its files, which [`Sources::read`]
+    /// reads by [`RustChange::among_tests`]. Errs when git cannot list the tree's files or show one at the base, or
+    /// one cannot be read in the working tree.
+    fn of(change: &'a Change, gone: HashSet<PathBuf>) -> Result<RustChange<'a>, Unjudged> {
+        let mut test_modules = HashSet::new();
+        if any_path(change, |path| path.as_bytes().ends_with(b".rs")) {
+            let (base, now) = trees(change, b".rs")?;
+            test_modules.extend(lang_rust::test_modules(&base));
+            test_modules.extend(lang_rust::test_modules(&now));
+        }
+        Ok(RustChange { change, files: vec![], gone, test_modules })
+    }
+
+    /// Whether the .rs file at `path`, on either side of the change, is among Rust's tests as a whole: gate.toml's
+    /// `test-files.rust` matches it, or, at the base or in the working tree, only test code takes it in, by a
+    /// `#[cfg(test)] mod name;` as lang_rust::test_modules says.
+    pub fn among_tests(&self, path: &OsStr) -> bool {
+        self.change.settings.rust_tests.matches(path) || self.test_modules.contains(path)
+    }
+
     /// Whether `path`, on either side of the change, is Rust code under test: a .rs file of a Cargo package
-    /// ([`in_project`]) that gate.toml's `test-files.rust` does not place among the tests, which the change
+    /// ([`in_project`]) that is not among the tests as a whole ([`RustChange::among_tests`]), which the change
     /// adds, deletes, renames or edits outside its test code ([`integrity::edits_code`]). A path no file was read at,
     /// as a symlink's, counts as edited.
     pub fn is_code(&self, path: &OsStr) -> bool {
         let change = self.change;
         if !path.as_bytes().ends_with(b".rs")
-            || change.settings.rust_tests.matches(path)
+            || self.among_tests(path)
             || !in_project(change, &self.gone, path, CARGO_MANIFEST)
         {
             return false;
@@ -369,10 +399,6 @@ struct Language {
     /// first [`FIRST_LINE_BYTES`] bytes, none for a file that cannot be read, and is called only when the name does
     /// not decide.
     holds: fn(path: &[u8], head: &dyn Fn() -> Vec<u8>) -> bool,
-    /// Whether the side at `path` of one of the language's files, whose other side, where the change gives it one, is
-    /// at `other`, is among the language's tests: by `settings`, or, for a language whose tool fixes its test files, as
-    /// Go's fixes `_test.go`, by that tool's rule.
-    among_tests: fn(settings: &Settings, path: &OsStr, other: Option<&OsStr>) -> bool,
     /// The name of the file that makes its directory and those below it a project of the language, as Go's `go.mod`:
     /// a file of the language outside every such directory ([`in_project`]) is not read as the language's. None for a
     /// language whose files are read wherever they are.
@@ -389,9 +415,6 @@ struct Language {
 
 const PYTHON: Language = Language {
     holds: |path, head| lang_python::is_python(path, head),
-    // A file is a test file by either of its paths, so that a rename into or out of the tests loses none of them
-    // unseen.
-    among_tests: |settings, path, other| python_test(settings, path) || other.is_some_and(|o| python_test(settings, o)),
     base_of_any_name: true,
     project: None,
     generated: |_| false,
@@ -400,7 +423,6 @@ const PYTHON: Language = Language {
 
 const RUST: Language = Language {
     holds: |path, _| path.ends_with(b".rs"),
-    among_tests: |settings, path, _| settings.rust_tests.matches(path),
     base_of_any_name: false,
     // Rust outside a Cargo package is still read, though it is no code under test ([`RustChange::is_code`]).
     project: None,
@@ -410,7 +432,6 @@ const RUST: Language = Language {
 
 const GO: Language = Language {
     holds: |path, _| lang_go::is_go(path),
-    among_tests: |_, path, _| lang_go::among_tests(path.as_bytes()),
     base_of_any_name: false,
     project: Some(GO_MANIFEST),
     generated: lang_go::generated,
@@ -448,12 +469,17 @@ impl<'a> Stored<'a> {
     /// Each file of the change that holds `language`'s source on a side, inside one of its projects where it has them
     /// ([`Language::project`]) and not generated ([`Language::generated`]), in the change's order, each such side read;
     /// and the base paths among them that held none of it by their name or first line, read all the same
-    /// ([`Language::base_of_any_name`]). Errs when git cannot show such a file at the base, or one cannot be read in
-    /// the working tree.
-    fn files(&self, language: &Language) -> Result<(Vec<ChangedFile>, HashSet<OsString>), Unjudged> {
+    /// ([`Language::base_of_any_name`]). `among_tests` says whether a side at `path`, whose other side, where the
+    /// change gives it one, is at `other`, is among the language's tests as a whole, and is read as test code. Errs
+    /// when git cannot show such a file at the base, or one cannot be read in the working tree.
+    fn files(
+        &self,
+        language: &Language,
+        among_tests: &dyn Fn(&OsStr, Option<&OsStr>) -> bool,
+    ) -> Result<(Vec<ChangedFile>, HashSet<OsString>), Unjudged> {
         let change = self.change;
         let side = |path: &OsString, other: &Option<OsString>, source: &[u8]| {
-            let among_tests = (language.among_tests)(&change.settings, path, other.as_deref());
+            let among_tests = among_tests(path, other.as_deref());
             Side { source: (language.read)(source, path, among_tests), path: path.clone(), among_tests }
         };
         let (mut out, mut bases_holding_none) = (vec![], HashSet::new());

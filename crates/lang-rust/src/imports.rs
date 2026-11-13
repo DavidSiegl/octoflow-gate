@@ -1,5 +1,6 @@
 //! The imports between a tree's Rust files: each path of a `use`, or of code, that starts at `crate`, `self` or
-//! `super`, resolved through the tree's module tree to the file that holds the module it names.
+//! `super`, resolved through the tree's module tree to the file that holds the module it names; and the files of that
+//! tree that only test code takes in.
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::ffi::OsString;
@@ -37,6 +38,20 @@ pub fn imports(files: &[(OsString, Vec<u8>)]) -> ImportGraph {
         out.insert(path.clone(), tree.imports(i, parsed[i].as_ref(), files));
     }
     out
+}
+
+/// The paths of those of `files`, each Rust file of one tree as [`imports`] takes them, that only test code takes in:
+/// every module the file is of, from each crate root that reaches it, is declared by a `mod name;` that is test code
+/// itself, or by one in such a file. A declaration is test code when it, or an item or an inline module it sits in, is
+/// marked `#[cfg(test)]` (a `cfg` that needs `test`), or its file opens with `#![cfg(test)]`. The files are those of
+/// the module tree [`imports`] describes, so a crate root is none; a file that does not parse is one when only test
+/// code declares it, though it declares no modules of its own.
+pub fn test_modules(files: &[(OsString, Vec<u8>)]) -> HashSet<OsString> {
+    let parsed: Vec<Option<Parsed>> = files.iter().map(|(_, source)| parse(source)).collect();
+    let paths: Vec<PathBuf> = files.iter().map(|(path, _)| normal(Path::new(path))).collect();
+    let tree = ModuleTree::of(&paths, &parsed);
+    let only_tests = |i: &usize| tree.of_file[*i].iter().all(|(_, test)| *test);
+    (0..files.len()).filter(only_tests).map(|i| files[i].0.clone()).collect()
 }
 
 /// What [`imports`] reads of one file.

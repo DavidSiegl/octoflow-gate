@@ -166,13 +166,16 @@ It reads Python, Rust and Go, and golden files whatever their language; another 
 
 **Rust tests** it reads as [reading the source](#reading-the-source) says. A Rust test is a `fn` with an
 attribute whose path ends in the segment `test`, as `#[test]` and `#[tokio::test]` (not `#[rstest]`), in a `.rs` file of
-Rust's test files, by default under a `tests` directory or named `tests.rs`, or anywhere inside an inline module marked
-as test code (`#[cfg(test)] mod tests { ... }`) in any other `.rs` file, on either side of the change. A file with such
-a module holds both: the check compares the items of its test modules, and the rest of the file is code. Rust code
+Rust's test files, by default under a `tests` directory or named `tests.rs`, or in a file that only test code takes in,
+or anywhere inside an item marked as test code (`#[cfg(test)] mod tests { ... }`, or a `#[cfg(test)]` `fn` or `impl`)
+in any other `.rs` file, on either side of the change. A file only test code takes in is one that every `mod name;`
+declaring it is test code, as `#[cfg(test)] mod fakes;`, or lies in such a file, read across the tree's tracked `.rs`
+files at the base and in the working tree and resolved as rustc resolves it: `name.rs` or `name/mod.rs` beside the
+declaring file, or below the directory of its own name, or the file a `#[path = "..."]` names. A file with test items
+holds both: the check compares the tests inside them, and the rest of the file is code. Rust code
 outside the tests is any other `.rs` file in a directory that holds a `Cargo.toml`, or below one, `build.rs` included,
 and a change edits it when it adds, deletes or renames such a file, or adds or removes a line of it outside its
-`cfg(test)` modules; so a change to the tests of `lib.rs` alone edits no code. A file that a `#[cfg(test)] mod name;`
-elsewhere names is read by its own path alone, so its tests count only under `tests/` or as `tests.rs` (#49). A
+`cfg(test)` modules; so a change to the tests of `lib.rs` alone edits no code. A
 test is known by its file and the names of the items that hold it, joined by `::`, as `tests::adds`; tests of one name
 in one file, as under two `cfg`s for two platforms, are each a test of its own, matched with the other side's in their
 order. The findings are Python's, read of Rust:
@@ -286,13 +289,13 @@ Rust is judged the same way, with the same limit, base and findings. A function 
 holds, in an `impl`, a `trait` or an inline module or not, named by them as `checks::Workflow<T>::poll`; a `fn` or
 closure inside it is part of it. Its lines start at its first outer attribute, doc comments included. Rust's tests are
 exempt as Python's are, where the spec of the Rust checks places them: by default every file in a directory named
-`tests`, at any depth, or named `tests.rs`, and every `fn` in an inline module marked `#[cfg(test)]`. Nothing else is: a
-`#[test]` or `#[cfg(test)]` `fn` outside those, and a file that a `#[cfg(test)] mod name;` takes in, are judged
-(#49). Each `if`, `else if`, `else`, `if let`, `match`, `loop`, `while`, `while let`, `for` and `let ... else`
-scores as Python's branches do; a `match` arm adds nothing, as a `switch`'s case does not in the paper; a run of `&&`
-and `||` is a sequence of boolean operators, a labelled `break` or `continue` a point, and `?` nothing. Recursion
-follows calls by path within the file: `f(...)`, `self.f(...)`, `Self::f(...)` and `Type::f(...)`, not `crate::f(...)`
-or a module's `m::f(...)`.
+`tests`, at any depth, or named `tests.rs`, every file only test code takes in, as a `#[cfg(test)] mod fakes;` does
+(see "Rust tests" under test integrity), and every `fn` in an item marked `#[cfg(test)]`, an inline module, a `fn` or
+an `impl`. A `#[test]` `fn` outside those is judged. Each `if`, `else if`, `else`, `if let`, `match`, `loop`, `while`,
+`while let`, `for` and `let ... else` scores as Python's branches do; a `match` arm adds nothing, as a `switch`'s case
+does not in the paper; a run of `&&` and `||` is a sequence of boolean operators, a labelled `break` or `continue` a
+point, and `?` nothing. Recursion follows calls by path within the file: `f(...)`, `self.f(...)`, `Self::f(...)` and
+`Type::f(...)`, not `crate::f(...)` or a module's `m::f(...)`.
 
 Go is judged the same way too, in the `.go` files of a Go module but its `_test.go` files, which are tests. A function
 is a function or method with a body, a method named by its receiver's type as `Stack.Push`; a `func` literal inside it
@@ -887,10 +890,11 @@ be misread.
 - a digest of a `fn`'s body, the same for two bodies of the same tokens, whatever their layout and comments;
 - the flow of the body of each `fn` that no other `fn` holds, as cognitive complexity weighs it, and the
   path of each call in it. A macro's arguments are read as for the assertions, any other macro's tokens not;
-- every inline module, `mod name { ... }`, nested ones included, with its lines and whether it is test code: an
-  attribute of its own, outer or inner, is `cfg(P)` with a `P` that holds only under `cfg(test)`, which is `test`
-  itself or an `all(...)` with such a `P` among its arguments. A `mod name;` that names another file is not read as a
-  module;
+- every inline module, `mod name { ... }`, nested ones included, with its lines;
+- the lines of each item that is test code, nested ones included: an attribute of its own is `cfg(P)` with a `P` that
+  holds only under `cfg(test)`, which is `test` itself or an `all(...)` with such a `P` among its arguments, or, for an
+  inline module, an inner one is. A `mod name;` that names another file is read across the tree, as "Rust tests"
+  under test integrity says;
 - every name the file binds, with its line: the names of a `let`'s pattern, a `fn` and its parameters, a closure's
   parameters, the pattern of a `for`, of a `match` arm and of a `let` in an `if`'s or a `while`'s condition, a
   `struct`, `enum`, `union`, `trait`, type alias or associated type, a `const`, a `static`, and the new name of a
@@ -921,7 +925,7 @@ trailing `/**` for all below.
 |---|---|---|
 | `python` | `python3` | the judged project's Python, which has its pytest, pytest-randomly and mutmut: a path, from the tree's top level unless absolute, or a name without a slash for `PATH` to find. `--python` replaces it |
 | `test-files.python` | `**/tests/**/*.py`, `**/test_*.py`, `**/*_test.py` | Python's test files |
-| `test-files.rust` | `**/tests/**/*.rs`, `**/tests.rs` | Rust's test files by where they are; an inline `#[cfg(test)]` module holds tests wherever it is |
+| `test-files.rust` | `**/tests/**/*.rs`, `**/tests.rs` | Rust's test files by where they are; a file only `#[cfg(test)] mod name;` takes in is one too, and a `#[cfg(test)]` item holds tests wherever it is |
 | `test-files.support` | `**/conftest.py`, `**/tests/**` | files that go with the tests rather than the code, which the checks that run tests take from the working tree |
 | `test-files.golden` | `**/tests/**/golden/**` | golden files, which test integrity reads as expected values |
 | `complexity.exempt` | `tests/**`, `**/tests/**/*.rs`, `**/tests.rs` | files whose functions cognitive complexity does not score |

@@ -359,6 +359,39 @@ fn each_rs_file_the_change_touches_is_read_at_the_base_and_in_the_working_tree()
 }
 
 #[test]
+fn a_file_a_cfg_test_mod_declaration_takes_in_is_test_code() {
+    // A fake whose fn is over the limit, beside a test of its own; lib.rs takes it in under `cfg(test)`.
+    let ifs: String = (0..16).map(|k| format!("    if x == {k} {{\n        x += 1;\n    }}\n")).collect();
+    let fakes = format!(
+        "pub fn answer(mut x: u32) -> u32 {{\n{ifs}    x\n}}\n\n#[test]\nfn answers() {{\n    assert_eq!(answer(0), 1);\n}}\n"
+    );
+    let declared = |marked: bool| {
+        let cfg = if marked { "#[cfg(test)]\n" } else { "" };
+        format!("{cfg}mod fakes;\n\n{LIB}")
+    };
+    for marked in [true, false] {
+        let repo = package(&[("crate/src/fakes.rs", "")]);
+        repo.put("crate/src/lib.rs", declared(marked).as_bytes());
+        repo.git(&["add", "-A"]);
+        repo.git(&["commit", "--quiet", "-m", "fakes"]);
+        repo.put("crate/src/fakes.rs", fakes.as_bytes());
+        let complexity = ("crate/src/fakes.rs".into(), Some(1), "cognitive-complexity over-limit".into());
+        let at = |f: Found| (f.0.unwrap_or_default(), f.1, f.2);
+        let first: Vec<(String, Option<u32>, String)> = found(&repo).into_iter().map(at).collect();
+        assert_eq!(first.contains(&complexity), !marked, "marked: {marked}, {first:?}");
+        if marked {
+            // Its test is a test: weakened beside a change to the code, it is found.
+            repo.git(&["add", "-A"]);
+            repo.git(&["commit", "--quiet", "-m", "fake"]);
+            edit(&repo, "crate/src/fakes.rs", "#[test]\n", "#[test]\n#[ignore]\n");
+            edit(&repo, "crate/src/lib.rs", "    a + b\n", "    b + a\n");
+            let skip = ("crate/src/fakes.rs".into(), Some(54), "test-integrity skip".into());
+            assert_eq!(found(&repo).into_iter().map(at).collect::<Vec<_>>(), vec![skip]);
+        }
+    }
+}
+
+#[test]
 fn a_test_file_that_is_not_utf_8_on_a_side_fails_the_gate_as_unreadable() {
     // Among the tests by its place: its base cannot be decoded, so the gate cannot tell which tests the change removes.
     let latin1 = [IT.as_bytes(), b"// caf\xe9\n"].concat();

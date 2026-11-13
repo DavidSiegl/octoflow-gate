@@ -1,0 +1,63 @@
+//! lang_rust::test_modules: the files of a tree that only test code takes in.
+
+use std::collections::BTreeSet;
+use std::ffi::OsString;
+
+/// The paths lang_rust::test_modules gives for the tree of `files`, each (path, source), in order.
+fn test_modules(files: &[(&str, &str)]) -> BTreeSet<String> {
+    let tree: Vec<(OsString, Vec<u8>)> =
+        files.iter().map(|&(path, source)| (path.into(), source.as_bytes().to_vec())).collect();
+    lang_rust::test_modules(&tree).into_iter().map(|p| p.to_string_lossy().into_owned()).collect()
+}
+
+fn paths(paths: &[&str]) -> BTreeSet<String> {
+    paths.iter().map(|p| (*p).to_string()).collect()
+}
+
+#[test]
+fn a_file_a_cfg_test_declaration_takes_in_is_test_code_with_the_files_it_declares() {
+    let lib = "\
+mod real;
+#[cfg(test)]
+mod fakes;
+#[cfg(all(test, unix))]
+#[path = \"support/helpers.rs\"]
+mod helpers;
+#[cfg(test)]
+mod tests {
+    mod cases;
+}
+";
+    let files = [
+        ("src/lib.rs", lib),
+        ("src/real.rs", "pub fn one() {}\n"),
+        ("src/fakes/mod.rs", "mod clock;\n"),
+        ("src/fakes/clock.rs", "pub fn now() {}\n"),
+        ("src/support/helpers.rs", "pub fn help() {}\n"),
+        ("src/tests/cases.rs", "#[test]\nfn case() {}\n"),
+    ];
+    let expected = paths(&["src/fakes/mod.rs", "src/fakes/clock.rs", "src/support/helpers.rs", "src/tests/cases.rs"]);
+    assert_eq!(test_modules(&files), expected);
+}
+
+#[test]
+fn a_file_declared_by_test_code_and_by_code_alike_is_code_as_is_a_crate_root() {
+    let files = [
+        ("src/lib.rs", "mod shared;\n"),
+        ("src/main.rs", "#[cfg(test)]\nmod shared;\n"),
+        ("src/shared.rs", "pub fn s() {}\n"),
+        ("tests/it.rs", "#[test]\nfn it() {}\n"),
+        ("src/broken.rs", "fn broken( {\n"),
+    ];
+    assert_eq!(test_modules(&files), BTreeSet::new());
+}
+
+#[test]
+fn a_declaration_in_a_file_that_opens_with_cfg_test_marks_its_file() {
+    let files = [
+        ("src/lib.rs", "mod only;\n"),
+        ("src/only.rs", "#![cfg(test)]\nmod deeper;\n"),
+        ("src/only/deeper.rs", "pub fn d() {}\n"),
+    ];
+    assert_eq!(test_modules(&files), paths(&["src/only/deeper.rs"]));
+}

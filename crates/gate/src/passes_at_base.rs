@@ -80,7 +80,7 @@ fn rust_at_base(rust: &RustChange, budget: &Budget) -> Vec<Finding> {
     let (tests, mut out) = changed_tests(rust);
     let mut separable = vec![];
     for t in tests {
-        if rust.change.settings.rust_tests.matches(&t.path) || !rust.is_code(&t.path) {
+        if rust.among_tests(&t.path) || !rust.is_code(&t.path) {
             separable.push(t);
         } else {
             let message = format!(
@@ -156,12 +156,12 @@ fn unreadable_tests(file: &ChangedFile, after: &Side, unreadable: &Unreadable) -
 
 /// Whether a repository path belongs with Rust's tests rather than with the code they test, as the copy the tests run
 /// in at the base takes it from the working tree: a file gate.toml's `test-support` names, as Cargo's integration
-/// tests' data under a tests directory by default, a Rust test file by gate.toml's `test-files.rust`, and a .rs file
-/// the change edits only inside its test code, which [`RustChange::is_code`] does not count as code.
+/// tests' data under a tests directory by default, a Rust test file as a whole ([`RustChange::among_tests`]), and a
+/// .rs file the change edits only inside its test code, which [`RustChange::is_code`] does not count as code.
 fn beside_tests(rust: &RustChange, path: &OsStr) -> bool {
     let settings = &rust.change.settings;
     settings.test_support.matches(path)
-        || settings.rust_tests.matches(path)
+        || rust.among_tests(path)
         || (path.as_bytes().ends_with(b".rs") && !rust.is_code(path))
 }
 

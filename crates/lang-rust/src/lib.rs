@@ -13,13 +13,14 @@ mod skips;
 mod syntax;
 
 pub use code_tokens::code_tokens;
-pub use imports::imports;
+pub use imports::{imports, test_modules};
 
 use syntax::{Fn, Holder, Items, Text};
 
-/// The Rust source `source`, as the model has it. `among_tests` says whether the project places the file among its
-/// tests (gate.toml's `test-files.rust`), which makes the whole of it test code; otherwise its test code is its inline
-/// modules marked `#[cfg(test)]`.
+/// The Rust source `source`, as the model has it. `among_tests` says whether the file is among the project's tests
+/// as a whole, as by gate.toml's `test-files.rust` or as one only test code takes in ([`test_modules`]), which makes
+/// the whole of it test code; otherwise its test code is its items marked `#[cfg(test)]`, an inline module, a `fn` or
+/// an `impl` among them.
 ///
 /// What the model's parts are in Rust:
 /// - a [`Function`] is a `fn` with a body that no other `fn` holds, in an `impl`, a `trait` or an inline module or
@@ -82,7 +83,7 @@ fn model(items: &Items, among_tests: bool, n: u32) -> SourceFile {
     let test_lines: Vec<Lines> = if among_tests {
         vec![Lines { first: 1, last: n }]
     } else {
-        items.mods.iter().filter(|m| m.cfg_test).map(|m| Lines { first: m.attrs_line, last: m.end }).collect()
+        items.test_code.clone()
     };
     let in_tests = |line: u32| test_lines.iter().any(|l| l.holds(line));
     let tests: Vec<&Fn> = items

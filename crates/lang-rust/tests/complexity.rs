@@ -406,7 +406,6 @@ mod inner {
             ("Shape::defaulted", 0),
             ("<Wrapper<'a,T> as std::fmt::Debug>::fmt", 0),
             ("inner::spread", 0),
-            ("only_in_tests", 0),
         ])
     );
 }
@@ -544,7 +543,11 @@ fn a_fn_moved_unchanged_into_the_tests_keeps_its_base_before_a_copy_can() {
 #[test]
 fn the_tests_are_not_judged() {
     let big = flat("big_test", 20);
-    let calc = format!("{}#[cfg(test)]\nmod tests {{\n{big}}}\n", base());
+    let (helper, fake) = (flat("big_helper", 20), flat("answer", 20));
+    let calc = format!(
+        "{}#[cfg(test)]\nmod tests {{\n{big}}}\n#[cfg(test)]\n{helper}#[cfg(test)]\nimpl Fake {{\n{fake}}}\n",
+        base()
+    );
     let (fresh, expected) = fresh();
     let files = [
         added("engine/tests/cli.rs", &big),

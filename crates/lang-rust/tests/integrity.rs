@@ -411,7 +411,7 @@ fn an_edited_const_or_static_an_assertion_reads_is_an_expected_value_changed() {
 #[test]
 fn a_const_that_calls_is_bound_twice_or_is_shadowed_by_the_test_is_not_followed() {
     let code = edit(HELD, "    a + b\n", "    a + b + 1\n");
-    let calls = |value: &str| edit(&code, "const EXPECTED: i32 = 30;", &format!("const EXPECTED: i32 = {value};"));
+    let calls = |expr: &str| edit(&code, "const EXPECTED: i32 = 30;", &format!("const EXPECTED: i32 = {expr};"));
     let base = edit(HELD, "const EXPECTED: i32 = 30;", "const EXPECTED: i32 = add(10, 20);");
     assert_eq!(check(&[edited(LIB_PATH, &base, &calls("add(10, 21)"))]), vec![]);
     // A constructor, by its capital, calls nothing.

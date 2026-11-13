@@ -523,6 +523,26 @@ fn mutmut_runs_under_the_configuration_of_the_tests_below_the_top() {
 }
 
 #[test]
+fn tests_named_from_a_rootdir_below_the_top_leave_mutmut_its_whole_selection() {
+    // `pytest tests/` finds tests/pytest.ini and roots its node ids at tests/, unless --rootdir says otherwise.
+    let repo = calc_with_helper("[\"tests/\"]");
+    change_the_functions(&repo, &[]);
+    let recorded: [(&str, &[u32]); 2] =
+        [("test_calc.py::test_checked", &[1, 2]), ("test_calc.py::test_unchecked", &[5, 6])];
+    let data_file = contexts(&repo, "test", "calc.py", &recorded);
+    let found = findings(&repo, Gate { test_contexts: Some(data_file), ..Gate::default() });
+    let mut expected = at(&WEAKLY_TESTED);
+    expected.insert(0, whole("not-narrowed"));
+    assert_eq!(places(&found), expected, "{found:?}");
+    assert_eq!(
+        found[0].3,
+        "mutmut was given its whole test selection, not only the tests `--test-contexts` records reaching the \
+         changed functions: none of the tests it records is named from the tree's top, as `test_calc.py::test_checked` \
+         is not: the pytest run that recorded them had its rootdir elsewhere, which `--rootdir` at the top avoids."
+    );
+}
+
+#[test]
 fn tests_under_more_than_one_configuration_are_not_mutation_tested_under_either() {
     let repo = calc_with_helper("[\"tests/\", \"more/\"]");
     repo.commit(&[("more/pytest.ini", b"[pytest]\n"), ("more/test_more.py", b"def test_more():\n    pass\n")], "more");

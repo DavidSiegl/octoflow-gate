@@ -490,9 +490,11 @@ header, and mutmut skips it. The rules' `[tool.mutmut]` says what can be mutated
 (`also_copy`), and which lines are left alone (`do_not_mutate_patterns`); see [whose rules judge a
 change](#whose-rules-judge-a-change). Python files are decoded by a byte order mark or a coding cookie, as [reading the
 source](#reading-the-source) says. mutmut runs pytest in the copy's `mutants/`, where it puts the mutated code.
-Its runs get, with `-c`, the configuration of the tests mutmut runs, found as the reruns find a test file's: from the
-files of the tests `--test-contexts` records (see below), or else from each path the test selection names, a directory
-looked up from itself, or from the copy's top when it names none. That is the project's own, which `also_copy` puts in
+Its runs get, with `-c`, the configuration of the tests mutmut runs, found as the reruns find a test file's: from each
+path the test selection (`pytest_add_cli_args_test_selection` and `tests_dir`) names, a directory looked up from itself,
+or from the copy's top when it names none; or, with `--test-contexts` (see below), from the files of the tests it
+records under those paths. An option's value given apart from it, as `--ignore tests/legacy`, counts as a path. That is
+the project's own, which `also_copy` puts in
 `mutants/` so that paths in it, such as `pythonpath`, name the mutated code, or an empty one; and `--confcutdir` is
 `mutants/`. Both are added to the table's `pytest_add_cli_args`, so these runs too read no `pytest.ini` or `conftest.py`
 from above the copy. mutmut takes one configuration for all its runs, so tests under more than one get a `not-run`
@@ -509,7 +511,9 @@ function. Over a large suite, those runs alone can take longer than the budget. 
   runs get, so pytest itself applies their paths, `--ignore`, `--deselect` and the rest.
 
 A project's pytest `[[test]]` command writes the file, by default `.coverage`, when it runs with pytest-cov's
-`--cov-context=test`, and whoever starts the gate passes it.
+`--cov-context=test`, and whoever starts the gate passes it. pytest names the tests from its rootdir, which must be the
+tree's top, as it is for mutmut's runs: a command such as `pytest tests/` that finds a configuration in `tests/` roots
+them there unless it is given `--rootdir=.`.
 mutmut then runs those tests three times. For octoflow's PR #113, 253 mutants of 7 functions of its Python engine, that
 is 312 tests of 1351, and mutmut took 77 seconds instead of 709 on the build host, with the same verdicts, mutant by
 mutant. The cost grows with the tests that reach the change, not with the suite: a change to a function nearly every
@@ -521,9 +525,9 @@ The file must hold the run's contexts as pytest-cov writes them (`<node id>|run`
 coverage's C tracer: `[tool.coverage.run] core = "ctrace"` in `pyproject.toml`. Under Python 3.14, coverage's default
 core, `sys.monitoring`, records each line for only the first few tests to run it, so mutmut would miss tests that kill
 its mutants and report them as survivors. Any of these makes a `not-narrowed` finding, and mutmut runs the whole
-selection: the file cannot be read, holds no test's context, or does not measure a changed function's file; no line in
-it is recorded for at least a tenth of the tests it records, as that core writes it; or pytest's collection of the
-selection fails or does not finish. Without `--test-contexts`, as in a local run, mutmut runs the whole selection.
+selection: the file cannot be read, holds no test's context, names none of its tests from the tree's top, or does not
+measure a changed function's file; no line in it is recorded for at least a tenth of the tests it records, as that
+core writes it; or pytest's collection of the selection fails or does not finish. Without `--test-contexts`, as in a local run, mutmut runs the whole selection.
 Tests that reach a function only in a subprocess count neither in mutmut's own record nor in the file.
 
 `--mutation-budget SECONDS`, else the settings' `budgets.mutation`, 600 by default, bounds mutmut's run. Stopping it

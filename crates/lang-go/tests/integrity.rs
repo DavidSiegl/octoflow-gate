@@ -288,6 +288,9 @@ func mustAdd(t testing.TB) int {
         "`if closeErr := shut(); closeErr != nil {` added in `mustAdd`: its empty block throws away the error that \
          would fail the test."
     );
+    // An edit to the else after an empty block is to the path that did not fail.
+    let with_else = edit(&test, "\tif err != nil { /* fine */ }\n", "\tif err != nil {\n\t} else {\n\t\tuse(1)\n\t}\n");
+    assert_eq!(check(&[edited(TEST_PATH, &with_else, &edit(&with_else, "use(1)", "use(2)"))]), vec![]);
 }
 
 #[test]

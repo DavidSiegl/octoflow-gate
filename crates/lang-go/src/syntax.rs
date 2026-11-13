@@ -92,8 +92,8 @@ pub fn declaration_digest(node: Node, text: Text) -> String {
     digest_of(&parts.flat_map(|c| tokens(c, text)).collect::<Vec<_>>())
 }
 
-/// The FNV-1a digest of `tokens`, joined by spaces.
-fn digest_of(tokens: &[&str]) -> String {
+/// The FNV-1a digest of `tokens`, joined by spaces, as [`digest`] gives a node's.
+pub fn digest_of(tokens: &[&str]) -> String {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in tokens.join(" ").bytes() {
         hash ^= u64::from(byte);

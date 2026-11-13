@@ -64,8 +64,8 @@ fn attribute_place(among_tests: bool, n: u32, line: &str, tests: &[&Fn], holding
     holding.iter().any(|m| m.attrs_line <= n && n < m.line).then_some(Place::Module)
 }
 
-/// The weakening at line `n` whose skipping attributes are `attributes`, each whole with how many lines after `n` it
-/// ends on: platform-only when `weighed` and each is [`platform_only`], else a skip naming the first that is not.
+/// The weakening starting at line `n` whose skipping attributes are `attributes`, each whole with how many lines after
+/// `n` it ends on: platform-only when `weighed` and each is [`platform_only`], else a skip naming the first that is not.
 fn skip(n: u32, attributes: &[(&str, u32)], weighed: bool) -> Weakening {
     let code = model::without_whitespace(&attributes.iter().map(|(a, _)| *a).collect::<String>());
     let lines = Lines { first: n, last: n.saturating_add(attributes.iter().map(|(_, k)| *k).max().unwrap_or(0)) };
@@ -155,7 +155,7 @@ fn attribute(first: &str, following: &[&str]) -> (String, Option<usize>) {
 
 /// Each attribute, whole ([`attribute`]), that starts at a `#[` or `#![` on `line`, followed in the file by the
 /// lines `following`, or on a line one of them wraps onto before it closes, so that a wrapped attribute hides none;
-/// with how many lines after `line` it ends on, all of `following` for one that never closes.
+/// with how many lines after `line` it ends on, or starts on for one that never closes.
 /// Every `#[` is read, also one inside another attribute's string, as in `#[doc = "#[ignore]"]`: a literal
 /// [`attribute`] misreads then cannot hide a skip after it, at the cost of reporting such a string's text.
 fn line_attributes(line: &str, following: &[&str]) -> Vec<(String, u32)> {
@@ -176,7 +176,8 @@ fn line_attributes(line: &str, following: &[&str]) -> Vec<(String, u32)> {
             }
             let (found, used) = attribute(&text[start..], rest);
             let last = used.map(|used| i + used.cast_signed());
-            let ends = last.map_or(following.len(), |last| (last + 1).unsigned_abs());
+            // One that never closes, likely a `#[` misread in a string, ends where it starts.
+            let ends = last.map_or(i + 1, |last| last + 1).unsigned_abs();
             out.push((found, u32::try_from(ends).unwrap_or(u32::MAX)));
             if let Some(last) = last.filter(|&last| last > reached) {
                 read.extend(i.max(reached) + 1..=last);

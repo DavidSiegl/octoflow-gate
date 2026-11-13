@@ -147,6 +147,28 @@ fn a_kept_test_carries_its_skips_but_not_one_whose_condition_changed() {
 }
 
 #[test]
+fn a_discard_is_its_whole_statement_a_swallowed_closure_s_body_included() {
+    let with = |body: &str| edit(LIB, "        assert_eq!(add(10, 20), 30);\n", body);
+    let found = |base: &str, now: &str| wheres(&check(&[edited(LIB_PATH, base, now)]));
+    // rustfmt's wraps of a long `let` and of a method chain, each made a discard on a line the value is not on.
+    let kept = with("        let r =\n            std::panic::catch_unwind(|| assert_eq!(add(1, 1), 2));\n        r.unwrap();\n");
+    assert_eq!(found(&kept, &edit(&kept, "let r =", "let _ =")), vec![at(LIB_PATH, Some(17), "swallowed-error")]);
+    let kept = with("        std::panic::catch_unwind(|| {\n            assert_eq!(add(1, 1), 2);\n        })\n        .unwrap();\n");
+    assert_eq!(found(&kept, &edit(&kept, ".unwrap();", ".ok();")), vec![at(LIB_PATH, Some(20), "swallowed-error")]);
+    // An assertion added inside a swallowed closure can never fail.
+    let base = with("        let _ = std::panic::catch_unwind(|| {\n            assert_eq!(add(1, 1), 2);\n        });\n");
+    let more = edit(&base, "        });", "            assert_eq!(add(2, 2), 4);\n        });");
+    assert_eq!(found(&base, &more), vec![at(LIB_PATH, Some(19), "swallowed-error")]);
+}
+
+#[test]
+fn an_attribute_misread_in_a_string_reaches_no_further_than_its_line() {
+    let base = edit(LIB, "        assert_eq!(add(10, 20), 30);\n", "        #[cfg(unix)] let s = \"#[cfg(windows\";\n        assert_eq!(add(10, 20), 30);\n");
+    let more = edit(&base, "        assert_eq!(add(10, 20), 30);\n", "        assert_eq!(add(10, 20), 30);\n        assert_eq!(add(1, 2), 3);\n");
+    assert_eq!(wheres(&check(&[edited(LIB_PATH, &base, &more)])), vec![]);
+}
+
+#[test]
 fn an_inline_module_whose_tests_all_went_is_one_finding() {
     let lib = &LIB[..LIB.find("\n#[cfg(test)]").unwrap()];
     let found = check(&[edited(LIB_PATH, LIB, lib)]);

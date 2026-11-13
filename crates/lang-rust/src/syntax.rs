@@ -106,7 +106,8 @@ pub struct Attr {
 pub struct Discard {
     /// The statement as written in the finding, with `{}` where the value goes.
     pub written: &'static str,
-    pub line: u32,
+    /// The lines of the statement that throws it away, from its `let` or value to its `;`.
+    pub lines: model::Lines,
     /// The value thrown away, as written.
     pub text: String,
 }
@@ -387,7 +388,7 @@ impl Walk<'_> {
         }
         if let (Some(pattern), Some(init)) = (pattern, node.child_by_field_name("value")) {
             if pattern.kind() == "_" {
-                self.discard("let _ = {};", init, text);
+                self.discard("let _ = {};", node, init, text);
             }
         }
         self.children(node, text);
@@ -404,7 +405,7 @@ impl Walk<'_> {
                 let left = expr.child_by_field_name("left");
                 if let (Some(left), Some(right)) = (left, expr.child_by_field_name("right")) {
                     if left.kind() == "identifier" && text.of(left) == "_" {
-                        self.discard("_ = {};", right, text);
+                        self.discard("_ = {};", node, right, text);
                     }
                 }
             }
@@ -414,7 +415,7 @@ impl Walk<'_> {
                 if let Some(method) = method.filter(|_| no_args) {
                     let field = method.child_by_field_name("field").map(|f| text.of(f));
                     if let (Some("ok"), Some(receiver)) = (field, method.child_by_field_name("value")) {
-                        self.discard("{}.ok();", receiver, text);
+                        self.discard("{}.ok();", node, receiver, text);
                     }
                 }
             }
@@ -422,9 +423,12 @@ impl Walk<'_> {
         }
     }
 
-    fn discard(&mut self, written: &'static str, thrown: Node, text: Text) {
+    /// Records that `statement`, written as `written`, throws away the value `thrown`, in the fn the walk is in.
+    fn discard(&mut self, written: &'static str, statement: Node, thrown: Node, text: Text) {
         if let Some(i) = self.current_fn {
-            let discard = Discard { written, line: self.line(text, thrown), text: text.of(thrown).into() };
+            let last = self.lines.line(text.end(statement).saturating_sub(1));
+            let lines = model::Lines { first: self.line(text, statement), last };
+            let discard = Discard { written, lines, text: text.of(thrown).into() };
             self.items.fns[i].discards.push(discard);
         }
     }

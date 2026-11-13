@@ -130,11 +130,6 @@ fn model(items: &Items, text: &str, among_tests: bool, n: u32) -> SourceFile {
     }
 }
 
-/// The lines that `text`, written from line `first` on, spans.
-fn spanned(first: u32, text: &str) -> Lines {
-    Lines { first, last: first.saturating_add(u32::try_from(text.matches('\n').count()).unwrap_or(u32::MAX)) }
-}
-
 /// The swallowed errors among `items`, `tests` being its tests and `in_tests` saying whether a line is test code: a
 /// `#[should_panic]` without `expected` on a test, which any panic passes; and a value thrown away in any fn among the
 /// test code, a test or a helper, that holds an assertion macro the fn calls or a call of `catch_unwind`, so that the
@@ -144,7 +139,7 @@ fn swallowed_errors(items: &Items, tests: &[&Fn], in_tests: &dyn std::ops::Fn(u3
     for t in tests {
         for a in t.attrs.iter().filter(|a| a.path == "should_panic" && !a.text.contains("expected")) {
             out.push(Weakening {
-                lines: spanned(a.line, &a.text),
+                lines: Lines { first: a.line, last: a.line + u32::try_from(a.text.matches('\n').count()).unwrap_or(0) },
                 kind: WeakeningKind::SwallowedError,
                 code: model::without_whitespace(&a.text),
                 message: format!(
@@ -160,7 +155,7 @@ fn swallowed_errors(items: &Items, tests: &[&Fn], in_tests: &dyn std::ops::Fn(u3
             if d.text.contains("catch_unwind") || f.asserts.iter().any(|a| d.text.contains(&a.text)) {
                 let written = d.written.replacen("{}", &d.text, 1);
                 out.push(Weakening {
-                    lines: spanned(d.line, &d.text),
+                    lines: d.lines,
                     kind: WeakeningKind::SwallowedError,
                     code: model::without_whitespace(&written),
                     message: format!(

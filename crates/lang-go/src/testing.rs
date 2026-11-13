@@ -6,7 +6,7 @@ use model::{first_line, Assertion, Lines, Test, Weakening, WeakeningKind};
 use tree_sitter::Node;
 
 use crate::constraint;
-use crate::syntax::{children, digest, doc_line, end_line, function_name, is_literal, line, named, tokens, Text};
+use crate::syntax::{children, digest, digest_of, doc_line, end_line, function_name, is_literal, line, named, tokens, Text};
 
 /// The methods of `testing.T`, `B` and `F` that fail the test they are called on.
 const FAILING: &[&str] = &["Error", "Errorf", "Fatal", "Fatalf", "Fail", "FailNow"];
@@ -313,10 +313,16 @@ impl<'t> Walk<'t> {
             .filter(|s| s.kind() != "comment")
             .collect();
         if statements.is_empty() && node.child_by_field_name("condition").is_some_and(|c| self.error_not_nil(c)) {
+            // The `if` up to its empty block: an `else` after it is the path that did not fail.
+            let head: Vec<&str> = children(node)
+                .into_iter()
+                .take_while(|c| c.kind() != "else")
+                .flat_map(|c| tokens(c, self.text))
+                .collect();
             self.weakenings.push(Weakening {
-                lines: Lines { first: line(node), last: end_line(node) },
+                lines: Lines { first: line(node), last: end_line(block) },
                 kind: WeakeningKind::SwallowedError,
-                code: digest(node, self.text),
+                code: digest_of(&head),
                 message: format!(
                     "`{}` added in `{}`: its empty block throws away the error that would fail the test.",
                     first_line(self.text.of(node)),

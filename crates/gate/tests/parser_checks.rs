@@ -965,3 +965,22 @@ fn an_exempt_file_is_neither_judged_nor_matched() {
     let found: Vec<String> = copies(&repo, settings).into_iter().map(|(path, _, _)| path).collect();
     assert_eq!(found, ["prices.py", "tests/test_more.py"]);
 }
+
+#[test]
+fn a_python_script_told_by_its_first_line_is_judged() {
+    let repo = Repo::with(&[("prices.py", TOTAL.as_bytes())]);
+    repo.put("bin/tool", format!("#!/usr/bin/env python3\n{TOTAL}").as_bytes());
+    assert_eq!(copies(&repo, Settings::default()), [("bin/tool".into(), 2, "prices.py:1".into())]);
+}
+
+#[test]
+fn go_outside_every_module_is_neither_judged_nor_matched() {
+    let big = big_go("");
+    let repo = go_module("mod/go.mod", &[("examples/big.go", &big)]);
+    assert_eq!(copies(&repo, Settings::default()), []);
+    repo.put("examples/more.go", big.as_bytes());
+    assert_eq!(copies(&repo, Settings::default()), []);
+    // big.go's ifs repeat its own, the seventh on the first ([`big_go`]); the copy outside the module is not named.
+    repo.put("mod/big.go", big.as_bytes());
+    assert_eq!(copies(&repo, Settings::default()), [("mod/big.go".into(), 22, "mod/big.go:4".into())]);
+}

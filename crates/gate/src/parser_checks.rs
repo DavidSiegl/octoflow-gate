@@ -324,24 +324,27 @@ fn working_tree_files(change: &Change, wanted: impl Fn(&OsStr) -> bool) -> Resul
     Ok(out)
 }
 
-/// The duplicated-blocks check's findings on `sources`, by path and line: on Python where the change holds Python, on
-/// Rust where it holds Rust and on Go where it holds Go, each language's tokens read (lang_python::code_tokens,
+/// The duplicated-blocks check's findings on `sources`, by path and line, on each of Python, Rust and Go where the
+/// change adds a line to a file the check judges: each language's tokens read (lang_python::code_tokens,
 /// lang_rust::code_tokens, lang_go::code_tokens) over the working tree's tracked files outside mutmut's state that
-/// hold the language by their name ([`Language::holds`]) and are not generated ([`Language::generated`]). The files
-/// gate.toml's `duplicated-blocks.exempt` names are neither judged nor matched. Errs when git cannot list the tree's
-/// files, or one cannot be read.
+/// hold the language as the other parser checks tell it, by name or first line and in one of its projects
+/// ([`holds_source`]), and are not generated ([`Language::generated`]). The files gate.toml's
+/// `duplicated-blocks.exempt` names are neither judged nor matched. Errs when git cannot list the tree's files, or one
+/// cannot be read.
 pub fn duplicated_blocks(sources: &Sources) -> Result<Vec<Finding>, Unjudged> {
     let change = sources.change;
-    let languages: [(bool, &Language, ReadTokens); 3] = [
-        (!sources.python.files.is_empty(), &PYTHON, lang_python::code_tokens),
-        (!sources.rust.files.is_empty(), &RUST, lang_rust::code_tokens),
-        (!sources.go.files.is_empty(), &GO, lang_go::code_tokens),
-    ];
+    let languages: [(&Language, ReadTokens); 3] =
+        [(&PYTHON, lang_python::code_tokens), (&RUST, lang_rust::code_tokens), (&GO, lang_go::code_tokens)];
+    let no_gone = HashSet::new();
     let mut out = vec![];
-    for (_, language, code_tokens) in languages.into_iter().filter(|(held, ..)| *held) {
+    for (language, code_tokens) in languages {
         let wanted = |path: &OsStr| {
-            (language.holds)(path.as_bytes(), &Vec::new) && !change.settings.duplicates_exempt.matches(path)
+            !change.settings.duplicates_exempt.matches(path) && holds_source(change, &no_gone, path, language)
         };
+        // Every window the check reports lies on added lines, so without one in a judged file the tree is not read.
+        if !change.changed.iter().any(|(path, lines)| !lines.is_empty() && wanted(path)) {
+            continue;
+        }
         let files: Vec<(OsString, Vec<CodeToken>)> = working_tree_files(change, wanted)?
             .into_iter()
             .filter(|(_, bytes)| !(language.generated)(bytes))
@@ -481,7 +484,7 @@ impl<'a> Stored<'a> {
     }
 
     /// The bytes of the base's regular file at `path`, when it holds `language`'s source or `whatever_it_holds`, lies
-    /// in one of the language's projects ([`Stored::in_its_project`]) and is not generated ([`Language::generated`]),
+    /// in one of the language's projects ([`in_its_project`]) and is not generated ([`Language::generated`]),
     /// with whether it holds that source. A file git cannot show is not the language's when its name would have to
     /// decide and does not, and an error otherwise.
     fn at_base(
@@ -500,7 +503,7 @@ impl<'a> Stored<'a> {
         };
         let head = || show().as_ref().map(|blob| blob[..blob.len().min(FIRST_LINE_BYTES)].to_vec()).unwrap_or_default();
         let holds = (language.holds)(path.as_bytes(), &head);
-        if (!whatever_it_holds && !holds) || !self.in_its_project(path, language) {
+        if (!whatever_it_holds && !holds) || !in_its_project(self.change, &self.gone, path, language) {
             return Ok(None);
         }
         show();
@@ -508,31 +511,38 @@ impl<'a> Stored<'a> {
         Ok(bytes.filter(|bytes| !(language.generated)(bytes)).map(|bytes| (bytes, holds)))
     }
 
-    /// The bytes of the working tree's regular file at `path`, when it holds `language`'s source, lies in one of the
-    /// language's projects ([`Stored::in_its_project`]) and is not generated ([`Language::generated`]).
+    /// The bytes of the working tree's regular file at `path`, when it holds `language`'s source in one of its
+    /// projects ([`holds_source`]) and is not generated ([`Language::generated`]).
     fn in_working_tree(&self, path: &OsStr, language: &Language) -> Result<Option<Vec<u8>>, Unjudged> {
-        let full = self.change.root.join(path);
-        let head = || {
-            let mut head = vec![];
-            let first = |file: std::fs::File| file.take(FIRST_LINE_BYTES as u64).read_to_end(&mut head);
-            let read = std::fs::File::open(&full).and_then(first);
-            if read.is_ok() { head } else { vec![] }
-        };
-        if !(language.holds)(path.as_bytes(), &head) || !self.in_its_project(path, language) {
+        if !holds_source(self.change, &self.gone, path, language) {
             return Ok(None);
         }
+        let full = self.change.root.join(path);
         let read = std::fs::read(&full);
         let bytes = read.map_err(|e| Unjudged(format!("{} could not be read: {e}", text::path(full.as_os_str()))))?;
         Ok(Some(bytes).filter(|bytes| !(language.generated)(bytes)))
     }
+}
 
-    /// Whether `path`, the path of a side that holds `language`'s source, lies in one of the language's projects
-    /// ([`in_project`]), as it must to be read as the language's where the language has them ([`Language::project`]).
-    /// It is asked after [`Language::holds`], which most paths fail by their name alone, as it walks up the path's
-    /// directories with a `stat` at each.
-    fn in_its_project(&self, path: &OsStr, language: &Language) -> bool {
-        language.project.is_none_or(|manifest| in_project(self.change, &self.gone, path, manifest))
-    }
+/// Whether the working tree's file at `path`, from the tree's top, holds `language`'s source by its name or its first
+/// line ([`Language::holds`]), in one of the language's projects where it has them ([`in_its_project`], `gone` as
+/// there). A file that cannot be read has no first line.
+fn holds_source(change: &Change, gone: &HashSet<PathBuf>, path: &OsStr, language: &Language) -> bool {
+    let head = || {
+        let mut head = vec![];
+        let first = |file: std::fs::File| file.take(FIRST_LINE_BYTES as u64).read_to_end(&mut head);
+        let read = std::fs::File::open(change.root.join(path)).and_then(first);
+        if read.is_ok() { head } else { vec![] }
+    };
+    (language.holds)(path.as_bytes(), &head) && in_its_project(change, gone, path, language)
+}
+
+/// Whether `path`, the path of a side that holds `language`'s source, lies in one of the language's projects
+/// ([`in_project`], `gone` as there), as it must to be read as the language's where the language has them
+/// ([`Language::project`]). It is asked after [`Language::holds`], which most paths fail by their name alone, as it
+/// walks up the path's directories with a `stat` at each.
+fn in_its_project(change: &Change, gone: &HashSet<PathBuf>, path: &OsStr, language: &Language) -> bool {
+    language.project.is_none_or(|manifest| in_project(change, gone, path, manifest))
 }
 
 /// Those of `paths`, each a path of the tree at `change`'s base, that are regular files there, as git's tree records

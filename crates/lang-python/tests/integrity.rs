@@ -182,6 +182,9 @@ fn a_test_moved_with_the_decorators_it_had_adds_no_skip_but_one_added_on_the_way
     // However its quotes, trailing commas and comments are rewritten on the way, as black and an editor do.
     let rewritten = base.replace("'no')", "\"no\",)  # still");
     assert_eq!(found(&[deleted(OTHER_PATH, base), added("tests/test_new.py", &rewritten)]).0, []);
+    let swallowing = "def test_b():\n    try:\n        assert 1\n    except Exception:  # why\n        pass\n";
+    let rewritten = swallowing.replace("Exception:  # why", "Exception :  # flaky");
+    assert_eq!(found(&[deleted(OTHER_PATH, swallowing), added("tests/test_new.py", &rewritten)]).0, []);
 }
 
 #[test]
@@ -195,6 +198,11 @@ fn a_kept_test_s_mark_moved_to_another_parametrized_case_is_found() {
     // A case added beside it leaves the mark its own.
     let added_case = base.replace("    pytest.param(2),\n", "    pytest.param(2),\n    pytest.param(3),\n");
     assert_eq!(found(&[edited(OTHER_PATH, base, &added_case)]).0, []);
+    // On one line, a mark added to a second case is found beside the first's.
+    let one_line = "import pytest\n\n\n@pytest.mark.parametrize('n', [pytest.param(1, marks=pytest.mark.xfail), \
+                    pytest.param(2)])\ndef test_b(n):\n    assert n\n";
+    let both = one_line.replace("pytest.param(2)", "pytest.param(2, marks=pytest.mark.xfail)");
+    assert_eq!(found(&[edited(OTHER_PATH, one_line, &both)]).0, [at(OTHER_PATH, 4, "skip")]);
 }
 
 #[test]

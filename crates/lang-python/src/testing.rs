@@ -218,10 +218,11 @@ fn written_whole(node: Node) -> Node {
 }
 
 /// What weakens a test in the test module `root`: each name or attribute that skips a test or expects it to fail
-/// ([`SKIP_NAMES`]), once per line and name, and each `except` that swallows what it catches ([`swallows`]).
+/// ([`SKIP_NAMES`]), once per line and code, so that two parametrized cases' marks on one line are two, and each
+/// `except` that swallows what it catches ([`swallows`]).
 pub fn weakenings(root: Node, text: Text) -> Vec<Weakening> {
     let mut out = vec![];
-    let mut seen: HashSet<(u32, &str)> = HashSet::new();
+    let mut seen: HashSet<(u32, String)> = HashSet::new();
     let mut todo = vec![root];
     while let Some(node) = todo.pop() {
         let skip = match node.kind() {
@@ -229,19 +230,21 @@ pub fn weakenings(root: Node, text: Text) -> Vec<Weakening> {
             "attribute" => node.child_by_field_name("attribute").map(|a| text.of(a)),
             _ => None,
         };
-        if skip.is_some_and(|name| SKIP_NAMES.contains(&name) && seen.insert((line(node), name))) {
+        let code = skip.filter(|name| SKIP_NAMES.contains(name)).map(|_| digest(written_whole(node), text));
+        if let Some(code) = code.filter(|code| seen.insert((line(node), code.clone()))) {
             out.push(Weakening {
                 line: line(node),
                 kind: WeakeningKind::Skip,
-                code: digest(written_whole(node), text),
+                code,
                 message: format!("`{}` added: it skips a test or expects it to fail.", first_line(text.of(node))),
             });
         }
         if matches!(node.kind(), "except_clause" | "except_group_clause") && swallows(node, text) {
             // The clause up to the colon that opens its body.
-            let colon = children(node).into_iter().find(|c| c.kind() == ":").map_or(node.end_byte(), |c| c.end_byte());
-            let written = text.0.get(node.start_byte()..colon).unwrap_or_default();
-            let head: Vec<Node> = children(node).into_iter().take_while(|c| c.end_byte() <= colon).collect();
+            let mut head: Vec<Node> = children(node);
+            head.truncate(head.iter().position(|c| c.kind() == ":").map_or(head.len(), |colon| colon + 1));
+            let written = head.last().map_or(node.start_byte(), |c| c.end_byte());
+            let written = text.0.get(node.start_byte()..written).unwrap_or_default();
             out.push(Weakening {
                 line: line(node),
                 kind: WeakeningKind::SwallowedError,

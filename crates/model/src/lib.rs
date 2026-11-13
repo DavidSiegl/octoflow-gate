@@ -170,8 +170,9 @@ pub struct Weakening {
     pub line: u32,
     pub kind: WeakeningKind,
     /// The code that weakens, whole, in a form that only that code has: the attribute or decorator with its
-    /// arguments, the call, the clause or the comment. Two writings of the same code have the same one however each is
-    /// laid out, and the same as far as the language's reader takes two test bodies for the same ([`Test::body`]);
+    /// arguments, the call, the clause or the comment. Two writings of the same code that differ only in whitespace
+    /// have the same one; a front end may leave out more that does not change what the code does, as lang-go leaves
+    /// out comments and lang-python comments, a string's quotes and a list's closing comma, as in [`Test::body`].
     /// test-integrity tells a test's old weakening from a new one by it.
     pub code: String,
     /// The finding's message: what was added and what it does, as "`#[ignore]` added: it skips a test or turns it

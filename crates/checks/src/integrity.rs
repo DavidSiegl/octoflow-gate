@@ -21,8 +21,8 @@ const CHECK: &str = "test-integrity";
 ///   it stayed, the assertions of the two sides aligned as Python's difflib aligns sequences; and a constant of the
 ///   file's base ([`model::Constant`]) that a kept test's assertions name on both sides and that the change edited or
 ///   made no constant, at the first assertion now naming it;
-/// - skip, platform-only and swallowed-error: each [`model::Weakening`] on a line the change added, but for one that a
-///   test kept, renamed or moved already carried, as [`carried_weakenings`] tells;
+/// - skip, platform-only and swallowed-error: each [`model::Weakening`] whose code the change added a line to, at the
+///   first such line, but for one that a test kept, renamed or moved already carried, as [`carried_weakenings`] tells;
 /// - unreadable: a test file, one the settings place among the tests or with test code on a side, that its front end
 ///   could not read as a whole on a side ([`model::Unreadable`] with no line, as for one that is not UTF-8), which is
 ///   all the check says of it: which tests the change removed or weakened cannot be told;
@@ -189,9 +189,9 @@ impl<'k, 't> Matching<'k, 't> {
     }
 }
 
-/// The weakenings on lines the change added to `files` that a test it kept, renamed or moved already carried at the
-/// base, as `matching` pairs them: each equal in kind and [`Weakening::code`] to one its old self carried, each of
-/// those carrying one, after the weakenings on lines the change kept took theirs. A test carries those on its own
+/// The weakenings in `files` whose code the change added a line to that a test it kept, renamed or moved already
+/// carried at the base, as `matching` pairs them: each equal in kind and [`Weakening::code`] to one its old self
+/// carried, each of those carrying one, after the weakenings whose lines the change all kept took theirs. A test carries those on its own
 /// attributes or decorators, from its first line to that of its `fn` or `def`, and, when its body is the same as its
 /// old self's, those in its body too; an edited body's are new, since a statement's `cfg` moved within it turns off
 /// another statement.
@@ -201,16 +201,16 @@ fn carried_weakenings<'f>(files: &'f [ChangedFile], matching: &Matching) -> Vec<
         let same_body = was.test.body == now.test.body;
         let on = |source: Option<&'f SourceFile>, test: &Test| {
             let lines = test.lines.first..=if same_body { test.lines.last } else { test.line };
-            source.into_iter().flat_map(|s| &s.weakenings).filter(move |w| lines.contains(&w.line))
+            source.into_iter().flat_map(|s| &s.weakenings).filter(move |w| lines.contains(&w.lines.first))
         };
         let mut had: Vec<&Weakening> = on(files[was.file].base(), was.test).collect();
         let file = &files[now.file];
         let (added, kept): (Vec<&Weakening>, Vec<&Weakening>) =
-            on(file.now(), now.test).partition(|w| file.added.contains(&w.line));
+            on(file.now(), now.test).partition(|w| first_added(file, w).is_some());
         for w in kept.into_iter().chain(added) {
             if let Some(k) = had.iter().position(|h| h.kind == w.kind && h.code == w.code) {
                 had.swap_remove(k);
-                if file.added.contains(&w.line) {
+                if first_added(file, w).is_some() {
                     out.push(w);
                 }
             }
@@ -341,18 +341,24 @@ fn changed_constants(path: Option<&OsString>, was: (&Test, &SourceFile), now: (&
     out
 }
 
-/// The findings on the [`model::Weakening`]s of `file` in the working tree that lie on lines the change added, but
-/// for those among `carried`, which [`carried_weakenings`] gives.
+/// The findings on the [`model::Weakening`]s of `file` in the working tree whose code the change added a line to,
+/// each at the first such line, but for those among `carried`, which [`carried_weakenings`] gives.
 fn added_weakenings(file: &ChangedFile, carried: &[&Weakening]) -> Vec<Finding> {
     let (Some(now), Some(side)) = (file.now(), &file.after) else { return vec![] };
     let added = (now.weakenings.iter())
-        .filter(|w| file.added.contains(&w.line) && !carried.iter().any(|c| std::ptr::eq(*c, *w)));
+        .filter(|w| !carried.iter().any(|c| std::ptr::eq(*c, *w)))
+        .filter_map(|w| Some((w, first_added(file, w)?)));
     added
-        .map(|w| {
+        .map(|(w, line)| {
             let fails = w.kind != WeakeningKind::PlatformOnly;
-            Finding::of(CHECK, w.kind.rule(), fails, Some(&side.path), Some(w.line), w.message.clone())
+            Finding::of(CHECK, w.kind.rule(), fails, Some(&side.path), Some(line), w.message.clone())
         })
         .collect()
+}
+
+/// The first line of `w`'s code, in `file`'s working tree, that the change added; None when it added none of them.
+fn first_added(file: &ChangedFile, w: &Weakening) -> Option<u32> {
+    file.added.range(w.lines.first..=w.lines.last).next().copied()
 }
 
 /// The (before, after) pairs of a test's assertions `was` and `now` that kept their shape but not their literals, the

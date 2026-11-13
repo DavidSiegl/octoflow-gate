@@ -167,7 +167,9 @@ pub struct TestGroup {
 /// Something written in a file that weakens a test ([`SourceFile::weakenings`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Weakening {
-    pub line: u32,
+    /// The lines its code spans, as [`Weakening::code`] takes it; a finding on it points at the first of them the
+    /// change added.
+    pub lines: Lines,
     pub kind: WeakeningKind,
     /// The code that weakens, whole, in a form that only that code has: the attribute or decorator with its
     /// arguments, the call, the clause or the comment. Two writings of the same code that differ only in whitespace

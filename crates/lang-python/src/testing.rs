@@ -218,9 +218,9 @@ fn written_whole(node: Node) -> Node {
 }
 
 /// What weakens a test in the test module `root`: each name or attribute that skips a test or expects it to fail
-/// ([`SKIP_NAMES`]), once per code it is written in ([`written_whole`]), at the line of its first such name, so that
-/// each parametrized case's marks are one however they are wrapped; and each `except` that swallows what it catches
-/// ([`swallows`]).
+/// ([`SKIP_NAMES`]), once per code it is written in ([`written_whole`]), so that each parametrized case's marks are
+/// one however they are wrapped; and each `except` that swallows what it catches ([`swallows`]), its lines those of
+/// its head, up to the colon.
 pub fn weakenings(root: Node, text: Text) -> Vec<Weakening> {
     let mut out = vec![];
     // The ids of the nodes `written_whole` gave for the skips read so far.
@@ -235,7 +235,7 @@ pub fn weakenings(root: Node, text: Text) -> Vec<Weakening> {
         let whole = skip.filter(|name| SKIP_NAMES.contains(name)).map(|_| written_whole(node));
         if let Some(whole) = whole.filter(|whole| seen.insert(whole.id())) {
             out.push(Weakening {
-                line: line(node),
+                lines: Lines { first: line(whole), last: end_line(whole) },
                 kind: WeakeningKind::Skip,
                 code: digest(whole, text),
                 message: format!("`{}` added: it skips a test or expects it to fail.", first_line(text.of(node))),
@@ -245,10 +245,10 @@ pub fn weakenings(root: Node, text: Text) -> Vec<Weakening> {
             // The clause up to the colon that opens its body.
             let mut head: Vec<Node> = children(node);
             head.truncate(head.iter().position(|c| c.kind() == ":").map_or(head.len(), |colon| colon + 1));
-            let written = head.last().map_or(node.start_byte(), |c| c.end_byte());
-            let written = text.0.get(node.start_byte()..written).unwrap_or_default();
+            let end = head.last().map_or(node.start_byte(), |c| c.end_byte());
+            let written = text.0.get(node.start_byte()..end).unwrap_or_default();
             out.push(Weakening {
-                line: line(node),
+                lines: Lines { first: line(node), last: head.last().map_or(line(node), |c| end_line(*c)) },
                 kind: WeakeningKind::SwallowedError,
                 code: digest_of(&head, text),
                 message: format!("`{}` added in a test: it hides the failure it catches.", first_line(written)),
@@ -256,7 +256,7 @@ pub fn weakenings(root: Node, text: Text) -> Vec<Weakening> {
         }
         todo.extend(named(node).into_iter().rev());
     }
-    out.sort_by_key(|w| w.line);
+    out.sort_by_key(|w| w.lines.first);
     out
 }
 

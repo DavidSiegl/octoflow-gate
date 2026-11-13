@@ -193,6 +193,10 @@ fn a_test_moved_with_its_skip_adds_none() {
     let skipping = skipped.replace("t.Skip(\"needs network\")", "t.Skip( /* offline */ \"needs network\")");
     let moved = [deleted(TEST_PATH, skipped), added("calc/network_test.go", &skipping)];
     assert_eq!(check(&moved), vec![]);
+    // A wrapped skip whose argument line alone changed is found at that line.
+    let wrapped = edit(skipped, "t.Skip(\"needs network\")", "t.Skip(\n\t\t\"needs network\",\n\t)");
+    let found = check(&[edited(TEST_PATH, &wrapped, &edit(&wrapped, "\"needs network\"", "\"always\""))]);
+    assert_eq!(found.iter().map(|f| (f.line, f.rule.as_str())).collect::<Vec<_>>(), [(Some(7), "test-integrity skip")]);
 }
 
 #[test]

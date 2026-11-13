@@ -140,6 +140,10 @@ fn a_kept_test_carries_its_skips_but_not_one_whose_condition_changed() {
     let base = with("    #[cfg_attr(miri, ignore)]\n");
     let found = check(&[edited(LIB_PATH, &base, &with("    #[cfg_attr(unix, ignore)]\n"))]);
     assert_eq!(wheres(&found), vec![at(LIB_PATH, Some(16), "skip")]);
+    // A wrapped cfg whose inner line alone changed, at that line.
+    let base = with("    #[cfg_attr(\n        miri,\n        ignore\n    )]\n");
+    let found = check(&[edited(LIB_PATH, &base, &edit(&base, "        miri,", "        unix,"))]);
+    assert_eq!(wheres(&found), vec![at(LIB_PATH, Some(17), "skip")]);
 }
 
 #[test]

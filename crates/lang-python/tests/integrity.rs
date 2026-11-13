@@ -217,6 +217,9 @@ fn a_test_moved_with_a_case_s_marks_rewrapped_adds_no_skip() {
         "marks=[\n        pytest.mark.skip,\n        pytest.mark.xfail,\n    ]",
     );
     assert_eq!(found(&[deleted(OTHER_PATH, base), added("tests/test_new.py", &wrapped)]).0, []);
+    // A mark added on its own line among them is found there.
+    let more = wrapped.replace("        pytest.mark.xfail,\n", "        pytest.mark.xfail,\n        pytest.mark.skip,\n");
+    assert_eq!(found(&[edited("tests/test_new.py", &wrapped, &more)]).0, [at("tests/test_new.py", 7, "skip")]);
 }
 
 #[test]
@@ -227,6 +230,10 @@ fn a_kept_test_s_skip_with_another_condition_or_a_second_one_stacked_above_is_fo
     assert_eq!(found(&[edited(OTHER_PATH, base, &always)]).0, [at(OTHER_PATH, 6, "skip")]);
     let stacked = base.replace("@pytest", "@pytest.mark.skipif(True, reason='y')\n@pytest");
     assert_eq!(found(&[edited(OTHER_PATH, base, &stacked)]).0, [at(OTHER_PATH, 6, "skip")]);
+    // A wrapped skipif whose condition line alone changed, at that line.
+    let wrapped = base.replace("skipif(sys", "skipif(\n    sys").replace(", reason", ",\n    reason");
+    let always = wrapped.replace("    sys.platform == 'win32',", "    True,");
+    assert_eq!(found(&[edited(OTHER_PATH, &wrapped, &always)]).0, [at(OTHER_PATH, 7, "skip")]);
 }
 
 #[test]

@@ -283,7 +283,7 @@ impl<'t> Walk<'t> {
         let method = self.testing_method(node);
         if method.is_some_and(|m| SKIPPING.contains(&m)) {
             self.weakenings.push(Weakening {
-                line: line(node),
+                lines: Lines { first: line(node), last: end_line(node) },
                 kind: WeakeningKind::Skip,
                 code: digest(node, self.text),
                 message: format!("`{}` added: it skips a test.", first_line(self.text.of(node))),
@@ -314,7 +314,7 @@ impl<'t> Walk<'t> {
             .collect();
         if statements.is_empty() && node.child_by_field_name("condition").is_some_and(|c| self.error_not_nil(c)) {
             self.weakenings.push(Weakening {
-                line: line(node),
+                lines: Lines { first: line(node), last: end_line(node) },
                 kind: WeakeningKind::SwallowedError,
                 code: digest(node, self.text),
                 message: format!(
@@ -379,7 +379,7 @@ impl<'t> Walk<'t> {
         if let ([blank], [thrown], Some("=")) = (left.as_slice(), right.as_slice(), operator) {
             if self.text.of(*blank) == "_" && thrown.kind() == "identifier" && names_an_error(self.text.of(*thrown)) {
                 self.weakenings.push(Weakening {
-                    line: line(node),
+                    lines: Lines { first: line(node), last: end_line(node) },
                     kind: WeakeningKind::SwallowedError,
                     code: digest(node, self.text),
                     message: format!(

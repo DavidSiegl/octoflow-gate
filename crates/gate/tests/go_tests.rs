@@ -46,7 +46,7 @@ fn a_failing_go_test_fails_the_gate_and_the_profile_gives_the_coverage_of_new_co
     let (exit_code, out) = gate(&repo);
     assert_eq!(exit_code, 1, "{out}");
     assert!(out.contains("- 1 tests fail; each is listed below.\n"), "{out}");
-    assert!(out.contains("## Failing tests\n\n- `example.com/calc/sub.TestBig`: Failed\n"), "{out}");
+    assert!(out.contains("## Failing tests\n\n- `example.com/calc/sub.TestBig`: big_test.go:7: 2 is not big\n"), "{out}");
     let coverage = "## Coverage on new code\n\n50.0% of 2 new lines to cover; 1 lines are not covered.\n";
     assert!(out.contains(coverage), "{out}");
 }
@@ -57,5 +57,5 @@ fn a_package_that_does_not_compile_is_a_failing_test() {
     repo.put("sub/calc.go", format!("{CALC}\nfunc Broken() int {{\n\treturn nope\n}}\n").as_bytes());
     let (exit_code, out) = gate(&repo);
     assert_eq!(exit_code, 1, "{out}");
-    assert!(out.contains("## Failing tests\n\n- `TestMain`: Failed\n"), "{out}");
+    assert!(out.contains("## Failing tests\n\n- `TestMain`: FAIL\texample.com/calc/sub [build failed]\n"), "{out}");
 }

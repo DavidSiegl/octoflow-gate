@@ -50,7 +50,7 @@
         "required": ["name", "detail"],
         "properties": {
           "name": {"description": "The test's name as its report gives it.", "type": "string"},
-          "detail": {"description": "The whole of the failure's message and text, empty when the report gives none.", "type": "string"}
+          "detail": {"description": "What the report says failed, whole: the failure's message, or its text where the message is missing or says only that the test failed (gotestsum's Failed), go test -v's === RUN and --- FAIL: lines left out; empty when the report gives none.", "type": "string"}
         }
       }
     },

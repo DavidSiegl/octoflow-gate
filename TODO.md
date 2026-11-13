@@ -178,6 +178,13 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   by where it starts and ends, not by its lines, so `go_profile_lines` (`crates/gate/src/coverage.rs`) counts every
   line between, covered or not as the block is, as gocover-cobertura and Codecov read profiles too. Found with
   go-support/01 (2026-11-11). Closes with each such line read from the file and left out when it holds no token.
+- **A Go package that does not compile is listed without the compiler's words.** gotestsum's report holds only
+  `FAIL <package> [build failed]` for it, under the test case `TestMain`, which `junit_outcomes`
+  (`crates/gate/src/junit.rs`) takes as the detail; the compiler's lines go to the command's standard output, which
+  `run_test_command` (`crates/gate/src/test_commands.rs`) passes to stderr unread. Narrowed from failing-test-detail/02
+  (2026-11-13), whose Done when asked for the compiler's first lines. Closes with the gate keeping a `[[test]]`
+  command's output and giving a build-failed case the lines that name the package's files, or by deciding the
+  command's log in the build is enough.
 - **A file tree-sitter cannot parse goes unread by dependency-cycles, saying nothing.** `imports` in
   `crates/lang-rust/src/imports.rs` and `crates/lang-python/src/imports.rs` read such a file as making no imports and
   declaring no modules. A changed file that does not parse already fails the gate, cognitive-complexity's `not-scored`

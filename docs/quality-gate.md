@@ -798,9 +798,12 @@ coverage = ["coverage-go.out"]
 ```
 
 - **Tests.** gotestsum names a test case by its package's import path and the test, a subtest after a slash, so the
-  failing tests list `example.com/calc.TestAdd/negative`; a failure's detail is gotestsum's word for it, `Failed`
-  (#42). A package that does not compile is one failing test case, `TestMain`. gotestsum exits non-zero when a
-  test fails, as the gate expects; a run that leaves no report is a failed condition naming the command.
+  failing tests list `example.com/calc.TestAdd/negative`. gotestsum's message for a failure is only `Failed`, so the
+  detail is the test's output instead, without the `=== RUN` and `--- FAIL:` lines `go test -v` frames it with: it
+  opens with the test's own first line, such as `calc_test.go:6: got 2, want 3`. A package that does not compile is
+  one failing test case, `TestMain`, whose detail is `FAIL <package> [build failed]`; the compiler's words go to the
+  command's output, not to the report. gotestsum exits non-zero when a test fails, as the gate expects; a run that
+  leaves no report is a failed condition naming the command.
 - **What it measures** is the statements of each package that its own tests run, unless `-coverpkg` widens it: a line
   is coverable when a block of statements holds some of it, and covered when such a block ran. Go counts no branches.
 - **Paths.** The profile names a file by its package's import path, as `example.com/calc/sub/calc.go`, which the gate

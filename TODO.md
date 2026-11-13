@@ -26,6 +26,15 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   for a branch build whose HEAD is an orphan commit with no earlier successful build. The Jenkinsfile is the
   agent-estate template's, whose root-commit base suits a gate that does not judge with the base's own code. Closes with
   `scripts/gate` deciding what judges a change that has no gate before it.
+- **A build of main can skip the gate for a head that main's newest rules never judged.** As cross-review 32 put it
+  (R1-1, 2026-11-13): a pull request build judges by origin/main as it stood then, not by HEAD's tree, so the skip in
+  `ci/judged-at-pr.sh` "is sound only when the PR build's judge was HEAD^1, and nothing checks that. It holds when
+  HEAD^1 was born on main as a merge commit [...]. It fails when HEAD^1 reached main by a fast-forward push of a
+  commit that already existed in a branch": a commit P that tightens gate.toml or raises ci/gate.pin, pushed straight
+  to main beneath a head h that passed under the older rules, lets h's merge skip the gate. Git does not record which
+  main a pull request build judged with. Reachable only by a push to main that bypasses pull requests, which
+  `agent.directToMain` allows. Closes with the build of main learning which judge the pull request build used, from
+  Jenkins rather than from anything that build archives, and requiring HEAD^1's.
 - **`vague-names` does not split CamelCase in Python.** `vague` (`crates/checks/src/names.rs`) matches a whole Python
   name or its last `_`-separated word, so `user_data` is found but a class `InfoManager` or `UserData` is not; in Rust
   the last CamelCase word is matched too (its `camel`, gate-rust-checks ticket 04), which is Rust's counterpart. Closes,

@@ -202,6 +202,15 @@ ${env.BUILD_URL}console""",
         }
         // Last, whatever the steps above did, so no build leaves the workspace to the next.
         cleanup {
+            // The TMPDIR scripts/gate and Package use too, which cleanWs leaves: scripts/gate empties it before it
+            // runs, but a build of main judged at PR runs Package alone. A clear-out that fails only warns, as there.
+            sh '''
+                # Unset, the path would be /tmp itself, the agent's.
+                [ -n "${WORKSPACE_TMP:-}" ] || exit 0
+                tmp="$WORKSPACE_TMP/tmp"
+                [ ! -e "$tmp" ] || { chmod -R u+rwX "$tmp" && rm -rf "$tmp"; } ||
+                    echo "could not empty $tmp; what this build left there stays" >&2
+            '''
             cleanWs()
         }
     }

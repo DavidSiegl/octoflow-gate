@@ -18,7 +18,8 @@
 # next build.
 #
 # Jenkins runs it on every pull request (from its merge base with main) and on main (from the
-# last passing build), and judges by its exit status alone: 0 for GATE: OK, 1 for GATE: ERROR
+# last passing build) unless a pull request build already judged that tree (ci/judged-at-pr.sh),
+# and judges by its exit status alone: 0 for GATE: OK, 1 for GATE: ERROR
 # (quality.md says why), 2 when the change could not be judged, and 130 when the gate was
 # interrupted. It cannot be judged when a tool is missing; BASE or the judge is not a commit;
 # the judge lacks ci/gate.pin, ci/fetch-gate.sh, pyproject.toml, or a gate.toml listing a

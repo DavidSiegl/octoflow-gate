@@ -201,7 +201,7 @@ order. The findings are Python's, read of Rust:
   reviewer checks that the code under test is as limited. The platforms are a list of common `target_os` values with
   their families (`TARGET_OSES` in `crates/lang-rust/src/skips.rs`); one it lacks, as a misspelt os, and a predicate
   that holds on none of them, as `all(unix, windows)`, are still a `skip`. So is a platform `cfg` inside a test's
-  body, and one starting on a line where another skip starts;
+  body, other than an inner one opening it, and one starting on a line where another skip starts;
 - `fewer-assertions`: a kept test with fewer of the assertion macros (`assert!`,
   `assert_eq!`, `assert_ne!`, their `debug_` forms, and `panic!`) than at the base. It is one to weigh, as Python's;
 - `swallowed-error`: on an added line, a `#[should_panic]` without `expected` on a test, which any panic passes, a

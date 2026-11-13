@@ -159,7 +159,8 @@ pub struct Items {
     pub fns: Vec<Fn>,
     pub mods: Vec<Mod>,
     pub bindings: Vec<Binding>,
-    /// Every inner attribute, `#![...]`, written outside the bodies of fns, which hold theirs ([`Fn::body_attrs`]).
+    /// Every inner attribute, `#![...]`, written outside the bodies of fns. A fn holds those in its body: the ones
+    /// opening it among [`Fn::attrs`], the rest among [`Fn::body_attrs`].
     pub inner_attrs: Vec<Attr>,
     /// The lines of each item compiled only under `cfg(test)`, its outer attributes and doc comments included: one
     /// marked by a `cfg` whose predicate needs `test`, or an inline module whose body opens with such a `#![cfg]`.

@@ -476,8 +476,8 @@ impl<'a> Stored<'a> {
     /// and the base paths among them that held none of it by their name or first line, read all the same
     /// ([`Language::base_of_any_name`]). `among_tests(path, other, at_base)` says whether a side at `path`, the base's
     /// when `at_base`, whose other side, where the change gives it one, is at `other`, is among the language's tests
-    /// as a whole, and is read as test code. Errs
-    /// when git cannot show such a file at the base, or one cannot be read in the working tree.
+    /// as a whole, and is read as test code. Errs when git cannot show such a file at the base, or one cannot be read
+    /// in the working tree.
     fn files(
         &self,
         language: &Language,

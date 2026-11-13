@@ -253,6 +253,10 @@ fn an_inner_attribute_in_a_test_s_body_turns_the_test_off_whether_a_module_holds
     let after = edit(&after, "fn u() {\n", "fn u() {\n    #![cfg(unix)]\n");
     let found = check(&[edited(LIB_PATH, lib, &after)]);
     assert_eq!(wheres(&found), vec![at(LIB_PATH, Some(8), "skip"), at(LIB_PATH, Some(15), "platform-only")]);
+    // A block's inner one turns only the block's assertions off, while the test still runs: a skip.
+    let block = "    {\n        #![cfg(unix)]\n        assert_eq!(one(), 1);\n    }\n}\n\n";
+    let after = edit(lib, "    assert_eq!(one(), 1);\n}\n\n", block);
+    assert_eq!(wheres(&check(&[edited(LIB_PATH, lib, &after)])), vec![at(LIB_PATH, Some(9), "skip")]);
 }
 
 #[test]

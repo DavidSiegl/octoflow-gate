@@ -107,6 +107,20 @@ fn an_import_between_a_module_and_one_it_holds_is_none() {
 }
 
 #[test]
+fn a_file_declared_by_test_code_first_and_by_code_after_imports_nothing_it_holds_or_its_parent() {
+    let files = [
+        ("src/lib.rs", "#[cfg(test)]\n#[path = \"util.rs\"]\nmod test_util;\nmod util;\n"),
+        (
+            "src/util.rs",
+            "mod child;\nmod inner { pub fn x() {} }\npub fn u() { self::inner::x(); self::child::c(); }\n",
+        ),
+        ("src/util/child.rs", "pub fn c() { super::u(); }\n"),
+    ];
+    assert_eq!(imports_of(&files, "src/util.rs"), []);
+    assert_eq!(imports_of(&files, "src/util/child.rs"), []);
+}
+
+#[test]
 fn test_code_imports_nothing() {
     let files = [
         ("src/lib.rs", "mod a;\nmod b;\n#[cfg(test)]\nmod checks;\n"),

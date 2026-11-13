@@ -365,9 +365,13 @@ impl ModuleTree {
         }
         let at = path.len();
         path.extend(rest.iter().cloned());
-        let file = (at..=path.len()).rev().find_map(|n| self.files.get(&(root, path[..n].to_vec())).copied())?;
-        // The target file's own module of the root, which an inline module the path names lies in.
-        let ((_, target), _) = self.of_file[file].iter().find(|((r, _), _)| *r == root)?;
+        let (named, file) = (at..=path.len()).rev().find_map(|n| {
+            let named = &path[..n];
+            self.files.get(&(root, named.to_vec())).map(|&file| (named, file))
+        })?;
+        // The target file's module of the root that the path reaches it by, which an inline module the path names
+        // lies in: a file taken in by two declarations has two.
+        let ((_, target), _) = self.of_file[file].iter().find(|((r, m), _)| *r == root && named.starts_with(m))?;
         let nested = own.starts_with(target) || target.starts_with(own);
         (!nested).then_some(file)
     }

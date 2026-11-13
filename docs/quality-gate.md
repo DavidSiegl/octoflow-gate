@@ -188,13 +188,12 @@ order. The findings are Python's, read of Rust:
   that is no longer Rust;
 - `skip`: an attribute added that skips a test or turns it off: `#[ignore]`, a `cfg` other than `cfg(test)` itself,
   `cfg(all(test, feature = "slow"))` included, which turns tests off as Python's `skipIf` does, or a `cfg_attr` that
-  writes `ignore`, as an argument after its predicate. It counts among a test's attributes, its body's inner ones,
-  `#![...]`, included; inside a test's body, on a statement or an expression, where a `cfg` turns an assertion off;
-  among the outer attributes of an inline module
-  holding a test, those on its `mod` line included; and as an inner attribute, `#![...]`, inside such a module or
-  anywhere in a file under `tests/`. A `cfg` on a helper `fn` is no skip, nor `#[cfg(test)]` on a new test module.
-  The parser places each attribute, whole however it wraps, so one inside a string literal is none. Attributes that
-  start on one line are one finding, at that line;
+  writes `ignore`, as an argument after its predicate. It counts among a test's attributes, the inner ones, `#![...]`,
+  that open its body included; inside a test's body, on a statement or an expression or opening a block in it, where a
+  `cfg` turns an assertion off; among the outer attributes of an inline module holding a test, those on its `mod` line
+  included; and as an inner attribute inside such a module or anywhere in a file under `tests/`. A `cfg` on a helper
+  `fn` is no skip, nor `#[cfg(test)]` on a new test module. The parser places each attribute, whole however it wraps,
+  so one inside a string literal is none. Attributes that start on one line are one finding, at that line;
 - `platform-only`: a `cfg` that would be a `skip` but names only platforms (`unix`, `windows`, `target_os = "…"`,
   `target_family = "…"`, and `any`, `all` and `not` of them, `test` allowed beside them in an outermost `all`) and holds
   on at least one, on a test, a test module or a file of tests, read whole when rustfmt wraps it. It leaves a test out

@@ -124,9 +124,10 @@ pub struct Fn {
     /// The line of its first outer attribute or doc comment; `line` when it has none.
     pub attrs_line: u32,
     pub end: u32,
+    /// Its own attributes: the outer ones before it and the inner ones, `#![...]`, that open its body.
     pub attrs: Vec<Attr>,
-    /// The attributes written in its body: its own inner ones, `#![...]`, and the outer ones on its statements,
-    /// expressions and the items it holds, with theirs; those inside the bodies of the fns it holds left out.
+    /// The other attributes written in its body: those on its statements, expressions and the items it holds, with
+    /// theirs, and the inner ones of the blocks inside it; those inside the bodies of the fns it holds left out.
     pub body_attrs: Vec<Attr>,
     /// The assertion macros its body calls, those of the closures it holds included and of the fns it holds not.
     pub asserts: Vec<Assertion>,
@@ -209,9 +210,15 @@ impl Walk<'_> {
             "foreign_mod_item" | "macro_definition" => {}
             "attribute_item" | "inner_attribute_item" => {
                 let attr = attribute(node, text, self.lines);
+                let inner = node.kind() == "inner_attribute_item";
+                // An inner attribute of a fn's body block is the fn's, as `fn f() { #![cfg(miri)] }`.
+                let opens_fn = node.parent().filter(|b| b.kind() == "block").and_then(|b| b.parent());
                 match self.current_fn {
+                    Some(i) if inner && opens_fn.is_some_and(|f| f.kind() == "function_item") => {
+                        self.items.fns[i].attrs.extend(attr)
+                    }
                     Some(i) => self.items.fns[i].body_attrs.extend(attr),
-                    None if node.kind() == "inner_attribute_item" => self.items.inner_attrs.extend(attr),
+                    None if inner => self.items.inner_attrs.extend(attr),
                     None => {}
                 }
             }

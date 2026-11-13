@@ -179,7 +179,8 @@ fn an_inline_module_whose_tests_all_went_is_one_finding() {
 #[test]
 fn two_tests_of_one_name_are_two_tests() {
     // Under cfgs that never hold together, as two platforms' versions of one test. Wrapped so that no line starts
-    // with a cfg, which the gate would read as a skip added to this test's body (#47).
+    // with a cfg, which the release ci/gate.pin names reads as a skip added to this test's body until the pin reaches
+    // 0.12.0 (#47).
     let twins = "#[cfg(unix)]\n#[test]\nfn twin() {\n    assert!(add(1, 1) == 2);\n}\n\n#[cfg(not(unix))]\n\
                  #[test]\nfn twin() {\n    assert!(add(2, 2) == 4);\n    assert!(add(0, 2) == 2);\n}\n";
     let base = format!("use tiny::add;\n\n{twins}");
@@ -245,6 +246,20 @@ fn a_platform_cfg_on_a_test_its_module_or_its_file_is_weighed_not_a_skip() {
 }
 
 #[test]
+fn an_inner_attribute_in_a_test_s_body_turns_the_test_off_whether_a_module_holds_it_or_not() {
+    let lib = "pub fn one() -> i32 {\n    1\n}\n\n#[cfg(test)]\n#[test]\nfn t() {\n    assert_eq!(one(), 1);\n}\n\n\
+               #[cfg(test)]\n#[test]\nfn u() {\n    assert_eq!(one(), 1);\n}\n";
+    let after = edit(lib, "fn t() {\n", "fn t() {\n    #![cfg(miri)]\n");
+    let after = edit(&after, "fn u() {\n", "fn u() {\n    #![cfg(unix)]\n");
+    let found = check(&[edited(LIB_PATH, lib, &after)]);
+    assert_eq!(wheres(&found), vec![at(LIB_PATH, Some(8), "skip"), at(LIB_PATH, Some(15), "platform-only")]);
+    // A block's inner one turns only the block's assertions off, while the test still runs: a skip.
+    let block = "    {\n        #![cfg(unix)]\n        assert_eq!(one(), 1);\n    }\n}\n\n";
+    let after = edit(lib, "    assert_eq!(one(), 1);\n}\n\n", block);
+    assert_eq!(wheres(&check(&[edited(LIB_PATH, lib, &after)])), vec![at(LIB_PATH, Some(9), "skip")]);
+}
+
+#[test]
 fn a_platform_cfg_with_another_condition_or_inside_a_test_is_a_skip() {
     let it = edit(
         IT,
@@ -252,7 +267,7 @@ fn a_platform_cfg_with_another_condition_or_inside_a_test_is_a_skip() {
         "#[test]\n#[cfg(feature = \"slow\")]\n#[cfg(all(unix, feature = \"x\"))]\nfn negative",
     );
     let it = edit(&it, "#[tokio::test]\n", "#[tokio::test]\n#[cfg(all(unix, not(test)))]\n");
-    // A skip after a wrapped platform cfg's closing bracket, on a line that does not start with `#`.
+    // A skip after a wrapped platform cfg's closing bracket, at its own line, the platform cfg weighed at its.
     let lib = edit(LIB, "#[cfg(test)]\n", "#[cfg(test)]\n#[cfg(any(\n    unix,\n))] #[cfg(miri)]\n");
     let lib = edit(&lib, "    #[test]\n    fn adds_small", "    #[test] #[cfg(unix)] #[ignore]\n    fn adds_small");
     let lib =
@@ -262,7 +277,8 @@ fn a_platform_cfg_with_another_condition_or_inside_a_test_is_a_skip() {
     assert_eq!(
         wheres(&found),
         vec![
-            at(LIB_PATH, Some(6), "skip"),
+            at(LIB_PATH, Some(6), "platform-only"),
+            at(LIB_PATH, Some(8), "skip"),
             at(LIB_PATH, Some(12), "skip"),
             at(LIB_PATH, Some(19), "skip"),
             at(LIB_PATH, Some(21), "skip"),
@@ -271,8 +287,8 @@ fn a_platform_cfg_with_another_condition_or_inside_a_test_is_a_skip() {
             at(IT_PATH, Some(11), "skip"),
         ]
     );
-    assert_eq!(found[0].message, "`#[cfg(miri)]` added: it skips a test or turns it off.");
-    assert_eq!(found[1].message, "`#[ignore]` added: it skips a test or turns it off.");
+    assert_eq!(found[1].message, "`#[cfg(miri)]` added: it skips a test or turns it off.");
+    assert_eq!(found[2].message, "`#[ignore]` added: it skips a test or turns it off.");
 }
 
 #[test]
@@ -297,8 +313,8 @@ fn a_helper_removed_from_a_test_module_is_no_removed_test() {
 
 #[test]
 fn attributes_in_or_on_a_module_that_holds_no_test_are_not_skips() {
-    // Modules before and after the one holding the tests; the attributes are kept off the start of a line here, as
-    // the gate would read them as skips added to this test (#47).
+    // Modules before and after the one holding the tests; the attributes are kept off the start of a line here, which
+    // the release ci/gate.pin names reads as skips added to this test until the pin reaches 0.12.0 (#47).
     let base = edit(LIB, "\n#[cfg(test)]", "\nmod before {\n    pub fn x() {}\n}\n\n#[cfg(test)]");
     let base = format!("{base}\nmod after {{\n    pub fn y() {{}}\n}}\n");
     let inner = "    #![cfg(feature = \"slow\")]\n";
@@ -358,6 +374,97 @@ fn an_expected_value_changed_with_the_code_is_reported_as_the_pair() {
         "`tests::adds_large`: `assert_eq!(add(10, 20), 30)` became `assert_eq!(add(10, 20), 31)`, in a change that also \
          edits the code under test."
     );
+}
+
+// A lib whose tests assert against constants: the expected values held outside the assertions, one at the top level
+// and one in the test module.
+const HELD: &str = "\
+pub fn add(a: i32, b: i32) -> i32 {
+    a + b
+}
+
+pub static SMALL: i32 = 3;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EXPECTED: i32 = 30;
+
+    #[test]
+    fn adds_small() {
+        assert_eq!(add(1, 2), super::SMALL);
+    }
+
+    #[test]
+    fn adds_large() {
+        assert_eq!(add(10, 20), EXPECTED);
+    }
+}
+";
+
+#[test]
+fn an_edited_const_or_static_an_assertion_reads_is_an_expected_value_changed() {
+    let code = edit(HELD, "    a + b\n", "    a + b + 1\n");
+    let lib = edit(&code, "const EXPECTED: i32 = 30;", "const EXPECTED: i32 = 31;");
+    let lib = edit(&lib, "static SMALL: i32 = 3;", "static SMALL: i32 = 4;");
+    let found = check(&[edited(LIB_PATH, HELD, &lib)]);
+    let expected = vec![at(LIB_PATH, Some(15), "expected-value-changed"), at(LIB_PATH, Some(20), "expected-value-changed")];
+    assert_eq!(wheres(&found), expected);
+    assert_eq!(
+        found[1].message,
+        "`EXPECTED` (line 11), which `tests::adds_large` names in its assertions, changed, in a change that also edits \
+         the code under test."
+    );
+    // Its layout, or the constant edited without the code, is no finding.
+    let relaid = edit(&code, "const EXPECTED: i32 = 30;", "const EXPECTED: i32 =\n        30; // the sum");
+    assert_eq!(check(&[edited(LIB_PATH, HELD, &relaid)]), vec![]);
+    let alone = edit(HELD, "const EXPECTED: i32 = 30;", "const EXPECTED: i32 = 31;");
+    assert_eq!(check(&[edited(LIB_PATH, HELD, &alone)]), vec![]);
+}
+
+#[test]
+fn a_const_that_calls_is_bound_twice_or_is_shadowed_by_the_test_is_not_followed() {
+    let code = edit(HELD, "    a + b\n", "    a + b + 1\n");
+    let calls = |expr: &str| edit(&code, "const EXPECTED: i32 = 30;", &format!("const EXPECTED: i32 = {expr};"));
+    let base = edit(HELD, "const EXPECTED: i32 = 30;", "const EXPECTED: i32 = add(10, 20);");
+    assert_eq!(check(&[edited(LIB_PATH, &base, &calls("add(10, 21)"))]), vec![]);
+    // A constructor, by its capital, calls nothing.
+    let wrapped = |n: u32| edit(HELD, "const EXPECTED: i32 = 30;", &format!("const EXPECTED: Option<i32> = Some({n});"));
+    let some = edit(&wrapped(31), "    a + b\n", "    a + b + 1\n");
+    assert_eq!(wheres(&check(&[edited(LIB_PATH, &wrapped(30), &some)])), vec![at(LIB_PATH, Some(20), "expected-value-changed")]);
+    let twice = |text: &str| edit(text, "pub static SMALL", "mod other {\n    pub const EXPECTED: i32 = 0;\n}\n\npub static SMALL");
+    let edited_twice = edit(&twice(&code), "const EXPECTED: i32 = 30;", "const EXPECTED: i32 = 31;");
+    assert_eq!(check(&[edited(LIB_PATH, &twice(HELD), &edited_twice)]), vec![]);
+    let shadowed = |text: &str| edit(text, "fn adds_large() {\n", "fn adds_large() {\n        const EXPECTED: i32 = 30;\n");
+    let edited_shadowed = edit(&shadowed(&code), "const EXPECTED: i32 = 30;", "const EXPECTED: i32 = 31;");
+    assert_eq!(check(&[edited(LIB_PATH, &shadowed(HELD), &edited_shadowed)]), vec![]);
+}
+
+#[test]
+fn a_constructor_is_a_path_with_a_capital_and_a_method_call_on_a_constant_is_a_call() {
+    let code = edit(HELD, "    a + b\n", "    a + b + 1\n");
+    let with =
+        |text: &str, expr: &str| edit(text, "const EXPECTED: i32 = 30;", &format!("const EXPECTED: i32 = {expr};"));
+    // A method called on a capitalized receiver calls it.
+    let found = check(&[edited(LIB_PATH, &with(HELD, "LIMIT.min(30)"), &with(&code, "LIMIT.min(31)"))]);
+    assert_eq!(found, vec![]);
+    // Turbofish arguments leave a constructor one.
+    let wrapped = |text: &str, n: u32| {
+        edit(text, "const EXPECTED: i32 = 30;", &format!("const EXPECTED: Option<i32> = Some::<i32>({n});"))
+    };
+    let found = check(&[edited(LIB_PATH, &wrapped(HELD, 30), &wrapped(&code, 31))]);
+    assert_eq!(wheres(&found), vec![at(LIB_PATH, Some(20), "expected-value-changed")]);
+}
+
+#[test]
+fn a_const_that_is_one_no_longer_is_reported_at_its_line_at_the_base() {
+    let lib = edit(HELD, "    a + b\n", "    a + b + 1\n");
+    let lib = edit(&lib, "    const EXPECTED: i32 = 30;\n", "");
+    let lib = edit(&lib, "    use super::*;\n", "    use super::*;\n    use crate::consts::EXPECTED;\n");
+    let found = check(&[edited(LIB_PATH, HELD, &lib)]);
+    assert_eq!(wheres(&found), vec![at(LIB_PATH, Some(20), "expected-value-changed")]);
+    assert!(found[0].message.starts_with("`EXPECTED` (line 11 at the base), which `tests::adds_large`"), "{}", found[0].message);
 }
 
 #[test]
@@ -543,6 +650,32 @@ fn brackets_in_a_string_literal_do_not_hide_a_skip_after_it_on_the_line() {
 }
 
 #[test]
-fn an_attribute_inside_a_string_is_read_as_one() {
-    assert_eq!(module_skips("#[doc = \"#[ignore]\"]").len(), 1);
+fn an_attribute_inside_a_string_is_none() {
+    assert_eq!(module_skips("#[doc = \"#[ignore]\"]"), Vec::<String>::new());
+}
+
+#[test]
+fn a_module_s_and_a_statement_s_attributes_are_found_wherever_they_are_written_on_their_lines() {
+    let found = |after: &str| wheres(&check(&[edited(LIB_PATH, LIB, after)]));
+    // On the line of the `mod` it turns off, before the `mod`.
+    assert_eq!(found(&edit(LIB, "mod tests {", "#[cfg(miri)] mod tests {")), vec![at(LIB_PATH, Some(6), "skip")]);
+    // After code on a test's line, and wrapped with its `ignore` on a later line.
+    let large = "        assert_eq!(add(10, 20), 30);\n";
+    let after = edit(LIB, large, "        let x = 30; #[cfg(miri)] assert_eq!(add(10, 20), x);\n");
+    assert_eq!(found(&after), vec![at(LIB_PATH, Some(17), "skip")]);
+    let after = edit(LIB, large, &format!("        #[cfg_attr(\n            miri,\n            ignore\n        )]\n{large}"));
+    assert_eq!(found(&after), vec![at(LIB_PATH, Some(17), "skip")]);
+}
+
+#[test]
+fn an_attribute_in_a_string_literal_skips_nothing() {
+    let large = "        assert_eq!(add(10, 20), 30);\n";
+    // A line of a multi-line string in a test's body that starts as an attribute.
+    let after = edit(LIB, large, &format!("        let fixture = \"\n#[ignore]\n#[cfg(miri)]\nfn f() {{}}\n\";\n{large}"));
+    assert_eq!(check(&[edited(LIB_PATH, LIB, &after)]), vec![]);
+    // A raw string ending in `\` before a test's existing skip whose body holds a `]` in a string.
+    let base = edit(LIB, "    #[test]\n    fn adds_large", "    #[test]\n    #[ignore]\n    fn adds_large");
+    let base = edit(&base, large, &format!("        let s = \"a]b\";\n{large}"));
+    let after = edit(&base, "#[cfg(test)]\n", "#[doc = r\"C:\\\"]\n#[cfg(test)]\n");
+    assert_eq!(check(&[edited(LIB_PATH, &base, &after)]), vec![]);
 }

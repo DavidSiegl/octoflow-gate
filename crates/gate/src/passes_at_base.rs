@@ -62,8 +62,8 @@ pub fn budget_reached(budget: &Budget, runner: &str, when: &str) -> Finding {
 /// no "without the change" to run them in.
 ///
 /// The tests run in a copy of the base (copies::copy_base_with_tests) with the change's files that go with the
-/// tests ([`beside_tests`]) in place of the base's. A test in an inline `#[cfg(test)]` module of a file the change
-/// also edits outside those modules cannot be separated from the code it tests: it is a `not-run` finding at its fn.
+/// tests ([`beside_tests`]) in place of the base's. A test in a file the change also edits outside its test code, its
+/// items marked `#[cfg(test)]`, cannot be separated from the code it tests: it is a `not-run` finding at its fn.
 /// Each Cargo target the tests are in ([`target`]) is built and run on its own, `cargo nextest run --locked` filtered
 /// to its tests, with a target directory of its own outside the copy; one whose tests do not compile there counts as
 /// failing, which is what the check expects of a test that needs the change, and gives nothing. A test the run did
@@ -80,12 +80,12 @@ fn rust_at_base(rust: &RustChange, budget: &Budget) -> Vec<Finding> {
     let (tests, mut out) = changed_tests(rust);
     let mut separable = vec![];
     for t in tests {
-        if rust.change.settings.rust_tests.matches(&t.path) || !rust.is_code(&t.path) {
+        if !rust.is_code(&t.path) {
             separable.push(t);
         } else {
             let message = format!(
-                "`{}` is in an inline `#[cfg(test)]` module of a file the change also edits outside it, so it \
-                 cannot be run apart from the code it tests, at the base.",
+                "`{}` is in a file whose code the change also edits outside its `#[cfg(test)]` items, so it cannot be \
+                 run apart from the code it tests, at the base.",
                 t.name
             );
             out.push(finding(Some(t.path.as_os_str()), Some(t.line), "not-run", message));
@@ -156,12 +156,13 @@ fn unreadable_tests(file: &ChangedFile, after: &Side, unreadable: &Unreadable) -
 
 /// Whether a repository path belongs with Rust's tests rather than with the code they test, as the copy the tests run
 /// in at the base takes it from the working tree: a file gate.toml's `test-support` names, as Cargo's integration
-/// tests' data under a tests directory by default, a Rust test file by gate.toml's `test-files.rust`, and a .rs file
-/// the change edits only inside its test code, which [`RustChange::is_code`] does not count as code.
+/// tests' data under a tests directory by default, a Rust test file as a whole in the working tree
+/// ([`RustChange::among_tests`]), and a .rs file the change edits only inside its test code, which
+/// [`RustChange::is_code`] does not count as code.
 fn beside_tests(rust: &RustChange, path: &OsStr) -> bool {
     let settings = &rust.change.settings;
     settings.test_support.matches(path)
-        || settings.rust_tests.matches(path)
+        || rust.among_tests(path, false)
         || (path.as_bytes().ends_with(b".rs") && !rust.is_code(path))
 }
 

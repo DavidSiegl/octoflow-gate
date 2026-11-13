@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use model::{first_line, Function, Lines, SourceFile, Test, TestGroup, Unreadable, Weakening, WeakeningKind};
+use model::{first_line, Assertion, Function, Lines, SourceFile, Test, TestGroup, Unreadable, Weakening, WeakeningKind};
 use tree_sitter::{Node, Parser};
 
 mod code_tokens;
@@ -13,13 +13,14 @@ mod skips;
 mod syntax;
 
 pub use code_tokens::code_tokens;
-pub use imports::imports;
+pub use imports::{imports, test_modules};
 
 use syntax::{Fn, Holder, Items, Text};
 
-/// The Rust source `source`, as the model has it. `among_tests` says whether the project places the file among its
-/// tests (gate.toml's `test-files.rust`), which makes the whole of it test code; otherwise its test code is its inline
-/// modules marked `#[cfg(test)]`.
+/// The Rust source `source`, as the model has it. `among_tests` says whether the file is among the project's tests
+/// as a whole, as by gate.toml's `test-files.rust` or as one only test code takes in ([`test_modules`]), which makes
+/// the whole of it test code; otherwise its test code is its items marked `#[cfg(test)]`, an inline module, a `fn` or
+/// an `impl` among them.
 ///
 /// What the model's parts are in Rust:
 /// - a [`Function`] is a `fn` with a body that no other `fn` holds, in an `impl`, a `trait` or an inline module or
@@ -28,6 +29,8 @@ use syntax::{Fn, Holder, Items, Text};
 /// - a [`Test`] is a `fn` among the test code with an attribute whose path ends in `test`, and its assertions the
 ///   assertion macros its body calls;
 /// - a [`TestGroup`] is an inline module;
+/// - a constant is a module-level `const` or `static`, as [`Items::constants`] says, and an assertion reads each name
+///   in its arguments but a field's or a method's that its test binds nowhere;
 /// - a weakening is a skipping attribute (skips.rs), a `#[should_panic]` without `expected` on a test, or a value
 ///   thrown away by `let _ =`, `_ =` or `.ok()` in a `fn` among the test code that holds an assertion it calls or a
 ///   `catch_unwind`;
@@ -56,7 +59,7 @@ pub fn read(source: &[u8], among_tests: bool) -> Result<SourceFile, Unreadable> 
         return Err(Unreadable { line: Some(line), why: format!("does not parse as Rust ({what})") });
     }
     let items = syntax::collect(&tree, Text::of_file(source), &lines, &mut parser);
-    Ok(model(&items, text, among_tests, lines.count()))
+    Ok(model(&items, among_tests, lines.count()))
 }
 
 /// The first node, in the order the file is written, that tree-sitter could not parse: an error, or a token it took
@@ -75,12 +78,12 @@ fn first_error(root: Node) -> Option<Node> {
     }
 }
 
-/// The model of a file of `n` lines whose text is `text` and whose items are `items`.
-fn model(items: &Items, text: &str, among_tests: bool, n: u32) -> SourceFile {
+/// The model of a file of `n` lines whose items are `items`.
+fn model(items: &Items, among_tests: bool, n: u32) -> SourceFile {
     let test_lines: Vec<Lines> = if among_tests {
         vec![Lines { first: 1, last: n }]
     } else {
-        items.mods.iter().filter(|m| m.cfg_test).map(|m| Lines { first: m.attrs_line, last: m.end }).collect()
+        items.test_code.clone()
     };
     let in_tests = |line: u32| test_lines.iter().any(|l| l.holds(line));
     let tests: Vec<&Fn> = items
@@ -90,7 +93,7 @@ fn model(items: &Items, text: &str, among_tests: bool, n: u32) -> SourceFile {
         .collect();
     let holding: Vec<&syntax::Mod> =
         items.mods.iter().filter(|m| tests.iter().any(|t| m.attrs_line <= t.line && t.line <= m.end)).collect();
-    let mut weakenings = skips::skips(text, &tests, &holding, among_tests);
+    let mut weakenings = skips::skips(&tests, &holding, &items.inner_attrs, among_tests);
     weakenings.extend(swallowed_errors(items, &tests, &in_tests));
     let scored: Vec<&Fn> = items.fns.iter().filter(|f| f.flow.is_some()).collect();
     let calls = calls(&scored);
@@ -115,7 +118,7 @@ fn model(items: &Items, text: &str, among_tests: bool, n: u32) -> SourceFile {
                 line: t.line,
                 lines: Lines { first: t.attrs_line, last: t.end },
                 body: t.body.clone().unwrap_or_default(),
-                assertions: t.asserts.clone(),
+                assertions: assertions(t, &items.bindings),
             })
             .collect(),
         test_groups: items
@@ -126,8 +129,19 @@ fn model(items: &Items, text: &str, among_tests: bool, n: u32) -> SourceFile {
         test_lines,
         weakenings,
         bindings: items.bindings.clone(),
-        constants: vec![],
+        constants: items.constants.clone(),
     }
+}
+
+/// The assertions of the test `t`, each reading only the names `t` binds nowhere, `bindings` being the file's.
+fn assertions(t: &Fn, bindings: &[model::Binding]) -> Vec<Assertion> {
+    let own: Vec<&str> =
+        bindings.iter().filter(|b| t.line < b.line && b.line <= t.end).map(|b| b.name.as_str()).collect();
+    let mut out = t.asserts.clone();
+    for a in &mut out {
+        a.reads.retain(|name| !own.contains(&name.as_str()));
+    }
+    out
 }
 
 /// The swallowed errors among `items`, `tests` being its tests and `in_tests` saying whether a line is test code: a

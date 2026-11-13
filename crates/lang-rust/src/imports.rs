@@ -1,5 +1,6 @@
 //! The imports between a tree's Rust files: each path of a `use`, or of code, that starts at `crate`, `self` or
-//! `super`, resolved through the tree's module tree to the file that holds the module it names.
+//! `super`, resolved through the tree's module tree to the file that holds the module it names; and the files of that
+//! tree that only test code takes in.
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::ffi::OsString;
@@ -39,6 +40,22 @@ pub fn imports(files: &[(OsString, Vec<u8>)]) -> ImportGraph {
     out
 }
 
+/// The paths of those of `files`, each Rust file of one tree as [`imports`] takes them, that only test code takes in:
+/// the file opens with `#![cfg(test)]`, a crate root's too, or every module the file is of, from each crate root and
+/// by each declaration that reaches it, is declared by a `mod name;` that is test code itself, or by one in such a
+/// file. A declaration is test code when it, or an item or an inline module it sits in, is marked `#[cfg(test)]` (a
+/// `cfg` that needs `test`), or its file opens with `#![cfg(test)]`. A file that does not parse is one when only test
+/// code declares it, though it declares no modules of its own.
+pub fn test_modules(files: &[(OsString, Vec<u8>)]) -> HashSet<OsString> {
+    let parsed: Vec<Option<Parsed>> = files.iter().map(|(_, source)| parse(source)).collect();
+    let paths: Vec<PathBuf> = files.iter().map(|(path, _)| normal(Path::new(path))).collect();
+    let tree = ModuleTree::of(&paths, &parsed);
+    let only_tests = |i: &usize| {
+        parsed[*i].as_ref().is_some_and(|p| p.test_only) || tree.of_file[*i].iter().all(|(_, test)| *test)
+    };
+    (0..files.len()).filter(only_tests).map(|i| files[i].0.clone()).collect()
+}
+
 /// What [`imports`] reads of one file.
 #[derive(Default)]
 struct Parsed {
@@ -48,6 +65,8 @@ struct Parsed {
     inline: Vec<Vec<String>>,
     /// Its paths outside test code that start at `crate`, `self` or `super`.
     paths: Vec<UsedPath>,
+    /// Whether it opens with `#![cfg(test)]`, so that the whole of it is test code.
+    test_only: bool,
 }
 
 impl Parsed {
@@ -89,7 +108,7 @@ fn parse(source: &[u8]) -> Option<Parsed> {
     let root = tree.root_node();
     let text = Text::of_file(source);
     let test = opens_test_only(root, text);
-    let mut out = Parsed::default();
+    let mut out = Parsed { test_only: test, ..Parsed::default() };
     walk(root, text, &mut vec![], test, &mut out);
     Some(out)
 }
@@ -275,7 +294,7 @@ impl ModuleTree {
     /// Adds the modules of crate root `root`, whose file is `file`: each file its `mod` declarations reach, as
     /// `declared` gives a file's (the declared file and the declaration, read as in a crate root's file when asked),
     /// and each inline module of those, by `parsed`, the files' parses. A file reached twice is a module of the first
-    /// path only.
+    /// path only, unless only test code declares it there and a later path is code: it is then a module of both.
     fn add_crate<'p>(
         &mut self,
         root: usize,
@@ -284,11 +303,14 @@ impl ModuleTree {
         declared: &dyn Fn(usize, bool) -> Vec<(usize, &'p Declaration)>,
     ) {
         let mut queue = VecDeque::from([(file, vec![], false)]);
-        let mut seen = HashSet::new();
+        // Each file reached, with whether only test code declares it by every path it was taken in at. A file is taken
+        // in again only to make it code, so each is taken in twice at most, though `#[path]` declarations loop.
+        let mut seen: HashMap<usize, bool> = HashMap::new();
         while let Some((file, path, test)) = queue.pop_front() {
-            if !seen.insert(file) {
+            if seen.get(&file).is_some_and(|&only_test| test || !only_test) {
                 continue;
             }
+            seen.insert(file, test);
             for (child, d) in declared(file, path.is_empty()) {
                 let mut child_path = path.clone();
                 child_path.extend(d.scope.iter().cloned());
@@ -343,9 +365,13 @@ impl ModuleTree {
         }
         let at = path.len();
         path.extend(rest.iter().cloned());
-        let file = (at..=path.len()).rev().find_map(|n| self.files.get(&(root, path[..n].to_vec())).copied())?;
-        // The target file's own module of the root, which an inline module the path names lies in.
-        let ((_, target), _) = self.of_file[file].iter().find(|((r, _), _)| *r == root)?;
+        let (named, file) = (at..=path.len()).rev().find_map(|n| {
+            let named = &path[..n];
+            self.files.get(&(root, named.to_vec())).map(|&file| (named, file))
+        })?;
+        // The target file's module of the root that the path reaches it by, which an inline module the path names
+        // lies in: a file taken in by two declarations has two.
+        let ((_, target), _) = self.of_file[file].iter().find(|((r, m), _)| *r == root && named.starts_with(m))?;
         let nested = own.starts_with(target) || target.starts_with(own);
         (!nested).then_some(file)
     }

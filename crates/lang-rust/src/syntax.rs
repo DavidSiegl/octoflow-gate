@@ -7,7 +7,7 @@
 //! `cognitive_complexity` reads no macro. tree-sitter leaves them a token tree, so [`Walk::macro_args`] parses each
 //! argument again on its own.
 
-use model::{Assertion, Binding, Flow};
+use model::{Assertion, Binding, Constant, Flow};
 use tree_sitter::{Node, Parser, Tree};
 
 /// The macros a test asserts with, by the last segment of their path.
@@ -91,13 +91,14 @@ pub enum Holder {
     Static(String),
 }
 
-/// One of a `fn`'s outer attributes, doc comments left out.
+/// An attribute, outer or inner, as the parser places it; doc comments are none.
 #[derive(Clone, Debug)]
 pub struct Attr {
     /// Its path, as `should_panic` or `tokio::test`.
     pub path: String,
     /// The attribute, from its `#` to its `]`, as written.
     pub text: String,
+    /// The line its `#` is on.
     pub line: u32,
 }
 
@@ -123,7 +124,11 @@ pub struct Fn {
     /// The line of its first outer attribute or doc comment; `line` when it has none.
     pub attrs_line: u32,
     pub end: u32,
+    /// Its own attributes: the outer ones before it and the inner ones, `#![...]`, that open its body.
     pub attrs: Vec<Attr>,
+    /// The other attributes written in its body: those on its statements, expressions and the items it holds, with
+    /// theirs, and the inner ones of the blocks inside it; those inside the bodies of the fns it holds left out.
+    pub body_attrs: Vec<Attr>,
     /// The assertion macros its body calls, those of the closures it holds included and of the fns it holds not.
     pub asserts: Vec<Assertion>,
     pub discards: Vec<Discard>,
@@ -143,8 +148,8 @@ pub struct Mod {
     pub line: u32,
     pub attrs_line: u32,
     pub end: u32,
-    /// Whether it is compiled only under `cfg(test)`, by a `cfg` whose predicate needs `test`.
-    pub cfg_test: bool,
+    /// Its outer attributes.
+    pub attrs: Vec<Attr>,
 }
 
 /// What [`collect`] gathers of a file.
@@ -154,14 +159,29 @@ pub struct Items {
     pub fns: Vec<Fn>,
     pub mods: Vec<Mod>,
     pub bindings: Vec<Binding>,
+    /// Every inner attribute, `#![...]`, written outside the bodies of fns. A fn holds those in its body: the ones
+    /// opening it among [`Fn::attrs`], the rest among [`Fn::body_attrs`].
+    pub inner_attrs: Vec<Attr>,
+    /// The lines of each item compiled only under `cfg(test)`, its outer attributes and doc comments included: one
+    /// marked by a `cfg` whose predicate needs `test`, or an inline module whose body opens with such a `#![cfg]`.
+    /// An item inside another is listed too.
+    pub test_code: Vec<model::Lines>,
+    /// The file's constants, as [`model::SourceFile::constants`] has them: each `const` or `static` that only inline
+    /// modules hold, if any, whose name no other such item in the file binds, and whose value calls nothing. A call of
+    /// a path whose last name starts with a capital, as `Some(3)`, is a constructor by Rust's naming, not a call; a
+    /// macro is a call. Out of scope, as Python's: one computed by a call, whose value the file does not spell out,
+    /// and an edit to another constant one is built from.
+    pub constants: Vec<Constant>,
 }
 
 /// What `tree`, parsed from `text`, the whole file whose line numbers `lines` gives, holds; `parser` parses macro
 /// arguments.
 pub fn collect(tree: &Tree, text: Text, lines: &Lines, parser: &mut Parser) -> Items {
-    let mut walk = Walk { lines, parser, items: Items::default(), holders: vec![], current_fn: None };
+    let mut walk = Walk { lines, parser, items: Items::default(), holders: vec![], current_fn: None, consts: vec![] };
     walk.node(tree.root_node(), text, false);
-    walk.items
+    let once = |name: &str| walk.consts.iter().filter(|(n, _)| n == name).count() == 1;
+    let constants = walk.consts.iter().filter(|(name, _)| once(name)).filter_map(|(_, c)| c.clone()).collect();
+    Items { constants, ..walk.items }
 }
 
 /// The walk [`collect`] makes.
@@ -173,6 +193,9 @@ struct Walk<'a> {
     holders: Vec<Holder>,
     /// The index in `items.fns` of the innermost `fn` the walk is inside, which owns the assertions and discards met.
     current_fn: Option<usize>,
+    /// The name of each `const` and `static` met that only inline modules hold, if any, with the constant it is when
+    /// its name proves to be bound by no other ([`Items::constants`]); None for one whose value calls.
+    consts: Vec<(String, Option<Constant>)>,
 }
 
 impl Walk<'_> {
@@ -182,9 +205,24 @@ impl Walk<'_> {
 
     /// Walks `node`; `assoc` says whether it is an item of an `impl` or a `trait`.
     fn node(&mut self, node: Node, text: Text, assoc: bool) {
+        self.test_item(node, text);
         match node.kind() {
             "function_item" | "function_signature_item" => self.function(node, text),
-            "foreign_mod_item" | "macro_definition" | "attribute_item" | "inner_attribute_item" => {}
+            "foreign_mod_item" | "macro_definition" => {}
+            "attribute_item" | "inner_attribute_item" => {
+                let attr = attribute(node, text, self.lines);
+                let inner = node.kind() == "inner_attribute_item";
+                // An inner attribute of a fn's body block is the fn's, as `fn f() { #![cfg(miri)] }`.
+                let opens_fn = node.parent().filter(|b| b.kind() == "block").and_then(|b| b.parent());
+                match self.current_fn {
+                    Some(i) if inner && opens_fn.is_some_and(|f| f.kind() == "function_item") => {
+                        self.items.fns[i].attrs.extend(attr)
+                    }
+                    Some(i) => self.items.fns[i].body_attrs.extend(attr),
+                    None if inner => self.items.inner_attrs.extend(attr),
+                    None => {}
+                }
+            }
             "mod_item" => self.module(node, text),
             "impl_item" => {
                 let compact = |n: Node| compact_tokens(n, text);
@@ -232,6 +270,23 @@ impl Walk<'_> {
         }
     }
 
+    /// Records `node`'s lines in [`Items::test_code`] when it is an item compiled only under `cfg(test)`.
+    fn test_item(&mut self, node: Node, text: Text) {
+        let kind = node.kind();
+        if !kind.ends_with("_item") || matches!(kind, "attribute_item" | "inner_attribute_item") {
+            return;
+        }
+        let body = node.child_by_field_name("body").filter(|_| kind == "mod_item");
+        let marked = preceding_attributes(node).into_iter().any(|a| holds_only_under_test(a, text))
+            || body.is_some_and(|b| opens_test_only(b, text));
+        if marked {
+            let line = self.line(text, node);
+            let first = outer_attributes(node, text, self.lines).0.unwrap_or(line);
+            let last = self.lines.line(text.end(node).saturating_sub(1));
+            self.items.test_code.push(model::Lines { first, last });
+        }
+    }
+
     fn children(&mut self, node: Node, text: Text) {
         for child in named(node) {
             self.node(child, text, false);
@@ -241,6 +296,15 @@ impl Walk<'_> {
     /// Walks a `const` or `static` item, `node`, inside a holder of its name; `assoc` as [`Walk::node`] says.
     fn const_or_static(&mut self, node: Node, text: Text, assoc: bool) {
         let name = self.bind_name(node, text, false);
+        if !assoc && self.holders.iter().all(|h| matches!(h, Holder::Mod(_))) {
+            let spelled = node.child_by_field_name("value").filter(|v| !has_call(*v, text));
+            let constant = spelled.map(|v| Constant {
+                name: name.clone(),
+                line: self.line(text, node),
+                expression: digest(&tokens(v, text).join(" ")),
+            });
+            self.consts.push((name.clone(), constant));
+        }
         // An associated const is no holder: what it holds takes no name from it.
         match (assoc, node.kind()) {
             (true, _) => self.children(node, text),
@@ -349,6 +413,7 @@ impl Walk<'_> {
             attrs_line: attrs_line.unwrap_or(line),
             end: self.lines.line(text.end(node).saturating_sub(1)),
             attrs,
+            body_attrs: vec![],
             asserts: vec![],
             discards: vec![],
             body: body.map(|b| digest(&tokens(b, text).join(" "))),
@@ -364,18 +429,14 @@ impl Walk<'_> {
     fn module(&mut self, node: Node, text: Text) {
         let Some(body) = node.child_by_field_name("body") else { return };
         let line = self.line(text, node);
-        let (attrs_line, _) = outer_attributes(node, text, self.lines);
+        let (attrs_line, attrs) = outer_attributes(node, text, self.lines);
         let name = node.child_by_field_name("name").map(|n| unraw(text.of(n)).to_string()).unwrap_or_default();
         self.items.mods.push(Mod {
             name: name.clone(),
             line,
             attrs_line: attrs_line.unwrap_or(line),
             end: self.lines.line(text.end(body).saturating_sub(1)),
-            // Its inner attributes, `#![cfg(test)]` at the top of its body, mark it too.
-            cfg_test: preceding_attributes(node)
-                .into_iter()
-                .chain(named(body).into_iter().filter(|n| n.kind() == "inner_attribute_item"))
-                .any(|a| holds_only_under_test(a, text)),
+            attrs,
         });
         self.inside(Holder::Mod(name), |w| w.node(body, text, false));
     }
@@ -439,20 +500,18 @@ impl Walk<'_> {
         if let (Some(owner), Some(name)) = (self.current_fn, name) {
             if ASSERTION_MACROS.contains(&name.as_str()) {
                 let mut literals = vec![];
-                let blanked = node.named_children(&mut node.walk()).find(|c| c.kind() == "token_tree").map_or(
-                    String::new(),
-                    |tree| {
-                        let mut tokens = vec![];
-                        blank_literals(tree, text, &mut tokens, &mut literals);
-                        tokens.join(" ")
-                    },
-                );
+                let tree = node.named_children(&mut node.walk()).find(|c| c.kind() == "token_tree");
+                let blanked = tree.map_or(String::new(), |tree| {
+                    let mut tokens = vec![];
+                    blank_literals(tree, text, &mut tokens, &mut literals);
+                    tokens.join(" ")
+                });
                 let assertion = Assertion {
                     line: self.line(text, node),
                     text: text.of(node).into(),
                     shape: format!("{name}! {blanked}"),
                     literals,
-                    reads: vec![],
+                    reads: tree.map(|t| reads(t, text)).unwrap_or_default(),
                 };
                 self.items.fns[owner].asserts.push(assertion);
             }
@@ -842,16 +901,16 @@ fn outer_attributes(node: Node, text: Text, lines: &Lines) -> (Option<u32>, Vec<
         }
         at = sibling.prev_sibling();
     }
-    let attrs = preceding_attributes(node)
-        .into_iter()
-        .filter_map(|item| {
-            let attribute = named(item).into_iter().find(|c| c.kind() == "attribute")?;
-            let path = attribute.named_child(0)?;
-            let path = path_segments(path, text).join("::");
-            (path != "doc").then(|| Attr { path, text: text.of(item).into(), line: lines.line(text.start(item)) })
-        })
-        .collect();
+    let attrs = preceding_attributes(node).into_iter().filter_map(|item| attribute(item, text, lines)).collect();
     (first.map(|f| lines.line(text.start(f))), attrs)
+}
+
+/// The attribute item `item`, an `attribute_item` or an `inner_attribute_item`, as an [`Attr`]; None for a `doc`
+/// attribute or one the parser gives no path.
+fn attribute(item: Node, text: Text, lines: &Lines) -> Option<Attr> {
+    let attribute = named(item).into_iter().find(|c| c.kind() == "attribute")?;
+    let path = path_segments(attribute.named_child(0)?, text).join("::");
+    (path != "doc").then(|| Attr { path, text: text.of(item).into(), line: lines.line(text.start(item)) })
 }
 
 /// The segments of the path `node`, unraw, outermost first.
@@ -989,6 +1048,57 @@ fn blank_literals(node: Node, text: Text, tokens: &mut Vec<String>, literals: &m
             }
         }
     }
+}
+
+/// The names the token tree `tree`, an assertion's arguments, reads, each once, in the order they are written: each
+/// identifier at any depth but a field's or a method's, after a `.`. The last name of a path counts, so `super::N`
+/// reads `N`; so do its other names, which name modules or types and no constant.
+fn reads(tree: Node, text: Text) -> Vec<String> {
+    let mut out: Vec<String> = vec![];
+    let mut after_dot = false;
+    let mut pending = vec![tree];
+    while let Some(node) = pending.pop() {
+        if node.kind() == "token_tree" {
+            pending.extend(children(node).into_iter().rev());
+            continue;
+        }
+        let name = unraw(text.of(node));
+        if node.kind() == "identifier" && !after_dot && !out.iter().any(|n| n == name) {
+            out.push(name.into());
+        }
+        after_dot = node.kind() == ".";
+    }
+    out
+}
+
+/// Whether the expression `node` calls a fn or a macro, as [`Items::constants`] tells a call.
+fn has_call(node: Node, text: Text) -> bool {
+    let mut pending = vec![node];
+    while let Some(node) = pending.pop() {
+        match node.kind() {
+            "macro_invocation" => return true,
+            "call_expression" if !constructor(node, text) => return true,
+            _ => {}
+        }
+        pending.extend(named(node));
+    }
+    false
+}
+
+/// Whether the call expression `node` calls a constructor, as [`Items::constants`] tells one: its callee is a path,
+/// as `Some` or `Shape::Circle`, turbofish arguments or not, whose last name starts with a capital. A method's call is
+/// none, whatever its receiver.
+fn constructor(node: Node, text: Text) -> bool {
+    let mut callee = node.child_by_field_name("function");
+    if let Some(generic) = callee.filter(|c| c.kind() == "generic_function") {
+        callee = generic.child_by_field_name("function");
+    }
+    let name = callee.and_then(|c| match c.kind() {
+        "identifier" => Some(c),
+        "scoped_identifier" => c.child_by_field_name("name"),
+        _ => None,
+    });
+    name.is_some_and(|name| text.of(name).starts_with(|c: char| c.is_uppercase()))
 }
 
 fn is_literal(node: Node) -> bool {

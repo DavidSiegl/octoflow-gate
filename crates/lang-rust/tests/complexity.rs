@@ -379,8 +379,8 @@ fn f(x: Result<u8, ()>) -> Result<u8, ()> {
 
 #[test]
 fn a_fn_is_judged_by_its_path_of_modules_impls_and_traits_but_not_in_a_test_module() {
-    // concat! keeps the cfg off the start of a line, where the gate reads it as a skip added to this test's body
-    // (#47).
+    // concat! keeps the cfg off the start of a line, which the release ci/gate.pin names reads as a skip added to this
+    // test's body until the pin reaches 0.12.0 (#47).
     let scores = scores_of(concat!(r#"
 fn free() {}
 trait Shape { fn declared(&self); fn defaulted(&self) {} }
@@ -406,7 +406,6 @@ mod inner {
             ("Shape::defaulted", 0),
             ("<Wrapper<'a,T> as std::fmt::Debug>::fmt", 0),
             ("inner::spread", 0),
-            ("only_in_tests", 0),
         ])
     );
 }
@@ -544,7 +543,11 @@ fn a_fn_moved_unchanged_into_the_tests_keeps_its_base_before_a_copy_can() {
 #[test]
 fn the_tests_are_not_judged() {
     let big = flat("big_test", 20);
-    let calc = format!("{}#[cfg(test)]\nmod tests {{\n{big}}}\n", base());
+    let (helper, fake) = (flat("big_helper", 20), flat("answer", 20));
+    let calc = format!(
+        "{}#[cfg(test)]\nmod tests {{\n{big}}}\n#[cfg(test)]\n{helper}#[cfg(test)]\nimpl Fake {{\n{fake}}}\n",
+        base()
+    );
     let (fresh, expected) = fresh();
     let files = [
         added("engine/tests/cli.rs", &big),

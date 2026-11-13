@@ -63,10 +63,10 @@ tree-sitter-rust, into the model of `crates/model`, and runs the checks of `crat
   unlike gate.py's helper.
 - **A platform cfg nested deeper than 64 levels** of `all`, `any` and `not` is not read as platform-only, so that no
   attribute can make the reader recurse without bound.
-- **The attributes of a test fn** are those tree-sitter gives the fn, so a `#[cfg(miri)]` after a wrapped attribute's
-  closing bracket is its own skip there, where gate.py reads whole lines. A literal in an attribute is lexed as Rust
-  lexes it, so `r"C:\"` is a whole raw string; a module's or a statement's attributes are still read off the lines'
-  text, where such a literal is misread (#47).
+- **Attributes** are those tree-sitter places, a test fn's, a module's and those in a test's body alike, so a
+  `#[cfg(miri)]` after a wrapped attribute's closing bracket is its own skip, where gate.py reads whole lines; a line
+  of a string literal that starts as an attribute is none; and a literal in an attribute is lexed as Rust lexes it,
+  so `r"C:\"` is a whole raw string (#47).
 
 ### cognitive-complexity
 

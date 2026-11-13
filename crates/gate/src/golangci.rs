@@ -10,7 +10,10 @@
 //! package clause rather than where it is.
 //!
 //! It runs `golangci-lint run ./...` in each module's directory, within process::TOOL_TIMEOUT, which builds what the
-//! packages need with the go tool, from its build and module caches, and may download the modules they use.
+//! packages need with the go tool, from its build and module caches, and may download the modules they use. Another
+//! golangci-lint running on the machine, as another gate's on a CI agent with two executors does, makes it wait for
+//! that one's lock (`--allow-serial-runners`), its wait counted in the timeout: golangci-lint otherwise exits with
+//! "parallel golangci-lint is running", a failed condition that says nothing about the change.
 
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStrExt;
@@ -64,6 +67,7 @@ fn lint_module(name: &str, root: &Path, manifest: &Path, tracked: &Tracked) -> (
     let argv = [
         "golangci-lint",
         "run",
+        "--allow-serial-runners",
         "--output.json.path",
         "stdout",
         "--show-stats=false",

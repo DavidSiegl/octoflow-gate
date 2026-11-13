@@ -5,6 +5,9 @@
 //! hold that a process past its timeout is killed with what it started.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use common::Repo;
 
@@ -42,6 +45,52 @@ fn a_finding_on_an_added_line_is_an_issue() {
     assert!(out.contains("- 1 findings on lines the change added; each is listed below.\n"), "{out}");
     assert!(out.contains("1. `calc/calc.go:12` error golangci-lint errcheck: Error return value of `os.Remove` is not \
                           checked\n"), "{out}");
+}
+
+/// Whether a process named golangci-lint runs with `dir` as its working directory, as /proc shows.
+fn golangci_lint_runs_in(dir: &Path) -> bool {
+    let Ok(processes) = std::fs::read_dir("/proc") else { return false };
+    processes.flatten().any(|process| {
+        let comm = std::fs::read(process.path().join("comm")).unwrap_or_default();
+        comm == b"golangci-lint\n" && std::fs::read_link(process.path().join("cwd")).is_ok_and(|cwd| cwd == dir)
+    })
+}
+
+#[test]
+fn another_golangci_lint_running_makes_it_wait_not_fail() {
+    let repo = module_repo();
+    repo.put("calc/calc.go", format!("{CALC}{CLEAN}").as_bytes());
+    // golangci-lint takes flock(2) on $TMPDIR/golangci-lint.lock while it runs; the test holds it as another instance
+    // would, in a TMPDIR of its own so that the other tests' instances keep out of it.
+    let tmp = repo.outside.join("tmp");
+    std::fs::create_dir_all(&tmp).unwrap();
+    let lock = std::fs::File::create(tmp.join("golangci-lint.lock")).unwrap();
+    lock.lock().unwrap();
+    // Held for ten seconds from when the gate's golangci-lint is seen in the module, or until the gate is done.
+    // golangci-lint takes the lock seconds into its run, after loading the packages, and one that waits for it shows
+    // nothing of that, holding no descriptor of the file between tries; one that fails on it fails within the ten.
+    let module = repo.repo.join("calc");
+    let gate_done = Arc::new(AtomicBool::new(false));
+    let holder = std::thread::spawn({
+        let gate_done = Arc::clone(&gate_done);
+        move || {
+            while !gate_done.load(Ordering::SeqCst) && !golangci_lint_runs_in(&module) {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !gate_done.load(Ordering::SeqCst) && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            lock.unlock().unwrap();
+        }
+    });
+    let done = repo.gate_command("HEAD").env("TMPDIR", &tmp).output().unwrap();
+    gate_done.store(true, Ordering::SeqCst);
+    holder.join().unwrap();
+    let out = String::from_utf8(done.stdout).unwrap();
+    assert!(!out.contains("parallel golangci-lint is running"), "{out}");
+    assert_eq!(done.status.code(), Some(1), "{out}");
+    assert!(out.contains("1. `calc/calc.go:12` error golangci-lint errcheck: "), "{out}");
 }
 
 #[test]

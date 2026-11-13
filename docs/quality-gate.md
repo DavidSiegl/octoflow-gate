@@ -354,15 +354,15 @@ take part in no cycle.
   code, an item marked `#[cfg(test)]` and a file only such items declare. A macro's arguments are not read.
 - Go: none. The compiler refuses an import cycle.
 
-**Duplicated blocks** finds a block of code a change adds that the tree already holds elsewhere, or that the change
-adds twice: a copy is logic that has to be fixed twice, and a change is where it enters. It runs on the languages the
-change holds Python, Rust or Go of, `crates/checks/src/duplicates.rs` comparing the tokens the front ends read
-(`code_tokens` in `crates/lang-python`, `crates/lang-rust` and `crates/lang-go`) of every file the working tree
-tracks outside `mutants/` that holds the language as the other checks tell it: a `.py` name or a `#!` line naming
+**Duplicated blocks** finds a block of code a change adds that the tree already holds elsewhere, or that the change adds
+twice: a copy is logic that has to be fixed twice, and a change is where it enters. It runs on each of Python, Rust and
+Go where the change adds a line to a file it judges, `crates/checks/src/duplicates.rs` comparing the tokens the front
+ends read (`code_tokens` in `crates/lang-python`, `crates/lang-rust` and `crates/lang-go`) of every file the working
+tree tracks outside `mutants/` that holds the language as the other checks tell it: a `.py` name or a `#!` line naming
 python, a `.rs` name, a `.go` name inside a Go module, generated Go left out. A name stands for what kind of name it is
 and a literal for what kind of literal, so a copy whose names and values were changed is still a copy; keywords,
-operators and punctuation stand for themselves. Comments, `use`, `extern crate` and `import` statements, Go's
-`package` clause and Rust's test code (whatever `#[cfg(test)]` marks) are no tokens.
+operators and punctuation stand for themselves. Comments, `use`, `extern crate` and `import` statements, Go's `package`
+clause and Rust's test code (whatever `#[cfg(test)]` marks) are no tokens.
 
 A `duplicated-blocks` finding, never failing, lies at the first line of a run of at least `min-tokens` tokens, 50 by
 default, all on lines the change added, that equal a run elsewhere: in another file, in the same file where the two do

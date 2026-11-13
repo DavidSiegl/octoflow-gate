@@ -845,8 +845,8 @@ fn go_of_a_go_module_gets_each_parser_check_s_findings() {
         at("calc_test.go", 6, "test-integrity skip"),
         at("calc_test.go", 7, "test-integrity expected-value-changed"),
         at("big.go", 3, "cognitive-complexity over-limit"),
-        // big.go's ifs, all of one shape, repeat each other.
-        at("big.go", 4, "duplicated-blocks"),
+        // big.go's ifs, all of one shape, 9 tokens each: those from the seventh on repeat the first six.
+        at("big.go", 22, "duplicated-blocks"),
         at("big.go", 52, "vague-names vague-name"),
     ]);
 }

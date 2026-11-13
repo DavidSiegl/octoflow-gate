@@ -42,12 +42,9 @@ pub fn copied_blocks(
     let line = |place: Place| files[place.file].1[place.start].line;
     let mut out = vec![];
     for (f, (path, _)) in files.iter().enumerate() {
-        for run in runs(f, &shapes, &ours, &index, n) {
-            let (other, new) = run.best_match(&ours, |p| (&files[p.file].0, line(p)));
+        for run in runs(f, files, &shapes, &ours, &index, n) {
+            let other = run.best_match(&ours, |p| (&files[p.file].0, line(p)));
             let here = Place { file: f, start: run.start };
-            if new && (&files[other.file].0, line(other)) > (path, line(here)) {
-                continue;
-            }
             let shown = format!("{}:{}", files[other.file].0.to_string_lossy(), line(other));
             let message = format!(
                 "these {} tokens repeat `{shown}`, names and literals aside: a copy is logic to fix twice; share it, \
@@ -83,12 +80,11 @@ impl Run {
         self.windows.last().map_or(0, |(k, _)| k + n)
     }
 
-    /// The other place that matches most of the run's windows, given by its first window that matches one of them,
-    /// and whether each of those windows is the change's ([`changes_windows`]), the place a second copy the change
-    /// added rather than code the tree held. Of two places that match as many windows, one the tree held comes
+    /// The other place that matches most of the run's windows, given by its first window that matches one of them.
+    /// Of two places that match as many windows, one the tree held comes
     /// first, then the first by `order`. Places are told apart by where they would start were they aligned with the
     /// run's start.
-    fn best_match<K: Ord>(&self, ours: &[Vec<bool>], order: impl Fn(Place) -> K) -> (Place, bool) {
+    fn best_match<K: Ord>(&self, ours: &[Vec<bool>], order: impl Fn(Place) -> K) -> Place {
         // aligned start → (windows matched, first place matched, whether every matched window is the change's)
         let mut found: HashMap<(usize, isize), (usize, Place, bool)> = HashMap::new();
         for (k, places) in &self.windows {
@@ -101,7 +97,7 @@ impl Run {
         }
         let rank = |&(count, place, new): &(usize, Place, bool)| (std::cmp::Reverse(count), new, order(place));
         let best = found.values().min_by(|a, b| rank(a).cmp(&rank(b)));
-        best.map(|&(_, place, new)| (place, new)).expect("a run has a copied window")
+        best.map(|&(_, place, _)| place).expect("a run has a copied window")
     }
 }
 
@@ -141,13 +137,25 @@ fn window_hashes(shapes: &[Vec<u64>], n: usize) -> impl Iterator<Item = (usize, 
     })
 }
 
-/// The runs of file `f`: its windows that are the change's ([`changes_windows`]) and match a window elsewhere in
-/// `index` of equal shapes, not overlapping it, those that overlap joined.
-fn runs(f: usize, shapes: &[Vec<u64>], ours: &[Vec<bool>], index: &HashMap<u64, Vec<Place>>, n: usize) -> Vec<Run> {
+/// The runs of file `f` of `files`: its windows that are the change's ([`changes_windows`]) and match a window
+/// elsewhere in `index` of equal shapes, not overlapping it, those that overlap joined.
+///
+/// A match with a window the change also added that comes later by path and start is left out: that later copy's run
+/// names this one. Kept, it would join the two copies of a block added twice back to back into one run that repeats
+/// itself.
+fn runs(
+    f: usize,
+    files: &[(OsString, Vec<CodeToken>)],
+    shapes: &[Vec<u64>],
+    ours: &[Vec<bool>],
+    index: &HashMap<u64, Vec<Place>>,
+    n: usize,
+) -> Vec<Run> {
     let mut out: Vec<Run> = vec![];
     for (_, i, hash) in window_hashes(&shapes[f..=f], n).filter(|&(_, i, _)| ours[f][i]) {
         let window = &shapes[f][i..i + n];
-        let elsewhere = |p: &&Place| p.file != f || p.start.abs_diff(i) >= n;
+        let later_copy = |p: &Place| ours[p.file][p.start] && (&files[p.file].0, p.start) > (&files[f].0, i);
+        let elsewhere = |p: &&Place| (p.file != f || p.start.abs_diff(i) >= n) && !later_copy(p);
         let places: Vec<Place> = index
             .get(&hash)
             .into_iter()
@@ -227,6 +235,13 @@ mod tests {
         let found = found(&[("a.rs", &[1, 2, 3, 4]), ("b.rs", &[1, 2, 3, 4])], &[("a.rs", 1, 4), ("b.rs", 1, 4)]);
         assert_eq!(found.iter().map(|f| (f.0.as_str(), f.1)).collect::<Vec<_>>(), [("b.rs", 1)]);
         assert!(found[0].2.contains("`a.rs:1`"), "{}", found[0].2);
+    }
+
+    #[test]
+    fn a_block_the_change_adds_twice_back_to_back_is_found_at_the_later_copy_not_named_by_itself() {
+        let found = found(&[("a.rs", &[1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3])], &[("a.rs", 1, 13)]);
+        assert_eq!(found.iter().map(|f| (f.0.as_str(), f.1)).collect::<Vec<_>>(), [("a.rs", 6)]);
+        assert!(found[0].2.starts_with("these 8 tokens repeat `a.rs:1`"), "{}", found[0].2);
     }
 
     #[test]

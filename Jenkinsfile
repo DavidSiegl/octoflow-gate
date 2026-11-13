@@ -1,7 +1,8 @@
 // Builds main and every pull request in a Multibranch Pipeline job and runs the quality
 // gate (scripts/gate) on each, failing the build on GATE: ERROR or when the gate could
 // not judge; then builds and checks the release tarball, which a build of main releases
-// when its version is new (Package, Release). For a pull request, Jenkins's GitHub App reports the result as the commit
+// when its version is new (Package, Release). A build of main whose tree a pull request build already judged skips
+// the gate (Judged at PR). For a pull request, Jenkins's GitHub App reports the result as the commit
 // status continuous-integration/jenkins/pr-head, which auto-merge trusts only from that
 // App, as does the ci-cd ruleset on main once agent-estate's init/github-rules.py has set
 // it.
@@ -21,10 +22,33 @@ pipeline {
         disableConcurrentBuilds()
     }
 
+    environment {
+        // The GitHub login Jenkins posts pull request statuses as, its GitHub App's "<slug>[bot]", which the agents
+        // cannot post as. Empty: no build of main trusts a pull request build, and each judges itself.
+        PR_STATUS_CREATOR = 'davidsiegl-jenkins[bot]'
+    }
+
     stages {
+        // A build of main skips Change and Gate when a pull request build already judged its tree
+        // (ci/judged-at-pr.sh). Whatever stops the script from saying so, the build judges the tree itself. Package
+        // still runs: Release publishes its tarball.
+        stage('Judged at PR') {
+            when { branch 'main' }
+            steps {
+                withCredentials([string(credentialsId: 'GitHub-Agents', variable: 'GH_TOKEN')]) {
+                    script {
+                        if (sh(returnStatus: true, script: 'ci/judged-at-pr.sh') == 0) {
+                            env.JUDGED_AT_PR = 'true'
+                        }
+                    }
+                }
+            }
+        }
+
         // The change this build judges, from GATE_BASE to HEAD; scripts/gate decides how much
         // of it to run.
         stage('Change') {
+            when { expression { return env.JUDGED_AT_PR != 'true' } }
             steps {
                 script {
                     def base
@@ -58,6 +82,7 @@ pipeline {
         }
 
         stage('Gate') {
+            when { expression { return env.JUDGED_AT_PR != 'true' } }
             steps {
                 script {
                     def status = sh(returnStatus: true, script: 'scripts/gate "$GATE_BASE"')

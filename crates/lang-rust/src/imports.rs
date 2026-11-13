@@ -7,9 +7,9 @@ use std::ops::RangeInclusive;
 use std::path::{Component, Path, PathBuf};
 
 use model::{Import, ImportGraph};
-use tree_sitter::{Node, Parser};
+use tree_sitter::Node;
 
-use crate::syntax::{holds_only_under_test, named, preceding_attributes, unraw, Text};
+use crate::syntax::{holds_only_under_test, named, opens_test_only, parse_whole, preceding_attributes, unraw, Text};
 
 /// The imports between `files`, each Rust file of one tree as (path from the tree's top level, its bytes): every file
 /// of `files` keyed, with the imports it makes of the others.
@@ -85,16 +85,10 @@ struct UsedPath {
 
 /// The file `source`, read as [`imports`] reads it; None where it is not UTF-8 or does not parse.
 fn parse(source: &[u8]) -> Option<Parsed> {
-    std::str::from_utf8(source).ok()?;
-    let mut parser = Parser::new();
-    parser.set_language(&tree_sitter_rust::LANGUAGE.into()).ok()?;
-    let tree = parser.parse(source, None)?;
+    let tree = parse_whole(source)?;
     let root = tree.root_node();
-    if root.has_error() {
-        return None;
-    }
     let text = Text::of_file(source);
-    let test = inner_test(root, text);
+    let test = opens_test_only(root, text);
     let mut out = Parsed::default();
     walk(root, text, &mut vec![], test, &mut out);
     Some(out)
@@ -111,7 +105,7 @@ fn walk(node: Node, text: Text, scope: &mut Vec<String>, test: bool, out: &mut P
                 out.declarations.push(Declaration { scope: scope.clone(), name, path, test });
                 return;
             };
-            let test = test || inner_test(body, text);
+            let test = test || opens_test_only(body, text);
             scope.push(name);
             out.inline.push(scope.clone());
             walk(body, text, scope, test, out);
@@ -146,11 +140,6 @@ fn walk_children(node: Node, text: Text, scope: &mut Vec<String>, test: bool, ou
             }
         }
     }
-}
-
-/// Whether `body`, a file's or an inline module's, starts with `#![cfg(test)]`, making the whole of it test code.
-fn inner_test(body: Node, text: Text) -> bool {
-    named(body).into_iter().any(|n| n.kind() == "inner_attribute_item" && holds_only_under_test(n, text))
 }
 
 /// Calls `leaf` with each path the `use` tree `node` brings in, `prefix` before it, and the line of the path's last

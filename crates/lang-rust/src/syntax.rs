@@ -867,6 +867,19 @@ fn path_segments(node: Node, text: Text) -> Vec<String> {
     out
 }
 
+/// The syntax tree of the Rust source `source`; None where it is not UTF-8 or tree-sitter finds an error in it.
+pub fn parse_whole(source: &[u8]) -> Option<Tree> {
+    std::str::from_utf8(source).ok()?;
+    let mut parser = Parser::new();
+    parser.set_language(&tree_sitter_rust::LANGUAGE.into()).ok()?;
+    parser.parse(source, None).filter(|tree| !tree.root_node().has_error())
+}
+
+/// Whether `body`, a file's or an inline module's, opens with `#![cfg(test)]`, making the whole of it test code.
+pub fn opens_test_only(body: Node, text: Text) -> bool {
+    named(body).into_iter().any(|n| n.kind() == "inner_attribute_item" && holds_only_under_test(n, text))
+}
+
 /// Whether the attribute item `item` is a `cfg` whose predicate holds only under `cfg(test)`: `test`, or an `all`
 /// with such an argument.
 pub fn holds_only_under_test(item: Node, text: Text) -> bool {

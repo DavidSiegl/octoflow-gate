@@ -68,3 +68,32 @@ fn a_file_that_does_not_parse_has_no_tokens() {
     assert_eq!(lang_rust::code_tokens(b"fn f( {"), []);
     assert_eq!(lang_rust::code_tokens(b"fn f() {}\xff"), []);
 }
+
+#[test]
+fn a_match_arm_or_a_field_marked_for_tests_is_left_out_whole() {
+    let shapes = |source: &str| -> Vec<u64> {
+        lang_rust::code_tokens(source.as_bytes()).into_iter().map(|t| t.shape).collect()
+    };
+    // The comma after a field is its list's, not the field's.
+    let marked = "\
+fn f(x: u8) -> P {
+    match x {
+        #[cfg(test)]
+        7 => 1,
+        _ => 2,
+    }
+    let _ = P { b, #[cfg(test)] c };
+    P { b: 2, #[cfg(test)] a: 1 }
+}
+";
+    let unmarked = "\
+fn f(x: u8) -> P {
+    match x {
+        _ => 2,
+    }
+    let _ = P { b, };
+    P { b: 2, }
+}
+";
+    assert_eq!(shapes(marked), shapes(unmarked));
+}

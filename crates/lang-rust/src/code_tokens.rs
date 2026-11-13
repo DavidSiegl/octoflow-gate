@@ -2,25 +2,24 @@
 //! out.
 
 use model::{token_shape, CodeToken};
-use tree_sitter::{Node, Parser};
+use tree_sitter::Node;
 
-use crate::syntax::{children, holds_only_under_test, named, Text};
+use crate::syntax::{children, holds_only_under_test, opens_test_only, parse_whole, Text};
+
+/// The kinds of node that hold their own outer attributes as children, where every other node's are its siblings
+/// before it in a list, as tree-sitter-rust 0.24's node-types.json has them.
+const HOLDING_ATTRIBUTES: [&str; 3] = ["match_arm", "field_initializer", "shorthand_field_initializer"];
 
 /// The tokens of the Rust source `source`'s code, in the order they are written, each a [`CodeToken`]: a literal
 /// stands for its kind (a string, a number, a character, a boolean), any other name tree-sitter gives a kind of its
 /// own (an identifier, a type's name, a field's, a primitive type, a lifetime's name) for that kind, and a keyword or
 /// a punctuation mark for itself. Left out are comments, `use` and `extern crate` declarations, and test code: every
-/// item marked `#[cfg(test)]` (or an `all` that needs `test`), its attributes with it, and the whole of a module or
-/// file that opens with `#![cfg(test)]`. A macro's arguments are tokens as written.
+/// item, match arm, field or argument marked `#[cfg(test)]` (or an `all` that needs `test`), its attributes with it,
+/// and the whole of a module or file that opens with `#![cfg(test)]`. A macro's arguments are tokens as written.
 ///
 /// None where `source` is not UTF-8 or does not parse as Rust: such a file is read by nothing else either.
 pub fn code_tokens(source: &[u8]) -> Vec<CodeToken> {
-    let mut parser = Parser::new();
-    let parsed = std::str::from_utf8(source)
-        .ok()
-        .and_then(|text| parser.set_language(&tree_sitter_rust::LANGUAGE.into()).ok().map(|()| text))
-        .and_then(|text| parser.parse(text, None));
-    let Some(tree) = parsed.filter(|tree| !tree.root_node().has_error()) else { return vec![] };
+    let Some(tree) = parse_whole(source) else { return vec![] };
     let text = Text::of_file(source);
     let mut out = vec![];
     // A stack rather than recursion, as syntax::tokens walks: an expression a few thousand terms long is that deep.
@@ -32,7 +31,7 @@ pub fn code_tokens(source: &[u8]) -> Vec<CodeToken> {
         let shown = if node.kind().ends_with("_literal") {
             format!("${}", node.kind())
         } else if node.child_count() > 0 {
-            if !opens_with_test_only(node, text) {
+            if !test_only(node, text) {
                 pending.extend(outside_tests(node, text).into_iter().rev());
             }
             continue;
@@ -72,8 +71,14 @@ fn outside_tests<'n>(node: Node<'n>, text: Text) -> Vec<Node<'n>> {
     out
 }
 
-/// Whether `node` is a file or a module's body that opens with `#![cfg(test)]`, making the whole of it test code.
-fn opens_with_test_only(node: Node, text: Text) -> bool {
-    matches!(node.kind(), "source_file" | "declaration_list")
-        && named(node).into_iter().any(|n| n.kind() == "inner_attribute_item" && holds_only_under_test(n, text))
+/// Whether the whole of `node` is test code by an attribute it holds: a file or a module's body that opens with
+/// `#![cfg(test)]`, or a node of [`HOLDING_ATTRIBUTES`] marked `#[cfg(test)]`.
+fn test_only(node: Node, text: Text) -> bool {
+    match node.kind() {
+        "source_file" | "declaration_list" => opens_test_only(node, text),
+        kind if HOLDING_ATTRIBUTES.contains(&kind) => {
+            children(node).into_iter().any(|c| c.kind() == "attribute_item" && holds_only_under_test(c, text))
+        }
+        _ => false,
+    }
 }

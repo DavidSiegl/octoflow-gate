@@ -351,6 +351,37 @@ fn adjacent_f_strings_split_elsewhere_are_no_changed_value_and_ones_of_other_tex
     }
 }
 
+#[test]
+fn a_literal_s_sign_or_what_holds_it_changed_is_a_changed_value() {
+    let path = "tests/test_s.py";
+    let edit = |old: &str, new: &str| {
+        let base = format!("def test_s():\n    assert f() == {old}\n");
+        found(&[code_edit(), edited(path, &base, &base.replace(old, new))]).0
+    };
+    let pairs = [
+        ("-5", "5"),
+        ("5", "-5"),
+        ("-5", "-6"),
+        ("+5", "5"),
+        ("(\"a\",)", "\"a\""),
+        ("[1, 2]", "[1, 2, 3]"),
+        ("{\"a\": 1}", "{\"a\": -1}"),
+        ("(1, (2, 3))", "(1, [2, 3])"),
+        ("(1,)", "1"),
+    ];
+    for (old, new) in pairs {
+        assert_eq!(edit(old, new), [at(path, 2, "expected-value-changed")], "{old} to {new}");
+    }
+    // The same value written in other parentheses or layout, and a value that is no literal, which the shape holds.
+    let same = [("(5)", "5"), ("-(5)", "- 5"), ("((1,))", "(1,)"), ("[1, 2]", "[\n        1,\n        2,\n    ]")];
+    for (old, new) in same {
+        assert_eq!(edit(old, new), [], "{old} to {new}");
+    }
+    for (old, new) in [("-x", "x"), ("(1, x)", "(1, x, 2)")] {
+        assert_eq!(edit(old, new), [], "{old} to {new}");
+    }
+}
+
 // A test file whose test asserts against a module-level constant: the expected value held outside the assertion.
 const GOLDEN_TESTS: &str = "\
 import unittest

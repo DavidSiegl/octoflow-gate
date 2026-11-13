@@ -133,8 +133,9 @@ change cannot weaken its tests unseen. Each of these is a finding:
 - `swallowed-error`: a bare `except:`, or an `except Exception:` that does nothing, on an added line;
 - `expected-value-changed`: an assertion whose literals changed while the rest of it stayed, in a change that also
   edits code outside the tests, which is Python source as **Passes at base** below counts it, on either side of the
-  change: the "update the expected value to match the output" move. The finding names the
-  assertion before and after. An expected value held in a constant counts too: when a kept test's assertions name a
+  change: the "update the expected value to match the output" move. A value written of literals alone is one
+  literal, its sign and its brackets with it, so `-5` becoming `5` and `("a",)` becoming `"a"` count; parentheses
+  around such a value change nothing. The finding names the assertion before and after. An expected value held in a constant counts too: when a kept test's assertions name a
   constant of its own file at the base and still name it, bare or as `module.NAME` (the module by its dotted name or a
   module-level import alias of it), and the constant's expression changed other than in layout, or it is no longer a
   constant, that is one finding per constant and test, at the test's first assertion naming it, naming the constant

@@ -207,8 +207,15 @@ order. The findings are Python's, read of Rust:
   also how a test's cleanup ignores a failure, nor a `catch_unwind` whose result is bound to a name and never read;
 - `expected-value-changed`: a kept test's assertion, its macro and its shape the same, whose literals changed,
   the assertions of the two sides aligned by macro and shape, in a change that also edits Rust code outside the
-  tests, on either side. Constants are not followed, as Python's are: an expected value held in a `const` that the
-  change edits is not seen. A golden file changed with Rust code is one such finding, as above;
+  tests, on either side. An expected value held in a constant counts too, as Python's does: when a kept test's
+  assertions name a constant of its own file at the base and still name it, bare or by a path ending in it, as
+  `super::EXPECTED`, and its value changed other than in layout or comments, or it is no longer a constant, that is
+  one finding per constant and test, at the test's first assertion naming it. A constant is a `const` or `static`
+  outside any `fn`, `impl`, `trait` or other item but inline modules, whose name no other such item in the file binds,
+  and whose value calls no fn and no macro; a call of a path whose last name starts with a capital, as `Some(3)`, is a
+  constructor and counts. One the test binds again, as a `const` of the same name in its body, is not checked; nor is
+  one imported from another file, computed by a call, or built from another constant the change edits. A golden file
+  changed with Rust code is one such finding, as above;
 - `unparsable`: a test file that does not parse in the working tree while its base held tests, at the line of the
   first token the parser could not place, failing the gate: those tests cannot be compared. One whose base held none
   has none to lose, as a fixture under `tests/` that is not Rust on purpose, and is not judged; nor is a base that

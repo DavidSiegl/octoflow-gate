@@ -7,7 +7,7 @@
 //! `cognitive_complexity` reads no macro. tree-sitter leaves them a token tree, so [`Walk::macro_args`] parses each
 //! argument again on its own.
 
-use model::{Assertion, Binding, Flow};
+use model::{Assertion, Binding, Constant, Flow};
 use tree_sitter::{Node, Parser, Tree};
 
 /// The macros a test asserts with, by the last segment of their path.
@@ -162,14 +162,22 @@ pub struct Items {
     pub bindings: Vec<Binding>,
     /// Every inner attribute, `#![...]`, wherever it is written.
     pub inner_attrs: Vec<Attr>,
+    /// The file's constants, as [`model::SourceFile::constants`] has them: each `const` or `static` that only inline
+    /// modules hold, if any, whose name no other such item in the file binds, and whose value calls nothing. A call of
+    /// a path whose last name starts with a capital, as `Some(3)`, is a constructor by Rust's naming, not a call; a
+    /// macro is a call. Out of scope, as Python's: one computed by a call, whose value the file does not spell out,
+    /// and an edit to another constant one is built from.
+    pub constants: Vec<Constant>,
 }
 
 /// What `tree`, parsed from `text`, the whole file whose line numbers `lines` gives, holds; `parser` parses macro
 /// arguments.
 pub fn collect(tree: &Tree, text: Text, lines: &Lines, parser: &mut Parser) -> Items {
-    let mut walk = Walk { lines, parser, items: Items::default(), holders: vec![], current_fn: None };
+    let mut walk = Walk { lines, parser, items: Items::default(), holders: vec![], current_fn: None, consts: vec![] };
     walk.node(tree.root_node(), text, false);
-    walk.items
+    let once = |name: &str| walk.consts.iter().filter(|(n, _)| n == name).count() == 1;
+    let constants = walk.consts.iter().filter(|(name, _)| once(name)).filter_map(|(_, c)| c.clone()).collect();
+    Items { constants, ..walk.items }
 }
 
 /// The walk [`collect`] makes.
@@ -181,6 +189,9 @@ struct Walk<'a> {
     holders: Vec<Holder>,
     /// The index in `items.fns` of the innermost `fn` the walk is inside, which owns the assertions and discards met.
     current_fn: Option<usize>,
+    /// The name of each `const` and `static` met that only inline modules hold, if any, with the constant it is when
+    /// its name proves to be bound by no other ([`Items::constants`]); None for one whose value calls.
+    consts: Vec<(String, Option<Constant>)>,
 }
 
 impl Walk<'_> {
@@ -255,6 +266,15 @@ impl Walk<'_> {
     /// Walks a `const` or `static` item, `node`, inside a holder of its name; `assoc` as [`Walk::node`] says.
     fn const_or_static(&mut self, node: Node, text: Text, assoc: bool) {
         let name = self.bind_name(node, text, false);
+        if !assoc && self.holders.iter().all(|h| matches!(h, Holder::Mod(_))) {
+            let value = node.child_by_field_name("value").filter(|v| !calls(*v, text));
+            let constant = value.map(|v| Constant {
+                name: name.clone(),
+                line: self.line(text, node),
+                expression: digest(&tokens(v, text).join(" ")),
+            });
+            self.consts.push((name.clone(), constant));
+        }
         // An associated const is no holder: what it holds takes no name from it.
         match (assoc, node.kind()) {
             (true, _) => self.children(node, text),
@@ -455,20 +475,18 @@ impl Walk<'_> {
         if let (Some(owner), Some(name)) = (self.current_fn, name) {
             if ASSERTION_MACROS.contains(&name.as_str()) {
                 let mut literals = vec![];
-                let blanked = node.named_children(&mut node.walk()).find(|c| c.kind() == "token_tree").map_or(
-                    String::new(),
-                    |tree| {
-                        let mut tokens = vec![];
-                        blank_literals(tree, text, &mut tokens, &mut literals);
-                        tokens.join(" ")
-                    },
-                );
+                let tree = node.named_children(&mut node.walk()).find(|c| c.kind() == "token_tree");
+                let blanked = tree.map_or(String::new(), |tree| {
+                    let mut tokens = vec![];
+                    blank_literals(tree, text, &mut tokens, &mut literals);
+                    tokens.join(" ")
+                });
                 let assertion = Assertion {
                     line: self.line(text, node),
                     text: text.of(node).into(),
                     shape: format!("{name}! {blanked}"),
                     literals,
-                    reads: vec![],
+                    reads: tree.map(|t| reads(t, text)).unwrap_or_default(),
                 };
                 self.items.fns[owner].asserts.push(assertion);
             }
@@ -1005,6 +1023,47 @@ fn blank_literals(node: Node, text: Text, tokens: &mut Vec<String>, literals: &m
             }
         }
     }
+}
+
+/// The names the token tree `tree`, an assertion's arguments, reads, each once, in the order they are written: each
+/// identifier at any depth but a field's or a method's, after a `.`. The last name of a path counts, so `super::N`
+/// reads `N`; so do its other names, which name modules or types and no constant.
+fn reads(tree: Node, text: Text) -> Vec<String> {
+    let mut out: Vec<String> = vec![];
+    let mut after_dot = false;
+    let mut pending = vec![tree];
+    while let Some(node) = pending.pop() {
+        if node.kind() == "token_tree" {
+            pending.extend(children(node).into_iter().rev());
+            continue;
+        }
+        let name = unraw(text.of(node));
+        if node.kind() == "identifier" && !after_dot && !out.iter().any(|n| n == name) {
+            out.push(name.into());
+        }
+        after_dot = node.kind() == ".";
+    }
+    out
+}
+
+/// Whether the expression `node` calls a fn or a macro, as [`Items::constants`] tells a call.
+fn calls(node: Node, text: Text) -> bool {
+    let mut pending = vec![node];
+    while let Some(node) = pending.pop() {
+        match node.kind() {
+            "macro_invocation" => return true,
+            "call_expression" => {
+                let callee = node.child_by_field_name("function").map(|f| text.of(f)).unwrap_or_default();
+                let last = callee.rsplit("::").next().unwrap_or_default();
+                if !last.starts_with(|c: char| c.is_uppercase()) {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+        pending.extend(named(node));
+    }
+    false
 }
 
 fn is_literal(node: Node) -> bool {

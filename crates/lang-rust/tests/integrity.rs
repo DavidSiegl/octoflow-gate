@@ -361,6 +361,81 @@ fn an_expected_value_changed_with_the_code_is_reported_as_the_pair() {
     );
 }
 
+// A lib whose tests assert against constants: the expected values held outside the assertions, one at the top level
+// and one in the test module.
+const HELD: &str = "\
+pub fn add(a: i32, b: i32) -> i32 {
+    a + b
+}
+
+pub static SMALL: i32 = 3;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EXPECTED: i32 = 30;
+
+    #[test]
+    fn adds_small() {
+        assert_eq!(add(1, 2), super::SMALL);
+    }
+
+    #[test]
+    fn adds_large() {
+        assert_eq!(add(10, 20), EXPECTED);
+    }
+}
+";
+
+#[test]
+fn an_edited_const_or_static_an_assertion_reads_is_an_expected_value_changed() {
+    let code = edit(HELD, "    a + b\n", "    a + b + 1\n");
+    let lib = edit(&code, "const EXPECTED: i32 = 30;", "const EXPECTED: i32 = 31;");
+    let lib = edit(&lib, "static SMALL: i32 = 3;", "static SMALL: i32 = 4;");
+    let found = check(&[edited(LIB_PATH, HELD, &lib)]);
+    let expected = vec![at(LIB_PATH, Some(15), "expected-value-changed"), at(LIB_PATH, Some(20), "expected-value-changed")];
+    assert_eq!(wheres(&found), expected);
+    assert_eq!(
+        found[1].message,
+        "`EXPECTED` (line 11), which `tests::adds_large` names in its assertions, changed, in a change that also edits \
+         the code under test."
+    );
+    // Its layout, or the constant edited without the code, is no finding.
+    let relaid = edit(&code, "const EXPECTED: i32 = 30;", "const EXPECTED: i32 =\n        30; // the sum");
+    assert_eq!(check(&[edited(LIB_PATH, HELD, &relaid)]), vec![]);
+    let alone = edit(HELD, "const EXPECTED: i32 = 30;", "const EXPECTED: i32 = 31;");
+    assert_eq!(check(&[edited(LIB_PATH, HELD, &alone)]), vec![]);
+}
+
+#[test]
+fn a_const_that_calls_is_bound_twice_or_is_shadowed_by_the_test_is_not_followed() {
+    let code = edit(HELD, "    a + b\n", "    a + b + 1\n");
+    let calls = |value: &str| edit(&code, "const EXPECTED: i32 = 30;", &format!("const EXPECTED: i32 = {value};"));
+    let base = edit(HELD, "const EXPECTED: i32 = 30;", "const EXPECTED: i32 = add(10, 20);");
+    assert_eq!(check(&[edited(LIB_PATH, &base, &calls("add(10, 21)"))]), vec![]);
+    // A constructor, by its capital, calls nothing.
+    let wrapped = |n: u32| edit(HELD, "const EXPECTED: i32 = 30;", &format!("const EXPECTED: Option<i32> = Some({n});"));
+    let some = edit(&wrapped(31), "    a + b\n", "    a + b + 1\n");
+    assert_eq!(wheres(&check(&[edited(LIB_PATH, &wrapped(30), &some)])), vec![at(LIB_PATH, Some(20), "expected-value-changed")]);
+    let twice = |text: &str| edit(text, "pub static SMALL", "mod other {\n    pub const EXPECTED: i32 = 0;\n}\n\npub static SMALL");
+    let edited_twice = edit(&twice(&code), "const EXPECTED: i32 = 30;", "const EXPECTED: i32 = 31;");
+    assert_eq!(check(&[edited(LIB_PATH, &twice(HELD), &edited_twice)]), vec![]);
+    let shadowed = |text: &str| edit(text, "fn adds_large() {\n", "fn adds_large() {\n        const EXPECTED: i32 = 30;\n");
+    let edited_shadowed = edit(&shadowed(&code), "const EXPECTED: i32 = 30;", "const EXPECTED: i32 = 31;");
+    assert_eq!(check(&[edited(LIB_PATH, &shadowed(HELD), &edited_shadowed)]), vec![]);
+}
+
+#[test]
+fn a_const_that_is_one_no_longer_is_reported_at_its_line_at_the_base() {
+    let lib = edit(HELD, "    a + b\n", "    a + b + 1\n");
+    let lib = edit(&lib, "    const EXPECTED: i32 = 30;\n", "");
+    let lib = edit(&lib, "    use super::*;\n", "    use super::*;\n    use crate::consts::EXPECTED;\n");
+    let found = check(&[edited(LIB_PATH, HELD, &lib)]);
+    assert_eq!(wheres(&found), vec![at(LIB_PATH, Some(20), "expected-value-changed")]);
+    assert!(found[0].message.starts_with("`EXPECTED` (line 11 at the base), which `tests::adds_large`"), "{}", found[0].message);
+}
+
 #[test]
 fn an_expected_value_changed_with_only_the_inline_tests_is_not_found() {
     // lib.rs holds both the tests and the code; the change edits only its test module, at both ends.

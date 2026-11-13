@@ -7,10 +7,11 @@ Python and Go](#reading-the-source),
 with the programs that read it back. [README.md](../README.md) says how to
 run it in a project.
 
-The gate was written inside [octoflow](https://github.com/DavidSiegl/octoflow-ai), whose orchestrator has an agent,
-the Builder, answer the quality file and another, the Reviewer, judge the answer; this document still names them
-where it says who a part of the file is for, and cites octoflow's pull requests and measurements where a decision
-was made on them.
+The quality file is for whoever answers it, the change's author, a person or an agent, and for whoever reviews the
+answer; `quality.json` is for programs. The gate was written inside
+[octoflow](https://github.com/DavidSiegl/octoflow-ai), whose orchestrator has one agent answer the quality file and
+another review the answer, and where a decision was made on octoflow's pull requests and measurements, this document
+cites them as that decision's history.
 
 ## The gate
 
@@ -94,7 +95,7 @@ and clippy come from the machine, in Jenkins the agent image, and so do go and g
 After the linters come the checks in the table below, in its order, which judge what the change did rather than how
 the tree reads. Each either fails the gate or only reports: a failing check's findings are issues,
 like the linters', listed as `error`, and a reporting check's are findings to weigh, listed as `warning`, which the
-Builder answers and the Reviewer judges without the gate failing. A failing check may weigh some of its rules
+author answers and the reviewer judges without the gate failing. A failing check may weigh some of its rules
 instead, as `test-integrity` does for what a spec can ask for. Either kind is listed wherever it is,
 not only on added lines, and names the check that raised it. A check that cannot run says so as one of its
 findings, so a failing check that cannot run fails the gate.
@@ -123,8 +124,8 @@ change cannot weaken its tests unseen. Each of these is a finding:
 - `removed-test`: a test function, method or class is gone, at its line at the base. A class whose tests all
   went is one finding, and so is a deleted file. A test that reappears with the same body under another name or
   in another file was renamed or moved, not removed. A test removed together with the code it tested is still a
-  finding. It is one to weigh: the gate cannot see the spec, so the Builder says why in its report and the
-  Reviewer judges;
+  finding. It is one to weigh: the gate cannot see the spec, so the author says why in the answer and the
+  reviewer judges;
 - `skip`: a `skip`, `skipIf`, `skipUnless`, `skipTest`, `SkipTest`, `xfail` or `expectedFailure` on an added
   line;
 - `fewer-assertions`: a test with fewer `assert` statements, `self.assert*` calls and `pytest.raises` calls than at
@@ -138,7 +139,7 @@ change cannot weaken its tests unseen. Each of these is a finding:
   module-level import alias of it), and the constant's expression changed other than in layout, or it is no longer a
   constant, that is one finding per constant and test, at the test's first assertion naming it, naming the constant
   and its line. A constant whose name the test binds anywhere, even by a binding that does nothing (`global NAME`, a
-  comprehension target, a lambda parameter), is not checked, so such a line hides an edited constant; the Reviewer
+  comprehension target, a lambda parameter), is not checked, so such a line hides an edited constant; a reviewer
   sees it in the diff. Neither is a `module.NAME` whose `module` the test binds. Only a top-level import statement's
   alias counts as the module; one imported under a module-level `if` or `try` does not. A constant is a module-level
   assignment of one name, bound nowhere else in the module's scope, to an expression with no call in it. One the
@@ -183,7 +184,7 @@ order. The findings are Python's, read of Rust:
   `target_family = "…"`, and `any`, `all` and `not` of them, `test` allowed beside them in an outermost `all`) and holds
   on at least one, on a test, a test module or a file of tests, read whole when rustfmt wraps it. It leaves a test out
   only on platforms where what it tests is not built, as a test of a Linux-only system call, so it is one to weigh: the
-  Reviewer checks that the code under test is as limited. The platforms are a list of common `target_os` values with
+  reviewer checks that the code under test is as limited. The platforms are a list of common `target_os` values with
   their families (`TARGET_OSES` in `crates/lang-rust/src/skips.rs`); one it lacks, as a misspelt os, and a predicate
   that holds on none of them, as `all(unix, windows)`, are still a `skip`. So is a platform `cfg` on a line of its own
   inside a test's body, and a line that also holds another skip;
@@ -457,9 +458,9 @@ call the function:
 
 mutmut runs in the project's Python, on a copy of the files git tracks, so the working tree stays as it was; its state,
 `mutants/`, goes into the copy too. Its own selector, mutant names such as `pkg.x_parse__mutmut_*`, picks which mutants
-run only after mutmut has made a mutant of every function, which took minutes for the Python engine. So in the copy,
-each function and class the change does not touch gets mutmut's `# pragma: no mutate block` at the end of its header,
-and mutmut skips it. The rules' `[tool.mutmut]` says what can be mutated (`source_paths`, `only_mutate`,
+run only after mutmut has made a mutant of every function, which took minutes for octoflow's Python engine. So in the
+copy, each function and class the change does not touch gets mutmut's `# pragma: no mutate block` at the end of its
+header, and mutmut skips it. The rules' `[tool.mutmut]` says what can be mutated (`source_paths`, `only_mutate`,
 `do_not_mutate`), which tests run (`pytest_add_cli_args_test_selection`), what the tests read beside the code
 (`also_copy`), and which lines are left alone (`do_not_mutate_patterns`); see [whose rules judge a
 change](#whose-rules-judge-a-change). Python files are decoded by a byte order mark or a coding cookie, as [reading the
@@ -481,8 +482,8 @@ function. Over a large suite, those runs alone can take longer than the budget. 
 
 A project's pytest `[[test]]` command writes the file, by default `.coverage`, when it runs with pytest-cov's
 `--cov-context=test`, and whoever starts the gate passes it.
-mutmut then runs those tests three times. For PR #113's change, 253 mutants of 7 functions of the Python engine, that is
-312 tests of 1351, and mutmut took 77 seconds instead of 709 on the build host, with the same verdicts, mutant by
+mutmut then runs those tests three times. For octoflow's PR #113, 253 mutants of 7 functions of its Python engine, that
+is 312 tests of 1351, and mutmut took 77 seconds instead of 709 on the build host, with the same verdicts, mutant by
 mutant. The cost grows with the tests that reach the change, not with the suite: a change to a function nearly every
 test calls still costs about as much as before. The collection runs in the gate's copy of the tree, which holds every
 tracked file, where mutmut's own copy holds `source_paths`, `also_copy` and `tests/`; a selection that reaches
@@ -501,9 +502,10 @@ Tests that reach a function only in a subprocess count neither in mutmut's own r
 takes at most 15 seconds more: SIGINT, 10 seconds to exit, a kill of its process group, and 5 seconds to read what it
 printed. Listing its results and showing the survivors then take at most 60 seconds, each call's stop included. Before
 mutmut starts, reading `--test-contexts` takes at most 35, and collecting the selection 35 more. So the check takes at
-most the budget and 145 seconds, and the few it takes to copy the tree. With the flaky-tests check's three minutes,
-passes-at-base's two and the test run, a quality build stays inside the orchestrator's `QUALITY_TIMEOUT` of 1200 seconds
-when Jenkins starts it without a wait in the queue.
+most the budget and 145 seconds, and the few it takes to copy the tree. The defaults were set for octoflow, whose
+orchestrator gives a quality build 1200 seconds (its `QUALITY_TIMEOUT`): with the flaky-tests check's three minutes,
+passes-at-base's two and the test run, such a build stays inside them when Jenkins starts it without a wait in the
+queue.
 
 A table can keep mutmut off texts that no test reads word for word, such as argparse's help and descriptions:
 `do_not_mutate_patterns = ['\bhelp=', '\bdescription=']`. mutmut matches each pattern against each source line and
@@ -593,7 +595,7 @@ the changed tests it collected, all within the one time limit:
   through a file the change edits, the `conftest.py` itself or a helper it imports, whatever it raises, typically
   because it reaches for what the change adds (such a `conftest.py` hides only the tests under it, and the others are
   collected in one more run), and a `test_*` method of a class pytest does not take for a test class. A refactor that
-  keeps behaviour gives these findings rightly: the Builder says it is one, and the Reviewer judges;
+  keeps behaviour gives these findings rightly: the author says it is one, and the reviewer judges;
 - `budget-reached`: `--base-run-budget SECONDS`, else the settings' `budgets.base-run`, 120 by default, shared by the
   collection and the run, ran out; the finding says when, and how many of its test cases the run had run. pytest runs in
   a session of its own, and is killed with every process it started;
@@ -729,7 +731,7 @@ as one list, issues first, at most 50 in all, then a count:
 
 - **Suppressions added** (`# noqa`, `# type: ignore`, `# shellcheck disable`, `<!-- pyml disable`, `# pragma: no cover`,
   `# pragma: no branch`, `# pragma: no mutate`, and Rust's `#[allow(` and `#[expect(`) are listed, not failed, so the
-  Reviewer weighs each one. A `# pragma: no cover` or `no branch` is listed because it takes lines or branches out of
+  reviewer weighs each one. A `# pragma: no cover` or `no branch` is listed because it takes lines or branches out of
   the coverage condition, and a `# pragma: no mutate` because it takes them out of the surviving-mutants check. Each
   counts only in the syntax of the files that what it silences reads: in a Python file (a `.py` file or a `#!` python
   script), only within a comment, so the same words in a string or a docstring are not one, but in a file that does not
@@ -1001,11 +1003,11 @@ file. A reader checks itself against the `tests/golden/*.json` files, which the 
 (`crates/gate/tests/golden_reports.rs`) and a release ships as `golden/`, each beside the quality file of the same
 report.
 
-The quality file is prose for the people and agents who answer it, and its wording and layout may change in any
-release. [octoflow](https://github.com/DavidSiegl/octoflow-ai)'s orchestrator, which runs the gate in Jenkins after
-each round of its Builder's, still reads the parts below from it until it reads `quality.json` instead, keeping its own
-copy of them and checking that copy against `tests/golden/*.txt`; until then a change to one of them is a change to
-its reader.
+The quality file is prose for the people and agents who answer it and review the answer, and its wording and layout
+may change in any release; a program reads `quality.json`. The parts below are the exception: a reader that has no
+`quality.json`, as [octoflow](https://github.com/DavidSiegl/octoflow-ai)'s orchestrator for a build whose quality job
+archived none, reads them from the quality file, keeping its own copy of them and checking that copy against
+`tests/golden/*.txt`, so a change to one of them is a change to such a reader.
 
 - **The gate line.** The first non-blank line is `GATE: OK` or `GATE: ERROR`; a reader should tolerate Markdown
   emphasis around it. The gate writes no other; a reader may add its own, as octoflow's `GATE: BUILD_FAILED` for a

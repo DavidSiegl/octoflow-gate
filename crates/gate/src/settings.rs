@@ -31,6 +31,10 @@ pub struct Settings {
     pub complexity_exempt: Globs,
     /// Files the dependency-cycles check leaves out of every cycle, their imports and the imports of them both.
     pub cycles_exempt: Globs,
+    /// Files the duplicated-blocks check neither judges nor matches a block against.
+    pub duplicates_exempt: Globs,
+    /// The fewest tokens a block the duplicated-blocks check reports may hold; at least 1.
+    pub duplicates_min_tokens: usize,
     /// (path, note) for each file beyond BUILD_CONFIG_FILES that alters how the project is built or judged, in
     /// gate.toml's order: the note, a sentence, follows "The change edits `path`." in the quality file.
     pub build_config: Vec<(String, String)>,
@@ -75,6 +79,17 @@ impl Default for Settings {
                 "**/*_test.py",
                 "**/conftest.py",
             ]),
+            duplicates_exempt: Globs::new(&[
+                "**/tests/**",
+                "**/tests.rs",
+                "**/test_*.py",
+                "**/*_test.py",
+                "**/conftest.py",
+                "**/*_test.go",
+                "**/testdata/**",
+                "**/fixtures/**",
+            ]),
+            duplicates_min_tokens: 50,
             build_config: vec![],
             linters: vec![],
             mutation_budget: 600,
@@ -113,6 +128,16 @@ impl Settings {
         }
         if let Some(exempt) = file.dependency_cycles.and_then(|c| c.exempt) {
             settings.cycles_exempt = Globs::new(&exempt);
+        }
+        if let Some(duplicates) = file.duplicated_blocks {
+            if let Some(exempt) = duplicates.exempt {
+                settings.duplicates_exempt = Globs::new(&exempt);
+            }
+            if let Some(n) = duplicates.min_tokens {
+                settings.duplicates_min_tokens = usize::try_from(n).ok().filter(|&n| n >= 1).ok_or_else(|| {
+                    invalid(format!("`duplicated-blocks.min-tokens` must be a whole number, at least 1, not {n}"))
+                })?;
+            }
         }
         for (name, note) in file.build_config.map(|n| n.0).unwrap_or_default() {
             settings.build_config.push(build_config_entry(name, note).map_err(invalid)?);
@@ -256,6 +281,8 @@ struct File {
     complexity: Option<Exempt>,
     #[serde(rename = "dependency-cycles")]
     dependency_cycles: Option<Exempt>,
+    #[serde(rename = "duplicated-blocks")]
+    duplicated_blocks: Option<DuplicatedBlocks>,
     #[serde(rename = "build-config")]
     build_config: Option<InOrder<String>>,
     linters: Option<InOrder<Vec<String>>>,
@@ -277,6 +304,14 @@ struct TestFiles {
 #[serde(deny_unknown_fields)]
 struct Exempt {
     exempt: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DuplicatedBlocks {
+    exempt: Option<Vec<String>>,
+    #[serde(rename = "min-tokens")]
+    min_tokens: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -399,6 +434,8 @@ mod tests {
             ("[linters]\nflake8 = []\n", "<path>: unknown key `linters.flake8`"),
             ("[budgets]\nmutation = 0\n", "<path>: `budgets.mutation` must be a whole number of seconds, at least 1"),
             ("[budgets]\nmutation = true\n", ""),
+            ("[duplicated-blocks]\nmin-tokens = 0\n", "<path>: `duplicated-blocks.min-tokens` must be a whole number"),
+            ("[duplicated-blocks]\nmin_tokens = 30\n", "unknown field `min_tokens`"),
             ("[build-config]\n\"uv.lock\" = \"x\"\n", "<path>: `build-config.uv.lock` is build configuration already"),
             ("[build-config]\nx = \" \"\n", "<path>: `build-config.x` must be a sentence"),
             ("[linters]\nclippy = [\"**/*.rs\"]\n", "<path>: `linters.clippy` must take in the Cargo.toml"),
@@ -428,5 +465,14 @@ mod tests {
         assert!(settings.linter_globs("shellcheck").unwrap().matches(OsStr::new("bin/x")));
         assert!(settings.linter_globs("clippy").unwrap().globs().is_empty());
         assert!(settings.linter_globs("ruff").is_none());
+    }
+
+    #[test]
+    fn duplicated_blocks_takes_its_globs_and_its_fewest_tokens() {
+        let settings = read("[duplicated-blocks]\nexempt = [\"gen/**\"]\nmin-tokens = 30\n").unwrap();
+        assert!(settings.duplicates_exempt.matches(OsStr::new("gen/a.py")));
+        assert!(!settings.duplicates_exempt.matches(OsStr::new("tests/test_a.py")));
+        assert_eq!(settings.duplicates_min_tokens, 30);
+        assert_eq!(read("").unwrap().duplicates_min_tokens, 50);
     }
 }

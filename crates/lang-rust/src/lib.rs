@@ -7,10 +7,12 @@ use std::collections::{BTreeSet, HashMap};
 use model::{first_line, Function, Lines, SourceFile, Test, TestGroup, Unreadable, Weakening, WeakeningKind};
 use tree_sitter::{Node, Parser};
 
+mod code_tokens;
 mod imports;
 mod skips;
 mod syntax;
 
+pub use code_tokens::code_tokens;
 pub use imports::imports;
 
 use syntax::{Fn, Holder, Items, Text};

@@ -108,6 +108,7 @@ committed by accident. Deleting such files is no fault.
 | `test-integrity` | yes, but for removed tests, fewer assertions, changed expected values and Rust and Go tests left out on other platforms | tests the change weakened, in test files (by default `tests/**`, `test_*.py`, `*_test.py`; Rust's below) |
 | `cognitive-complexity` | yes | functions the change edits or adds that it takes over a cognitive complexity of 15 |
 | `dependency-cycles` | yes | imports the change adds that close a cycle of imports between the project's Python or Rust modules |
+| `duplicated-blocks` | no | blocks of code the change adds that the tree already holds, or that it adds twice, names and literals aside |
 | `flaky-tests` | no | tests the change adds or edits that pass in one order and fail in another |
 | `surviving-mutants` | no | changes to the functions the change edits that no test notices |
 | `passes-at-base` | no | tests the change adds or edits that pass without the rest of the change |
@@ -352,6 +353,24 @@ take part in no cycle.
   at any depth, as `super::` from a child, is none either, so a crate root takes part in no cycle; nor is any in test
   code, an item marked `#[cfg(test)]` and a file only such items declare. A macro's arguments are not read.
 - Go: none. The compiler refuses an import cycle.
+
+**Duplicated blocks** finds a block of code a change adds that the tree already holds elsewhere, or that the change
+adds twice: a copy is logic that has to be fixed twice, and a change is where it enters. It runs on the languages the
+change holds Python, Rust or Go of, `crates/checks/src/duplicates.rs` comparing the tokens the front ends read
+(`code_tokens` in `crates/lang-python`, `crates/lang-rust` and `crates/lang-go`) of every file of the language the
+working tree tracks outside `mutants/`, by its name (`.py`, `.rs`, or `.go` where the Go front end reads it, generated
+files left out). A name stands for what kind of name it is and a literal for what kind of literal, so a copy whose
+names and values were changed is still a copy; keywords, operators and punctuation stand for themselves. Comments,
+`use` and `import` statements, Go's `package` clause and Rust's test code (`#[cfg(test)]` items) are no tokens.
+
+A `duplicated-blocks` finding, never failing, lies at the first line of a run of at least `min-tokens` tokens, 50 by
+default, all on lines the change added, that equal a run elsewhere: in another file, in the same file where the two do
+not overlap, or a second time in the change. It names the other place as `path:line` and the run's length in tokens.
+Overlapping copied runs of a file are one finding, naming the place that matches most of them, one the tree held before
+one the change added. A block the change adds twice is one finding, at the later copy by path and line. The files the
+settings exempt, by default the tests, fixtures and `testdata`, are neither judged nor matched: tests of one shape
+repeat each other by design. Nothing is read at the base: a block the change moves leaves no copy behind. No comment
+suppresses a finding; it is one to weigh.
 
 **Flaky tests** reruns the tests the change adds or edits, so a test that passed the build's one run by luck of
 the order is caught. A test counts when the change adds or removes a line of it in a test file outside `mutants/`, as
@@ -878,6 +897,8 @@ trailing `/**` for all below.
 | `test-files.golden` | `**/tests/**/golden/**` | golden files, which test integrity reads as expected values |
 | `complexity.exempt` | `tests/**`, `**/tests/**/*.rs`, `**/tests.rs` | files whose functions cognitive complexity does not score |
 | `dependency-cycles.exempt` | `**/tests/**`, `**/tests.rs`, `**/test_*.py`, `**/*_test.py`, `**/conftest.py` | files that take part in no dependency cycle, their imports and the imports of them both left out |
+| `duplicated-blocks.exempt` | `**/tests/**`, `**/tests.rs`, `**/test_*.py`, `**/*_test.py`, `**/conftest.py`, `**/*_test.go`, `**/testdata/**`, `**/fixtures/**` | files duplicated-blocks neither judges nor matches a block against |
+| `duplicated-blocks.min-tokens` | 50 | the fewest tokens a block duplicated-blocks reports may hold, a whole number, at least 1 |
 | `build-config` | none | a table of file to note, a sentence the quality file gives after "The change edits `file`." |
 | `linters.<name>` | the table above | the globs of the files that linter reads, for `ruff`, `mypy`, `pymarkdown`, `shellcheck`, `actionlint`, `clippy` or `golangci-lint`; `[]` runs it on none. Clippy lints the workspaces of the `Cargo.toml` files among its files, and golangci-lint the modules of the `go.mod` files, so their globs must take those in |
 | `budgets.mutation` | 600 | seconds, as `--mutation-budget`, which replaces it |

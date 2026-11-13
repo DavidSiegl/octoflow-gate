@@ -5,6 +5,8 @@
 //! - [`complexity`]: functions the change took over the cognitive-complexity limit.
 //! - [`cycles`]: dependency cycles between modules the change closed, judged over the imports of the whole tree on
 //!   each side (model::ImportGraph) rather than over the changed files.
+//! - [`duplicates`]: blocks of code the change added that the tree already holds, over the tokens of the whole
+//!   working tree (model::CodeToken).
 //! - [`integrity`]: tests the change removed or weakened.
 //! - [`names`]: vague names the change bound.
 
@@ -16,6 +18,7 @@ use model::{SourceFile, Unreadable};
 
 pub mod complexity;
 pub mod cycles;
+pub mod duplicates;
 pub mod integrity;
 pub mod names;
 

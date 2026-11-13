@@ -10,9 +10,9 @@ use std::io::Read;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
-use checks::{complexity, cycles, integrity, names, ChangedFile, Finding, Side};
+use checks::{complexity, cycles, duplicates, integrity, names, ChangedFile, Finding, Side};
 use lang_python::{Unit, FIRST_LINE_BYTES};
-use model::{Import, ImportGraph, SourceFile, Unreadable};
+use model::{CodeToken, Import, ImportGraph, SourceFile, Unreadable};
 
 use crate::diff::{removal_points, removed_lines, ChangedLines};
 use crate::judge::{under_mutmut_state, Change};
@@ -290,17 +290,7 @@ type TreeFiles = Vec<(OsString, Vec<u8>)>;
 /// which the change may rename. Errs when git cannot list the files or show one at the base, or one cannot be read in
 /// the working tree.
 fn trees(change: &Change, suffix: &[u8]) -> Result<(TreeFiles, TreeFiles), Unjudged> {
-    let listed = git::output(&change.root, &["ls-files", "-z"])?;
-    let mut now = vec![];
-    for path in listed.split(|&b| b == 0).filter(|p| p.ends_with(suffix)).map(OsStr::from_bytes) {
-        let full = change.root.join(path);
-        if under_mutmut_state(path) || !regular_file(&full) {
-            continue;
-        }
-        let read = std::fs::read(&full);
-        let bytes = read.map_err(|e| Unjudged(format!("{} could not be read: {e}", text::path(full.as_os_str()))))?;
-        now.push((path.to_os_string(), bytes));
-    }
+    let now = working_tree_files(change, |path| path.as_bytes().ends_with(suffix))?;
     // A file the change leaves alone is the same at the base; one it touches is git's there, under its base path.
     let touched: HashSet<&OsStr> = change.files.iter().filter_map(|f| f.after.as_deref()).collect();
     let mut base: TreeFiles =
@@ -315,6 +305,55 @@ fn trees(change: &Change, suffix: &[u8]) -> Result<(TreeFiles, TreeFiles), Unjud
     }
     Ok((base, now))
 }
+
+/// (path, bytes) of each of the tree's tracked regular files outside mutmut's state ([`under_mutmut_state`]) whose
+/// path `wanted` holds of, as `change`'s working tree has them, in git's order. Errs when git cannot list the files,
+/// or one cannot be read.
+fn working_tree_files(change: &Change, wanted: impl Fn(&OsStr) -> bool) -> Result<TreeFiles, Unjudged> {
+    let listed = git::output(&change.root, &["ls-files", "-z"])?;
+    let mut out = vec![];
+    for path in listed.split(|&b| b == 0).map(OsStr::from_bytes).filter(|p| !p.is_empty() && wanted(p)) {
+        let full = change.root.join(path);
+        if under_mutmut_state(path) || !regular_file(&full) {
+            continue;
+        }
+        let read = std::fs::read(&full);
+        let bytes = read.map_err(|e| Unjudged(format!("{} could not be read: {e}", text::path(full.as_os_str()))))?;
+        out.push((path.to_os_string(), bytes));
+    }
+    Ok(out)
+}
+
+/// The duplicated-blocks check's findings on `sources`, by path and line: on Python where the change holds Python, on
+/// Rust where it holds Rust and on Go where it holds Go, each language's tokens read (lang_python::code_tokens,
+/// lang_rust::code_tokens, lang_go::code_tokens) over the working tree's tracked files outside mutmut's state that
+/// hold the language by their name ([`Language::holds`]) and are not generated ([`Language::generated`]). The files
+/// gate.toml's `duplicated-blocks.exempt` names are neither judged nor matched. Errs when git cannot list the tree's
+/// files, or one cannot be read.
+pub fn duplicated_blocks(sources: &Sources) -> Result<Vec<Finding>, Unjudged> {
+    let change = sources.change;
+    let languages: [(bool, &Language, ReadTokens); 3] = [
+        (!sources.python.files.is_empty(), &PYTHON, lang_python::code_tokens),
+        (!sources.rust.files.is_empty(), &RUST, lang_rust::code_tokens),
+        (!sources.go.files.is_empty(), &GO, lang_go::code_tokens),
+    ];
+    let mut out = vec![];
+    for (_, language, code_tokens) in languages.into_iter().filter(|(held, ..)| *held) {
+        let wanted = |path: &OsStr| {
+            (language.holds)(path.as_bytes(), &Vec::new) && !change.settings.duplicates_exempt.matches(path)
+        };
+        let files: Vec<(OsString, Vec<CodeToken>)> = working_tree_files(change, wanted)?
+            .into_iter()
+            .filter(|(_, bytes)| !(language.generated)(bytes))
+            .map(|(path, bytes)| (path, code_tokens(&bytes)))
+            .collect();
+        out.extend(duplicates::copied_blocks(&files, &change.changed, change.settings.duplicates_min_tokens));
+    }
+    Ok(by_path_and_line(out))
+}
+
+/// A front end's reading of a file's bytes into its code's tokens, as lang_python::code_tokens.
+type ReadTokens = fn(&[u8]) -> Vec<CodeToken>;
 
 /// `findings` by path and line, a lineless one first, those of one place in the order given.
 fn by_path_and_line(mut findings: Vec<Finding>) -> Vec<Finding> {

@@ -9,7 +9,9 @@ use std::process::Command;
 use std::time::Duration;
 
 use gate::judge::{judge_change, Change, Given};
-use gate::parser_checks::{dependency_cycles, too_complex, vague_names, weakened_tests, Sources};
+use gate::parser_checks::{
+    dependency_cycles, duplicated_blocks, too_complex, vague_names, weakened_tests, Sources,
+};
 use gate::settings::Settings;
 
 use common::Repo;
@@ -70,29 +72,54 @@ fn edit(repo: &Repo, path: &str, old: &str, new: &str) {
     repo.put(path, text.replacen(old, new, 1).as_bytes());
 }
 
-/// The findings of test-integrity, cognitive-complexity, dependency-cycles and vague-names on `change`, in that order.
+/// The findings of test-integrity, cognitive-complexity, dependency-cycles, duplicated-blocks and vague-names on
+/// `change`, in that order.
 fn run_checks(change: &Change) -> Vec<Vec<gate::report::Finding>> {
     let sources = Sources::read(change).unwrap();
-    vec![weakened_tests(&sources), too_complex(&sources), dependency_cycles(&sources).unwrap(), vague_names(&sources)]
+    vec![
+        weakened_tests(&sources),
+        too_complex(&sources),
+        dependency_cycles(&sources).unwrap(),
+        duplicated_blocks(&sources).unwrap(),
+        vague_names(&sources),
+    ]
 }
 
 /// A finding as these tests compare it: its path, line, rule and severity.
 type Found = (Option<String>, Option<u32>, String, String);
 
 /// Each finding of the parser checks on the change from HEAD to the working tree, every file in it tracked, by the
-/// default settings, in the order the gate runs the checks.
+/// default settings but for duplicated-blocks, which judges no file ([`without_copies`]), in the order the gate runs
+/// the checks.
 fn findings(repo: &Repo) -> Vec<gate::report::Finding> {
+    findings_by(repo, without_copies())
+}
+
+/// The default settings, but with every file exempt from duplicated-blocks: the tests of the other checks move and
+/// copy functions, which that check would report too.
+fn without_copies() -> Settings {
+    Settings { duplicates_exempt: gate::glob::Globs::new(&["**"]), ..Settings::default() }
+}
+
+/// Each finding of the parser checks on the change from HEAD to the working tree, every file in it tracked, by
+/// `settings`, in the order the gate runs the checks.
+fn findings_by(repo: &Repo, settings: Settings) -> Vec<gate::report::Finding> {
     repo.git(&["add", "-A"]);
-    let change = Change::from_tree(&repo.repo, "HEAD", Settings::default(), None).unwrap();
+    let change = Change::from_tree(&repo.repo, "HEAD", settings, None).unwrap();
     run_checks(&change).into_iter().flatten().collect()
 }
 
 /// The path, line, rule and severity of each of [`findings`].
 fn found(repo: &Repo) -> Vec<Found> {
+    found_by(repo, without_copies())
+}
+
+/// The path, line, rule and severity of each of [`findings_by`].
+fn found_by(repo: &Repo, settings: Settings) -> Vec<Found> {
     let place = |f: gate::report::Finding| {
         (f.path.as_ref().map(|p| p.to_string_lossy().into_owned()), f.line, f.rule, f.severity)
     };
-    findings(repo).into_iter().map(place).collect()
+    findings_by(repo, settings).into_iter().map(place).collect()
 }
 
 /// The changed expected value of tests/it.rs's `negative`, at its line 5, as the check finds it beside a change to
@@ -297,13 +324,14 @@ fn a_dependency_cycle_the_base_has_under_a_name_the_change_gives_a_file_is_not_f
 fn the_checks_run_in_the_gate_s_order_one_list_each() {
     let repo = package(&[]);
     let change = Change::from_tree(&repo.repo, "HEAD", Settings::default(), None).unwrap();
-    assert_eq!(run_checks(&change), vec![vec![], vec![], vec![], vec![]]);
-    // A new fn over the limit, and a vague name, beside a skip.
+    assert_eq!(run_checks(&change), vec![vec![], vec![], vec![], vec![], vec![]]);
+    // A new fn over the limit, whose 16 ifs of one shape repeat each other, and a vague name, beside a skip.
     let ifs: String = (0..16).map(|k| format!("    if x == {k} {{\n        x += {k};\n    }}\n")).collect();
     repo.put("crate/src/big.rs", format!("pub fn big(mut x: u32) -> u32 {{\n{ifs}    let info = x;\n    info\n}}\n").as_bytes());
     edit(&repo, "crate/tests/it.rs", "#[test]\nfn negative", "#[test]\n#[ignore]\nfn negative");
-    let rules: Vec<String> = found(&repo).into_iter().map(|(_, _, rule, _)| rule).collect();
-    assert_eq!(rules, ["test-integrity skip", "cognitive-complexity over-limit", "vague-names vague-name"]);
+    let rules: Vec<String> = found_by(&repo, Settings::default()).into_iter().map(|(_, _, rule, _)| rule).collect();
+    let order = ["test-integrity skip", "cognitive-complexity over-limit", "duplicated-blocks"];
+    assert_eq!(rules, [&order[..], &["vague-names vague-name"]].concat());
 }
 
 #[test]
@@ -811,12 +839,14 @@ fn go_of_a_go_module_gets_each_parser_check_s_findings() {
     let repo = go_module("go.mod", &[]);
     change_go(&repo);
     let found: Vec<(Option<String>, Option<u32>, String)> =
-        found(&repo).into_iter().map(|(path, line, rule, _)| (path, line, rule)).collect();
+        found_by(&repo, Settings::default()).into_iter().map(|(path, line, rule, _)| (path, line, rule)).collect();
     let at = |path: &str, line: u32, rule: &str| (Some(path.to_string()), Some(line), rule.to_string());
     assert_eq!(found, [
         at("calc_test.go", 6, "test-integrity skip"),
         at("calc_test.go", 7, "test-integrity expected-value-changed"),
         at("big.go", 3, "cognitive-complexity over-limit"),
+        // big.go's ifs, all of one shape, repeat each other.
+        at("big.go", 4, "duplicated-blocks"),
         at("big.go", 52, "vague-names vague-name"),
     ]);
 }
@@ -872,4 +902,66 @@ fn vendored_generated_or_symlinked_go_is_not_read_but_is_code_under_test_and_tes
         let found: Vec<_> = found(&repo).into_iter().map(|(path, line, rule, _)| (path, line, rule)).collect();
         assert_eq!(found, expected, "{path}");
     }
+}
+
+/// A Python function of 55 tokens, over the default `min-tokens`; `total` in it stands for its name only.
+const TOTAL: &str = "\
+def total(prices, wanted):
+    sum_ = 0
+    for name in wanted:
+        if name in prices and prices[name] > 0:
+            sum_ += prices[name] * 2
+        else:
+            print('missing', name)
+    sum_ = round(sum_, 2)
+    return sum_
+";
+
+/// The duplicated-blocks findings, (path, line, the place the message names), on the change from HEAD to the
+/// working tree, every file in it tracked, by `settings`.
+fn copies(repo: &Repo, settings: Settings) -> Vec<(String, u32, String)> {
+    repo.git(&["add", "-A"]);
+    let change = Change::from_tree(&repo.repo, "HEAD", settings, None).unwrap();
+    let other = |message: &str| message.split('`').nth(1).unwrap().to_string();
+    let found = duplicated_blocks(&Sources::read(&change).unwrap()).unwrap();
+    found.iter().map(|f| (f.path.clone().unwrap().into_string().unwrap(), f.line.unwrap(), other(&f.message))).collect()
+}
+
+#[test]
+fn a_copied_function_with_its_names_changed_is_a_finding_to_weigh() {
+    let repo = Repo::with(&[("shop/prices.py", TOTAL.as_bytes())]);
+    let copy = TOTAL.replace("total", "weight").replace("prices", "masses").replace("'missing'", "'unknown'");
+    repo.put("scale/weights.py", format!("import os\n\n\n{copy}").as_bytes());
+    assert_eq!(copies(&repo, Settings::default()), [("scale/weights.py".into(), 4, "shop/prices.py:1".into())]);
+    let found = found_by(&repo, Settings::default());
+    assert_eq!(found, [(Some("scale/weights.py".into()), Some(4), "duplicated-blocks".into(), "warning".into())]);
+}
+
+#[test]
+fn a_copied_block_shorter_than_min_tokens_is_not_found() {
+    let short = "def total(prices):\n    return sum(p * 2 for p in prices.values() if p > 0)\n";
+    let repo = Repo::with(&[("a.py", short.as_bytes())]);
+    repo.put("b.py", short.replace("total", "weight").as_bytes());
+    assert_eq!(copies(&repo, Settings::default()), []);
+    let settings = Settings { duplicates_min_tokens: 10, ..Settings::default() };
+    assert_eq!(copies(&repo, settings), [("b.py".into(), 1, "a.py:1".into())]);
+}
+
+#[test]
+fn a_block_the_change_adds_twice_is_found_once() {
+    let repo = Repo::with(&[("README.md", b"x\n")]);
+    repo.put("a.py", TOTAL.as_bytes());
+    repo.put("b.py", TOTAL.replace("total", "weight").as_bytes());
+    assert_eq!(copies(&repo, Settings::default()), [("b.py".into(), 1, "a.py:1".into())]);
+}
+
+#[test]
+fn an_exempt_file_is_neither_judged_nor_matched() {
+    let repo = Repo::with(&[("tests/test_prices.py", TOTAL.as_bytes())]);
+    repo.put("prices.py", TOTAL.as_bytes());
+    repo.put("tests/test_more.py", TOTAL.as_bytes());
+    assert_eq!(copies(&repo, Settings::default()), []);
+    let settings = Settings { duplicates_exempt: gate::glob::Globs::new(&[] as &[&str]), ..Settings::default() };
+    let found: Vec<String> = copies(&repo, settings).into_iter().map(|(path, _, _)| path).collect();
+    assert_eq!(found, ["prices.py", "tests/test_more.py"]);
 }

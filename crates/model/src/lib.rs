@@ -242,3 +242,27 @@ pub fn first_line(text: &str) -> String {
     out.push('…');
     out
 }
+
+/// One token of a file's code as the duplicated-blocks check compares it, its language's front end having left out
+/// comments and imports. Two runs of tokens with equal shapes are the same code but for the names and literals in
+/// them: a name stands for what kind of name it is, a literal for what kind of literal, and every other token for
+/// its own text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct CodeToken {
+    /// Equal for two tokens the check takes for the same, as a 64-bit hash: different shapes are different tokens,
+    /// but for the rare collision.
+    pub shape: u64,
+    /// The line, from 1, the token starts on.
+    pub line: u32,
+}
+
+/// The [`CodeToken::shape`] of a token written as `text` after normalising: 64-bit FNV-1a
+/// (<http://www.isthe.com/chongo/tech/comp/fnv/>), so that each front end gives one text one shape.
+pub fn token_shape(text: &str) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in text.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}

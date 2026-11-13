@@ -9,6 +9,7 @@ use std::path::Path;
 use model::{Binding, Function, Lines, SourceFile, Unreadable};
 use tree_sitter::{Node, Parser, Tree};
 
+mod code_tokens;
 mod binds;
 mod decode;
 mod flow;
@@ -18,6 +19,7 @@ mod testing;
 mod units;
 
 use binds::{binds, type_parameters, How};
+pub use code_tokens::code_tokens;
 pub use imports::imports;
 pub use units::{header_ends_outside, units, Statement, Unit};
 

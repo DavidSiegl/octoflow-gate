@@ -6,12 +6,14 @@ use std::collections::{BTreeSet, HashMap};
 use model::{first_line, Function, Lines, SourceFile, Unreadable};
 use tree_sitter::{Node, Parser};
 
+mod code_tokens;
 mod binds;
 mod constraint;
 mod flow;
 mod syntax;
 mod testing;
 
+pub use code_tokens::code_tokens;
 use flow::Call;
 use syntax::{doc_line, end_line, function_name, line, named, receiver_name, receiver_type, Text};
 

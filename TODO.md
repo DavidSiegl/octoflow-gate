@@ -165,7 +165,9 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   `crates/lang-python/src/syntax.rs` and `crates/lang-go/src/syntax.rs` each have their own `named`, `children`, line
   numbering, a token digest (FNV-1a) and a `first_error`, and the digests must agree with what the checks compare only
   within a language, so nothing breaks; but a fix to one is a fix to three. Found with go-support/01 (2026-11-11), which
-  followed the two front ends before it. Closes with a small crate of the shared helpers that the three depend on.
+  followed the two front ends before it. structural-checks/03 added one more: each front end's `code_tokens` walks its
+  tree the same way, but for which kinds are literals, imports and test code. Closes with a small crate of the shared
+  helpers that the three depend on.
 - **`NEWEST_RELEASE` is raised by hand with each Go release.** A release tag in a test file's `//go:build` counts as set
   only up to `NEWEST_RELEASE` in `crates/lang-go/src/constraint.rs`, `go1.27`, so a test file naming a later release's
   tag is a failing `skip` rather than a `platform-only` finding to weigh. Go 1.28's release candidates already set
@@ -188,8 +190,10 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   2026-11-12): "Every untouched file's bytes are cloned into `base` and each tree is parsed in full by `imports`, so a
   one-line change parses the repository's whole `.py`/`.rs` set twice; `git ls-files -z` repeats `judge_change`'s
   listing, and the base side reruns `ls-tree`/`cat-file` for files `Stored` already read" (`trees` in
-  `crates/gate/src/parser_checks.rs`). Closes with an untouched file's imports read once for both sides, and the
-  listing and the base's files taken from what the gate already read.
+  `crates/gate/src/parser_checks.rs`). duplicated-blocks (structural-checks/03) lists and reads the working tree's
+  files of each language a third time, and parses them once more (`duplicated_blocks`, same file). Closes with an
+  untouched file's imports read once for both sides, the listing and the base's files taken from what the gate
+  already read, and each working-tree file read once for both checks.
 - **lang-rust reads an item's outer attributes two ways.** As cross-review 24 put it (F7, 2026-11-12): `path_attribute`
   (`crates/lang-rust/src/imports.rs`) "looks back through siblings, the pattern e7f9115 removed for test detection",
   via `syntax::preceding_attributes`, while `walk_children` passes each item's attributes as it walks them. Closes with

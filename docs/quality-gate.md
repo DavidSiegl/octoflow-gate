@@ -680,8 +680,9 @@ counts where a line the change adds to a `.rs` file binds it, by any kind of bin
 underscore rule is a name whose last CamelCase word is one of the words, such as `RunInfo`, `StateManager` or
 `HTTPStatus`, but not `InfoStore`. A constant in capitals, as MAX_VALUE, ends in a word after an underscore, so the
 Python rule catches it. The name and parameters of each `fn` of an `impl Trait for T` are skipped, as `@override` is
-in Python, since the trait fixes them; what such a `fn`'s body binds is still read, as is every `fn` of an inherent
-`impl`. A `.rs` file that does not parse is a `not-read` finding at the line the parser stopped at.
+in Python, since the trait fixes them, and so is the name of each `type` and `const` it holds, as serde's `type Value`;
+what such a `fn`'s body binds is still read, as is every item of an inherent `impl`. A `.rs` file that does not parse
+is a `not-read` finding at the line the parser stopped at.
 
 Go is read the same way, in a Go module's `.go` files, tests included, with Rust's CamelCase rule, since Go names in
 MixedCaps (`runInfo`, `StateManager`): a name counts where an added line binds it by `:=` (in a statement, an

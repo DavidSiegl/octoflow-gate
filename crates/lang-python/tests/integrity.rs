@@ -352,7 +352,7 @@ fn adjacent_f_strings_split_elsewhere_are_no_changed_value_and_ones_of_other_tex
 }
 
 #[test]
-fn a_literal_s_sign_or_what_holds_it_changed_is_a_changed_value() {
+fn a_literal_s_sign_or_what_holds_it_is_part_of_the_literal() {
     let path = "tests/test_s.py";
     let edit = |old: &str, new: &str| {
         let base = format!("def test_s():\n    assert f() == {old}\n");

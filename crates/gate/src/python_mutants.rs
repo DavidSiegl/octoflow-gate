@@ -466,14 +466,10 @@ fn on_copy(
             Err(_) => {}
         }
         mark_for_mutmut(copy.tree, functions).map_err(|e| start(&e))?;
-        // mutmut runs pytest in the copy's mutants/, with --rootdir=. and these after its own arguments. Without
-        // -c, pytest looks for its configuration in each directory above, up to one that another account may write
-        // to when the project has none; --confcutdir keeps it from importing a conftest.py from above mutants/. The
-        // project's own configuration is read from mutmut's copy of it in mutants/, which also_copy makes, since
-        // pytest takes paths in it, such as pythonpath, from where it is: there they name the mutated code.
+        // One configuration for all of mutmut's pytest runs, as it takes one pytest_add_cli_args.
         let places = test_places(copy.tree, table, recorded);
         let groups = pytest::groups(copy.python, copy.tree, tmp, &places).map_err(|e| start(&e))?;
-        let mut config = match &groups[..] {
+        let config = match &groups[..] {
             [group] => group.setup.inifile.clone(),
             _ => return Err(several_configurations(&groups)),
         };
@@ -492,23 +488,7 @@ fn on_copy(
                 Narrowed::Not(why) => out.push(not_narrowed(&why)),
             }
         }
-        let mut given = table.clone();
-        if let Ok(in_tree) = config.strip_prefix(copy.tree).map(Path::to_path_buf) {
-            let mut also_copy = strings(&table, "also_copy");
-            also_copy.push(utf8(&in_tree).map_err(|e| start(&e))?);
-            set_strings(&mut given, "also_copy", also_copy);
-            // mutmut copies also_copy's files before the directories it copies by default, tests/ among them, and
-            // makes no directory for a file.
-            if let Some(dir) = in_tree.parent() {
-                std::fs::create_dir_all(state.join(dir)).map_err(|e| start(&e))?;
-            }
-            config = state.join(in_tree);
-        }
-        let mut args = strings(&table, "pytest_add_cli_args");
-        args.extend(["-c".to_string(), utf8(&config).map_err(|e| start(&e))?]);
-        args.extend(["--confcutdir".to_string(), utf8(&state).map_err(|e| start(&e))?]);
-        set_strings(&mut given, "pytest_add_cli_args", args);
-        use_mutmut_table(copy.tree, &given)?;
+        give_mutmut(copy, &table, &config)?;
         Ok(Some(table))
     })();
     let ran = set_up.and_then(|table| match table {
@@ -524,6 +504,38 @@ fn on_copy(
         Err(problem) => out.push(not_run(&problem)),
     }
     out
+}
+
+/// Puts `table`, a `[tool.mutmut]`, in place of the one in the pyproject.toml of `copy`, with what makes mutmut's
+/// pytest runs take `config`, a configuration file in the copy or beside it, with `-c`, and no conftest.py from above
+/// its state, mutants/, with `--confcutdir`. A `config` in the copy goes into mutmut's state by also_copy, and is
+/// given from there, so that paths in it, such as pythonpath, name the mutated code. Errs with the problem, a
+/// clause, when a path is not UTF-8, the directory for `config` in the state cannot be made, or the table cannot be
+/// put in place ([`use_mutmut_table`]).
+fn give_mutmut(copy: &TreeCopy, table: &Table, config: &Path) -> Result<(), String> {
+    let start = |e: &dyn std::fmt::Display| format!("could not start mutmut: {e}");
+    let state = copy.state();
+    let mut given = table.clone();
+    let mut config = config.to_path_buf();
+    if let Ok(in_tree) = config.strip_prefix(copy.tree).map(Path::to_path_buf) {
+        let mut also_copy = strings(table, "also_copy");
+        also_copy.push(utf8(&in_tree).map_err(|e| start(&e))?);
+        set_strings(&mut given, "also_copy", also_copy);
+        // mutmut copies also_copy's files before the directories it copies by default, tests/ among them, and makes
+        // no directory for a file.
+        if let Some(dir) = in_tree.parent() {
+            std::fs::create_dir_all(state.join(dir)).map_err(|e| start(&e))?;
+        }
+        config = state.join(in_tree);
+    }
+    // mutmut runs pytest in mutants/ with --rootdir=. and these after its own arguments. Without -c, pytest looks
+    // for its configuration in each directory above, up to one that another account may write to when the project
+    // has none.
+    let mut args = strings(table, "pytest_add_cli_args");
+    args.extend(["-c".to_string(), utf8(&config).map_err(|e| start(&e))?]);
+    args.extend(["--confcutdir".to_string(), utf8(&state).map_err(|e| start(&e))?]);
+    set_strings(&mut given, "pytest_add_cli_args", args);
+    use_mutmut_table(copy.tree, &given)
 }
 
 /// The paths in `tree`, a copy of a tree, that pytest under mutmut starts from to find its configuration, for

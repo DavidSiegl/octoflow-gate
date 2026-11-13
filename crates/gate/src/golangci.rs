@@ -11,9 +11,10 @@
 //!
 //! It runs `golangci-lint run ./...` in each module's directory, within process::TOOL_TIMEOUT, which builds what the
 //! packages need with the go tool, from its build and module caches, and may download the modules they use. Another
-//! golangci-lint running on the machine, as another gate's on a CI agent with two executors does, makes it wait for
-//! that one's lock (`--allow-serial-runners`), its wait counted in the timeout: golangci-lint otherwise exits with
-//! "parallel golangci-lint is running", a failed condition that says nothing about the change.
+//! golangci-lint running with the same TMPDIR, where golangci-lint keeps its lock, as another gate's does on a CI
+//! agent whose executors share one, makes it wait for that one's lock (`--allow-serial-runners`), its wait counted in
+//! the timeout: golangci-lint otherwise exits with "parallel golangci-lint is running", a failed condition that says
+//! nothing about the change.
 
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStrExt;

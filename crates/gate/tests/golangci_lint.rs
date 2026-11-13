@@ -49,7 +49,7 @@ fn a_finding_on_an_added_line_is_an_issue() {
 
 /// Whether a process named golangci-lint runs with `dir` as its working directory, as /proc shows.
 fn golangci_lint_runs_in(dir: &Path) -> bool {
-    let Ok(processes) = std::fs::read_dir("/proc") else { return false };
+    let processes = std::fs::read_dir("/proc").expect("listing /proc for golangci-lint's process");
     processes.flatten().any(|process| {
         let comm = std::fs::read(process.path().join("comm")).unwrap_or_default();
         comm == b"golangci-lint\n" && std::fs::read_link(process.path().join("cwd")).is_ok_and(|cwd| cwd == dir)
@@ -69,28 +69,39 @@ fn another_golangci_lint_running_makes_it_wait_not_fail() {
     // Held for ten seconds from when the gate's golangci-lint is seen in the module, or until the gate is done.
     // golangci-lint takes the lock seconds into its run, after loading the packages, and one that waits for it shows
     // nothing of that, holding no descriptor of the file between tries; one that fails on it fails within the ten.
-    let module = repo.repo.join("calc");
+    // The holder answers whether it held the lock for all ten seconds with the gate still running, the one sign that
+    // the gate met the lock; returning early drops the file, which lets the lock go.
+    let module = repo.repo.join("calc").canonicalize().unwrap();
     let gate_done = Arc::new(AtomicBool::new(false));
     let holder = std::thread::spawn({
         let gate_done = Arc::clone(&gate_done);
         move || {
-            while !gate_done.load(Ordering::SeqCst) && !golangci_lint_runs_in(&module) {
+            let seen_by = Instant::now() + Duration::from_secs(120);
+            while !golangci_lint_runs_in(&module) {
+                if gate_done.load(Ordering::SeqCst) || Instant::now() > seen_by {
+                    return Err("no golangci-lint was seen in calc/ while the gate ran, within two minutes");
+                }
                 std::thread::sleep(Duration::from_millis(20));
             }
             let deadline = Instant::now() + Duration::from_secs(10);
-            while !gate_done.load(Ordering::SeqCst) && Instant::now() < deadline {
+            while Instant::now() < deadline {
+                if gate_done.load(Ordering::SeqCst) {
+                    return Err("the gate was done within ten seconds of its golangci-lint starting");
+                }
                 std::thread::sleep(Duration::from_millis(20));
             }
             lock.unlock().unwrap();
+            Ok(())
         }
     });
     let done = repo.gate_command("HEAD").env("TMPDIR", &tmp).output().unwrap();
     gate_done.store(true, Ordering::SeqCst);
-    holder.join().unwrap();
+    let held = holder.join().unwrap();
     let out = String::from_utf8(done.stdout).unwrap();
     assert!(!out.contains("parallel golangci-lint is running"), "{out}");
     assert_eq!(done.status.code(), Some(1), "{out}");
     assert!(out.contains("1. `calc/calc.go:12` error golangci-lint errcheck: "), "{out}");
+    assert_eq!(held, Ok(()), "{out}");
 }
 
 #[test]

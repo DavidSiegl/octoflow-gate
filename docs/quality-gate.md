@@ -83,8 +83,9 @@ compile is a failed condition naming the type checker's first error, as clippy's
 the package clause, on no line the change added. A module with no Go file of its own, its code all in modules nested
 in it, has nothing to lint (exit status 5). A run that exits with any other status but 0 or 1, or prints no JSON
 report, as for a configuration it cannot read, is a failed condition quoting what it said. Another golangci-lint
-running on the machine, as another gate's on a CI agent with two executors, makes it wait for that one to finish,
-within its timeout, rather than fail with "parallel golangci-lint is running".
+running with the same `TMPDIR`, where golangci-lint keeps its lock, as another gate's on a CI agent whose executors
+share one, makes it wait for that one to finish, within its timeout, rather than fail with "parallel golangci-lint is
+running".
 
 The gate runs each linter as a process, found on `PATH`. In this repository ruff, mypy and pymarkdownlnt are in uv's
 `dev` group, and `scripts/gate` starts the gate with `uv run`, which puts them there; shellcheck, actionlint, cargo

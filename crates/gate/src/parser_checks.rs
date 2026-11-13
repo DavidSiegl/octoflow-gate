@@ -40,13 +40,13 @@ impl<'a> Sources<'a> {
         let settings = &change.settings;
         // A file is a Python test file by either of its paths, so that a rename into or out of the tests loses none
         // of them unseen.
-        let python_tests = |path: &OsStr, other: Option<&OsStr>| {
+        let python_tests = |path: &OsStr, other: Option<&OsStr>, _| {
             python_test(settings, path) || other.is_some_and(|o| python_test(settings, o))
         };
         let (python, bases_not_python) = stored.files(&PYTHON, &python_tests)?;
         let mut rust = RustChange::of(change, stored.gone.clone())?;
-        rust.files = stored.files(&RUST, &|path, _| rust.among_tests(path))?.0;
-        let (go, _) = stored.files(&GO, &|path, _| lang_go::among_tests(path.as_bytes()))?;
+        rust.files = stored.files(&RUST, &|path, _, at_base| rust.among_tests(path, at_base))?.0;
+        let (go, _) = stored.files(&GO, &|path, _, _| lang_go::among_tests(path.as_bytes()))?;
         Ok(Sources {
             change,
             python: PythonChange { change, files: python, bases_not_python },
@@ -139,9 +139,11 @@ pub struct RustChange<'a> {
     pub files: Vec<ChangedFile>,
     /// The base paths the change deletes or renames, where a Cargo.toml may have stood.
     gone: HashSet<PathBuf>,
-    /// The paths of the tree's .rs files that only test code takes in (lang_rust::test_modules), at the base or in
-    /// the working tree; none when the change touches no .rs path.
-    test_modules: HashSet<OsString>,
+    /// The paths of the base's .rs files that only test code takes in (lang_rust::test_modules); none when the
+    /// change touches no .rs path.
+    test_modules_at_base: HashSet<OsString>,
+    /// The same of the working tree's .rs files.
+    test_modules_now: HashSet<OsString>,
 }
 
 impl<'a> RustChange<'a> {
@@ -149,37 +151,40 @@ impl<'a> RustChange<'a> {
     /// reads by [`RustChange::among_tests`]. Errs when git cannot list the tree's files or show one at the base, or
     /// one cannot be read in the working tree.
     fn of(change: &'a Change, gone: HashSet<PathBuf>) -> Result<RustChange<'a>, Unjudged> {
-        let mut test_modules = HashSet::new();
+        let (mut test_modules_at_base, mut test_modules_now) = (HashSet::new(), HashSet::new());
         if any_path(change, |path| path.as_bytes().ends_with(b".rs")) {
             let (base, now) = trees(change, b".rs")?;
-            test_modules.extend(lang_rust::test_modules(&base));
-            test_modules.extend(lang_rust::test_modules(&now));
+            test_modules_at_base = lang_rust::test_modules(&base);
+            test_modules_now = lang_rust::test_modules(&now);
         }
-        Ok(RustChange { change, files: vec![], gone, test_modules })
+        Ok(RustChange { change, files: vec![], gone, test_modules_at_base, test_modules_now })
     }
 
-    /// Whether the .rs file at `path`, on either side of the change, is among Rust's tests as a whole: gate.toml's
-    /// `test-files.rust` matches it, or, at the base or in the working tree, only test code takes it in, by a
-    /// `#[cfg(test)] mod name;` as lang_rust::test_modules says.
-    pub fn among_tests(&self, path: &OsStr) -> bool {
-        self.change.settings.rust_tests.matches(path) || self.test_modules.contains(path)
+    /// Whether the file at `path`, at the base when `at_base` and in the working tree otherwise, is among Rust's tests
+    /// as a whole: gate.toml's `test-files.rust` matches it, or it is a .rs file only test code takes in there, as
+    /// lang_rust::test_modules says. So a file whose `#[cfg(test)]` the change adds or removes is read as test code
+    /// on one side only.
+    pub fn among_tests(&self, path: &OsStr, at_base: bool) -> bool {
+        let test_modules = if at_base { &self.test_modules_at_base } else { &self.test_modules_now };
+        self.change.settings.rust_tests.matches(path) || test_modules.contains(path)
     }
 
     /// Whether `path`, on either side of the change, is Rust code under test: a .rs file of a Cargo package
-    /// ([`in_project`]) that is not among the tests as a whole ([`RustChange::among_tests`]), which the change
-    /// adds, deletes, renames or edits outside its test code ([`integrity::edits_code`]). A path no file was read at,
-    /// as a symlink's, counts as edited.
+    /// ([`in_project`]) that `test-files.rust` does not match, which the change adds, deletes, renames or edits
+    /// outside its test code ([`integrity::edits_code`]), unless it is among the tests whole on each side it has
+    /// ([`RustChange::among_tests`]). A path no file was read at, as a symlink's, counts as edited.
     pub fn is_code(&self, path: &OsStr) -> bool {
         let change = self.change;
         if !path.as_bytes().ends_with(b".rs")
-            || self.among_tests(path)
+            || change.settings.rust_tests.matches(path)
             || !in_project(change, &self.gone, path, CARGO_MANIFEST)
         {
             return false;
         }
         let at = |side: &Option<Side>| side.as_ref().is_some_and(|s| s.path == path);
+        let tests_whole = |f: &ChangedFile| [&f.before, &f.after].into_iter().flatten().all(|s| s.among_tests);
         let mut read = self.files.iter().filter(|f| at(&f.before) || at(&f.after)).peekable();
-        read.peek().is_none() || read.any(integrity::edits_code)
+        read.peek().is_none() || read.any(|f| !tests_whole(f) && integrity::edits_code(f))
     }
 
     /// Whether the change edits Rust code under test: whether a path on a side of one of its files [`is_code`].
@@ -469,23 +474,26 @@ impl<'a> Stored<'a> {
     /// Each file of the change that holds `language`'s source on a side, inside one of its projects where it has them
     /// ([`Language::project`]) and not generated ([`Language::generated`]), in the change's order, each such side read;
     /// and the base paths among them that held none of it by their name or first line, read all the same
-    /// ([`Language::base_of_any_name`]). `among_tests` says whether a side at `path`, whose other side, where the
-    /// change gives it one, is at `other`, is among the language's tests as a whole, and is read as test code. Errs
+    /// ([`Language::base_of_any_name`]). `among_tests(path, other, at_base)` says whether a side at `path`, the base's
+    /// when `at_base`, whose other side, where the change gives it one, is at `other`, is among the language's tests
+    /// as a whole, and is read as test code. Errs
     /// when git cannot show such a file at the base, or one cannot be read in the working tree.
     fn files(
         &self,
         language: &Language,
-        among_tests: &dyn Fn(&OsStr, Option<&OsStr>) -> bool,
+        among_tests: &dyn Fn(&OsStr, Option<&OsStr>, bool) -> bool,
     ) -> Result<(Vec<ChangedFile>, HashSet<OsString>), Unjudged> {
         let change = self.change;
-        let side = |path: &OsString, other: &Option<OsString>, source: &[u8]| {
-            let among_tests = among_tests(path, other.as_deref());
+        let side = |path: &OsString, other: &Option<OsString>, source: &[u8], at_base: bool| {
+            let among_tests = among_tests(path, other.as_deref(), at_base);
             Side { source: (language.read)(source, path, among_tests), path: path.clone(), among_tests }
         };
         let (mut out, mut bases_holding_none) = (vec![], HashSet::new());
         for file in &change.files {
             let after = match file.after.as_ref().filter(|path| regular_file(&change.root.join(path))) {
-                Some(path) => self.in_working_tree(path, language)?.map(|bytes| side(path, &file.before, &bytes)),
+                Some(path) => {
+                    self.in_working_tree(path, language)?.map(|bytes| side(path, &file.before, &bytes, false))
+                }
                 None => None,
             };
             let whatever_it_holds = language.base_of_any_name && after.is_some();
@@ -494,7 +502,7 @@ impl<'a> Stored<'a> {
                     if !holds {
                         bases_holding_none.insert(path.clone());
                     }
-                    side(path, &file.after, &blob)
+                    side(path, &file.after, &blob, true)
                 }),
                 None => None,
             };

@@ -125,8 +125,8 @@ pub struct Fn {
     pub attrs_line: u32,
     pub end: u32,
     pub attrs: Vec<Attr>,
-    /// The outer attributes written in its body, on its statements, expressions and the items it holds, those inside
-    /// the bodies of the fns it holds left out.
+    /// The attributes written in its body: its own inner ones, `#![...]`, and the outer ones on its statements,
+    /// expressions and the items it holds, with theirs; those inside the bodies of the fns it holds left out.
     pub body_attrs: Vec<Attr>,
     /// The assertion macros its body calls, those of the closures it holds included and of the fns it holds not.
     pub asserts: Vec<Assertion>,
@@ -158,7 +158,7 @@ pub struct Items {
     pub fns: Vec<Fn>,
     pub mods: Vec<Mod>,
     pub bindings: Vec<Binding>,
-    /// Every inner attribute, `#![...]`, wherever it is written.
+    /// Every inner attribute, `#![...]`, written outside the bodies of fns, which hold theirs ([`Fn::body_attrs`]).
     pub inner_attrs: Vec<Attr>,
     /// The lines of each item compiled only under `cfg(test)`, its outer attributes and doc comments included: one
     /// marked by a `cfg` whose predicate needs `test`, or an inline module whose body opens with such a `#![cfg]`.
@@ -207,12 +207,14 @@ impl Walk<'_> {
         match node.kind() {
             "function_item" | "function_signature_item" => self.function(node, text),
             "foreign_mod_item" | "macro_definition" => {}
-            "attribute_item" => {
-                if let (Some(i), Some(attr)) = (self.current_fn, attribute(node, text, self.lines)) {
-                    self.items.fns[i].body_attrs.push(attr);
+            "attribute_item" | "inner_attribute_item" => {
+                let attr = attribute(node, text, self.lines);
+                match self.current_fn {
+                    Some(i) => self.items.fns[i].body_attrs.extend(attr),
+                    None if node.kind() == "inner_attribute_item" => self.items.inner_attrs.extend(attr),
+                    None => {}
                 }
             }
-            "inner_attribute_item" => self.items.inner_attrs.extend(attribute(node, text, self.lines)),
             "mod_item" => self.module(node, text),
             "impl_item" => {
                 let compact = |n: Node| compact_tokens(n, text);
@@ -287,7 +289,7 @@ impl Walk<'_> {
     fn const_or_static(&mut self, node: Node, text: Text, assoc: bool) {
         let name = self.bind_name(node, text, false);
         if !assoc && self.holders.iter().all(|h| matches!(h, Holder::Mod(_))) {
-            let spelled = node.child_by_field_name("value").filter(|v| !calls(*v, text));
+            let spelled = node.child_by_field_name("value").filter(|v| !has_call(*v, text));
             let constant = spelled.map(|v| Constant {
                 name: name.clone(),
                 line: self.line(text, node),
@@ -1062,23 +1064,33 @@ fn reads(tree: Node, text: Text) -> Vec<String> {
 }
 
 /// Whether the expression `node` calls a fn or a macro, as [`Items::constants`] tells a call.
-fn calls(node: Node, text: Text) -> bool {
+fn has_call(node: Node, text: Text) -> bool {
     let mut pending = vec![node];
     while let Some(node) = pending.pop() {
         match node.kind() {
             "macro_invocation" => return true,
-            "call_expression" => {
-                let callee = node.child_by_field_name("function").map(|f| text.of(f)).unwrap_or_default();
-                let last = callee.rsplit("::").next().unwrap_or_default();
-                if !last.starts_with(|c: char| c.is_uppercase()) {
-                    return true;
-                }
-            }
+            "call_expression" if !constructor(node, text) => return true,
             _ => {}
         }
         pending.extend(named(node));
     }
     false
+}
+
+/// Whether the call expression `node` calls a constructor, as [`Items::constants`] tells one: its callee is a path,
+/// as `Some` or `Shape::Circle`, turbofish arguments or not, whose last name starts with a capital. A method's call is
+/// none, whatever its receiver.
+fn constructor(node: Node, text: Text) -> bool {
+    let mut callee = node.child_by_field_name("function");
+    if let Some(generic) = callee.filter(|c| c.kind() == "generic_function") {
+        callee = generic.child_by_field_name("function");
+    }
+    let name = callee.and_then(|c| match c.kind() {
+        "identifier" => Some(c),
+        "scoped_identifier" => c.child_by_field_name("name"),
+        _ => None,
+    });
+    name.is_some_and(|name| text.of(name).starts_with(|c: char| c.is_uppercase()))
 }
 
 fn is_literal(node: Node) -> bool {

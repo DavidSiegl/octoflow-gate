@@ -379,9 +379,7 @@ fn f(x: Result<u8, ()>) -> Result<u8, ()> {
 
 #[test]
 fn a_fn_is_judged_by_its_path_of_modules_impls_and_traits_but_not_in_a_test_module() {
-    // concat! keeps the cfg off the start of a line, where the gate reads it as a skip added to this test's body
-    // (#47).
-    let scores = scores_of(concat!(r#"
+    let scores = scores_of(r#"
 fn free() {}
 trait Shape { fn declared(&self); fn defaulted(&self) {} }
 impl<'a, T: Clone> std::fmt::Debug for Wrapper<'a, T> {
@@ -396,9 +394,10 @@ mod inner {
         fn checks() {}
     }
 }
-"#, "#[cfg(all(test, unix))]\n", r#"fn only_in_tests() {}
+#[cfg(all(test, unix))]
+fn only_in_tests() {}
 #[cfg(test)] mod one_line { fn on_its_first_and_last_line() {} }
-"#));
+"#);
     assert_eq!(
         scores,
         named(&[

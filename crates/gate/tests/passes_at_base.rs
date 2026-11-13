@@ -182,8 +182,8 @@ fn a_test_in_an_inline_module_of_a_file_the_change_edits_outside_it_is_not_run()
             Some("src/lib.rs".into()),
             Some(fn_line(&repo, "src/lib.rs", "doubles")),
             "not-run".into(),
-            "`tests::doubles` is in an inline `#[cfg(test)]` module of a file the change also edits outside it, so \
-             it cannot be run apart from the code it tests, at the base."
+            "`tests::doubles` is in a file whose code the change also edits outside its `#[cfg(test)]` items, so it \
+             cannot be run apart from the code it tests, at the base."
                 .into(),
         ),
         (

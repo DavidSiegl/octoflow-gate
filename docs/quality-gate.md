@@ -167,15 +167,17 @@ It reads Python, Rust and Go, and golden files whatever their language; another 
 **Rust tests** it reads as [reading the source](#reading-the-source) says. A Rust test is a `fn` with an
 attribute whose path ends in the segment `test`, as `#[test]` and `#[tokio::test]` (not `#[rstest]`), in a `.rs` file of
 Rust's test files, by default under a `tests` directory or named `tests.rs`, or in a file that only test code takes in,
-or anywhere inside an item marked as test code (`#[cfg(test)] mod tests { ... }`, or a `#[cfg(test)]` `fn` or `impl`)
-in any other `.rs` file, on either side of the change. A file only test code takes in is one that every `mod name;`
-declaring it is test code, as `#[cfg(test)] mod fakes;`, or lies in such a file, read across the tree's tracked `.rs`
-files at the base and in the working tree and resolved as rustc resolves it: `name.rs` or `name/mod.rs` beside the
-declaring file, or below the directory of its own name, or the file a `#[path = "..."]` names. A file with test items
+or anywhere inside an item marked as test code (any item marked `#[cfg(test)]`, as `mod tests { ... }`, a `fn`, an
+`impl` or a `const`) in any other `.rs` file, on either side of the change. A file only test code takes in is one that
+opens with `#![cfg(test)]`, or that every `mod name;` declaring it is test code, as `#[cfg(test)] mod fakes;`, or lies
+in such a file, resolved as rustc resolves it: `name.rs` or `name/mod.rs` beside the declaring file, or below the
+directory of its own name, or the file a `#[path = "..."]` names. The declarations are read across the tree's tracked
+`.rs` files on each side apart, so a change that adds or removes the `#[cfg(test)]` makes the file test code on one
+side only, and the lines it adds or removes on the side where it is code are code. A file with test items
 holds both: the check compares the tests inside them, and the rest of the file is code. Rust code
 outside the tests is any other `.rs` file in a directory that holds a `Cargo.toml`, or below one, `build.rs` included,
 and a change edits it when it adds, deletes or renames such a file, or adds or removes a line of it outside its
-`cfg(test)` modules; so a change to the tests of `lib.rs` alone edits no code. A
+test code; so a change to the tests of `lib.rs` alone edits no code. A
 test is known by its file and the names of the items that hold it, joined by `::`, as `tests::adds`; tests of one name
 in one file, as under two `cfg`s for two platforms, are each a test of its own, matched with the other side's in their
 order. The findings are Python's, read of Rust:
@@ -186,8 +188,9 @@ order. The findings are Python's, read of Rust:
   that is no longer Rust;
 - `skip`: an attribute added that skips a test or turns it off: `#[ignore]`, a `cfg` other than `cfg(test)` itself,
   `cfg(all(test, feature = "slow"))` included, which turns tests off as Python's `skipIf` does, or a `cfg_attr` that
-  writes `ignore`, as an argument after its predicate. It counts among a test's attributes; inside a test's body, on
-  a statement or an expression, where a `cfg` turns an assertion off; among the outer attributes of an inline module
+  writes `ignore`, as an argument after its predicate. It counts among a test's attributes, its body's inner ones,
+  `#![...]`, included; inside a test's body, on a statement or an expression, where a `cfg` turns an assertion off;
+  among the outer attributes of an inline module
   holding a test, those on its `mod` line included; and as an inner attribute, `#![...]`, inside such a module or
   anywhere in a file under `tests/`. A `cfg` on a helper `fn` is no skip, nor `#[cfg(test)]` on a new test module.
   The parser places each attribute, whole however it wraps, so one inside a string literal is none. Attributes that
@@ -208,17 +211,17 @@ order. The findings are Python's, read of Rust:
   `catch_unwind`, which throws away the panic or the `Err` that would fail the test. A parser knows no types, so a
   `Result` thrown away that holds neither, as `let _ = check();` or `check().ok();`, is not seen, since that is
   also how a test's cleanup ignores a failure, nor a `catch_unwind` whose result is bound to a name and never read;
-- `expected-value-changed`: a kept test's assertion, its macro and its shape the same, whose literals changed,
-  the assertions of the two sides aligned by macro and shape, in a change that also edits Rust code outside the
-  tests, on either side. An expected value held in a constant counts too, as Python's does: when a kept test's
-  assertions name a constant of its own file at the base and still name it, bare or by a path ending in it, as
-  `super::EXPECTED`, and its value changed other than in layout or comments, or it is no longer a constant, that is
-  one finding per constant and test, at the test's first assertion naming it. A constant is a `const` or `static`
-  outside any `fn`, `impl`, `trait` or other item but inline modules, whose name no other such item in the file binds,
-  and whose value calls no fn and no macro; a call of a path whose last name starts with a capital, as `Some(3)`, is a
-  constructor and counts. One the test binds again, as a `const` of the same name in its body, is not checked; nor is
-  one imported from another file, computed by a call, or built from another constant the change edits. A golden file
-  changed with Rust code is one such finding, as above;
+- `expected-value-changed`: a kept test's assertion, its macro and its shape the same, whose literals changed, the
+  assertions of the two sides aligned by macro and shape, in a change that also edits Rust code outside the tests, on
+  either side. An expected value held in a constant counts too, as Python's does: when a kept test's assertions name a
+  constant of its own file at the base and still name it, bare or by a path ending in it, as `super::EXPECTED`, and its
+  value changed other than in layout or comments, or it is no longer a constant, that is one finding per constant and
+  test, at the test's first assertion naming it. A constant is a `const` or `static` outside any `fn`, `impl`, `trait`
+  or other item but inline modules, whose name no other such item in the file binds, and whose value calls no fn and no
+  macro; a call of a path whose last name starts with a capital, as `Some(3)` or `Some::<i32>(3)`, is a constructor and
+  counts, and a method's call is a call whatever its receiver. One the test binds again, as a `const` of the same name
+  in its body, is not checked; nor is one imported from another file, computed by a call, or built from another constant
+  the change edits. A golden file changed with Rust code is one such finding, as above;
 - `unparsable`: a test file that does not parse in the working tree while its base held tests, at the line of the
   first token the parser could not place, failing the gate: those tests cannot be compared. One whose base held none
   has none to lose, as a fixture under `tests/` that is not Rust on purpose, and is not judged; nor is a base that
@@ -289,13 +292,13 @@ Rust is judged the same way, with the same limit, base and findings. A function 
 holds, in an `impl`, a `trait` or an inline module or not, named by them as `checks::Workflow<T>::poll`; a `fn` or
 closure inside it is part of it. Its lines start at its first outer attribute, doc comments included. Rust's tests are
 exempt as Python's are, where the spec of the Rust checks places them: by default every file in a directory named
-`tests`, at any depth, or named `tests.rs`, every file only test code takes in, as a `#[cfg(test)] mod fakes;` does
-(see "Rust tests" under test integrity), and every `fn` in an item marked `#[cfg(test)]`, an inline module, a `fn` or
-an `impl`. A `#[test]` `fn` outside those is judged. Each `if`, `else if`, `else`, `if let`, `match`, `loop`, `while`,
-`while let`, `for` and `let ... else` scores as Python's branches do; a `match` arm adds nothing, as a `switch`'s case
-does not in the paper; a run of `&&` and `||` is a sequence of boolean operators, a labelled `break` or `continue` a
-point, and `?` nothing. Recursion follows calls by path within the file: `f(...)`, `self.f(...)`, `Self::f(...)` and
-`Type::f(...)`, not `crate::f(...)` or a module's `m::f(...)`.
+`tests`, at any depth, or named `tests.rs`, every file only test code takes in, as a `#[cfg(test)] mod fakes;` does (see
+"Rust tests" under test integrity), and every `fn` in any item marked `#[cfg(test)]`, an inline module, a `fn` or an
+`impl` among them. A `#[test]` `fn` outside those is judged. Each `if`, `else if`, `else`, `if let`, `match`, `loop`,
+`while`, `while let`, `for` and `let ... else` scores as Python's branches do; a `match` arm adds nothing, as a
+`switch`'s case does not in the paper; a run of `&&` and `||` is a sequence of boolean operators, a labelled `break` or
+`continue` a point, and `?` nothing. Recursion follows calls by path within the file: `f(...)`, `self.f(...)`,
+`Self::f(...)` and `Type::f(...)`, not `crate::f(...)` or a module's `m::f(...)`.
 
 Go is judged the same way too, in the `.go` files of a Go module but its `_test.go` files, which are tests. A function
 is a function or method with a body, a method named by its receiver's type as `Stack.Push`; a `func` literal inside it
@@ -637,26 +640,25 @@ changed test, a `conftest.py` or a helper, is one `not-run` finding naming the p
 
 Rust's tests are judged the same way after Python's, with what is left of the one `--base-run-budget`, when the change
 edits Rust code outside the tests: a `.rs` file of a Cargo package that is not among Rust's tests (as for test
-integrity), edited outside its inline `#[cfg(test)]` modules, added, deleted or renamed. The changed tests are the
-tests, read as test integrity reads them, whose lines, attributes included, the change adds to or removes from. They run
-in a copy of the base made as above, with these files taken from the working tree: Rust's test files, the files that go
-with the tests (by default any file under a `tests` directory), and a `.rs` file the change edits only inside its
-`#[cfg(test)]` modules. A test in a `#[cfg(test)]` module of a file the change also edits outside it cannot be separated
-from the code it tests, and is a `not-run` finding at its `fn`. Each Cargo target the changed tests are in is built and
-run on its own, with `cargo nextest run --locked --no-fail-fast`, filtered to its tests (`-E 'test(=path::name)'`), in
-the copy's package directory, with a target directory and a nextest store outside the copy and the gate's own nextest
-configuration in place of the copy's. The target is found by Cargo's default places: the package is the nearest
-`Cargo.toml` above the file; `tests/x.rs`, and a file under a `tests/x/` that holds a `main.rs`, are the integration
-test `x`; `src/bin/x.rs` and a file under `src/bin/x/` likewise the binary `x`; `src/main.rs` the package's binary; any
-other file under `src/` a module of the library where `src/lib.rs` exists, else of the binaries. A file elsewhere, as a
-shared `tests/common/mod.rs`, is a `not-run` finding. A target whose tests do not compile at the base (rustc's `could
-not compile`) counts as failing there, which is what the check expects of a test that needs the change, and gives no
-finding: so a change that adds a function and a test file calling it is judged as one whose tests fail at the base. Any
-other cargo error, as a lock file `--locked` refuses, is a `not-run` finding. The findings are those above, `cargo
-nextest` in place of pytest; a test passes when every case nextest reports under its name passed, and a test it did not
-report, as one a `cfg` leaves out at the base, gives nothing. A test edited by removing its first attribute, as an
-`#[ignore]`, counts as edited. The target directory is new for every run, so each run compiles the package's
-dependencies anew, within the budget (see `TODO.md`).
+integrity), edited outside its test code, added, deleted or renamed. The changed tests are the tests, read as test
+integrity reads them, whose lines, attributes included, the change adds to or removes from. They run in a copy of the
+base made as above, with these files taken from the working tree: Rust's test files, the files that go with the tests
+(by default any file under a `tests` directory), and a `.rs` file the change edits only inside its test code. A test in
+a file the change also edits outside its test code cannot be separated from the code it tests, and is a `not-run`
+finding at its `fn`. Each Cargo target the changed tests are in is built and run on its own, with `cargo nextest run
+--locked --no-fail-fast`, filtered to its tests (`-E 'test(=path::name)'`), in the copy's package directory, with a
+target directory and a nextest store outside the copy and the gate's own nextest configuration in place of the copy's.
+The target is found by Cargo's default places: the package is the nearest `Cargo.toml` above the file; `tests/x.rs`, and
+a file under a `tests/x/` that holds a `main.rs`, are the integration test `x`; `src/bin/x.rs` and a file under
+`src/bin/x/` likewise the binary `x`; `src/main.rs` the package's binary; any other file under `src/` a module of the
+library where `src/lib.rs` exists, else of the binaries. A file elsewhere, as a shared `tests/common/mod.rs`, is a
+`not-run` finding. A target whose tests do not compile at the base (rustc's `could not compile`) counts as failing
+there, which is what the check expects of a test that needs the change, and gives no finding: so a change that adds a
+function and a test file calling it is judged as one whose tests fail at the base. Any other cargo error, as a lock file
+`--locked` refuses, is a `not-run` finding. The findings are those above, `cargo nextest` in place of pytest; a test
+passes when every case nextest reports under its name passed, and a test it did not report, as one a `cfg` leaves out at
+the base, gives nothing. A test edited by removing its first attribute, as an `#[ignore]`, counts as edited. The target
+directory is new for every run, so each run compiles the package's dependencies anew, within the budget (see `TODO.md`).
 
 **Vague names** lists the names a change binds that tell a reader nothing about what they hold: `data`, `info`, `value`,
 `status`, `handle` and `manager` (`VAGUE_WORDS` in `crates/checks`), or a name ending in one after an underscore, such
@@ -893,8 +895,8 @@ be misread.
 - every inline module, `mod name { ... }`, nested ones included, with its lines;
 - the lines of each item that is test code, nested ones included: an attribute of its own is `cfg(P)` with a `P` that
   holds only under `cfg(test)`, which is `test` itself or an `all(...)` with such a `P` among its arguments, or, for an
-  inline module, an inner one is. A `mod name;` that names another file is read across the tree, as "Rust tests"
-  under test integrity says;
+  inline module, an inner one is. A file that opens with such an inner attribute, and one only test code's
+  `mod name;` takes in, read across the tree, is test code whole, as "Rust tests" under test integrity says;
 - every name the file binds, with its line: the names of a `let`'s pattern, a `fn` and its parameters, a closure's
   parameters, the pattern of a `for`, of a `match` arm and of a `let` in an `if`'s or a `while`'s condition, a
   `struct`, `enum`, `union`, `trait`, type alias or associated type, a `const`, a `static`, and the new name of a

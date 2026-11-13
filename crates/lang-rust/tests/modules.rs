@@ -53,11 +53,26 @@ fn a_file_declared_by_test_code_and_by_code_alike_is_code_as_is_a_crate_root() {
 }
 
 #[test]
-fn a_declaration_in_a_file_that_opens_with_cfg_test_marks_its_file() {
+fn a_file_that_opens_with_cfg_test_is_test_code_with_the_files_it_declares() {
     let files = [
         ("src/lib.rs", "mod only;\n"),
         ("src/only.rs", "#![cfg(test)]\nmod deeper;\n"),
         ("src/only/deeper.rs", "pub fn d() {}\n"),
+        ("src/bin/check.rs", "#![cfg(test)]\nfn main() {}\n"),
     ];
-    assert_eq!(test_modules(&files), paths(&["src/only/deeper.rs"]));
+    assert_eq!(test_modules(&files), paths(&["src/only.rs", "src/only/deeper.rs", "src/bin/check.rs"]));
+}
+
+#[test]
+fn a_file_declared_by_test_code_first_and_by_code_after_is_code() {
+    // The test declaration of util.rs comes first, by #[path], and so does that of shared.rs, by both children.
+    let lib = "#[cfg(test)]\n#[path = \"util.rs\"]\nmod test_util;\nmod util;\n#[cfg(test)]\nmod a;\nmod b;\n";
+    let files = [
+        ("src/lib.rs", lib),
+        ("src/util.rs", "pub fn u() {}\n"),
+        ("src/a.rs", "#[path = \"shared.rs\"]\nmod shared;\n"),
+        ("src/b.rs", "#[path = \"shared.rs\"]\nmod shared;\n"),
+        ("src/shared.rs", "pub fn s() {}\n"),
+    ];
+    assert_eq!(test_modules(&files), paths(&["src/a.rs"]));
 }

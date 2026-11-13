@@ -392,6 +392,22 @@ fn a_file_a_cfg_test_mod_declaration_takes_in_is_test_code() {
 }
 
 #[test]
+fn a_file_the_change_takes_out_of_the_tests_is_code_in_the_working_tree() {
+    // lib.rs took fakes.rs in under `cfg(test)` at the base; the change takes it in as code and grows a fn there.
+    let ifs: String = (0..16).map(|k| format!("    if x == {k} {{\n        x += 1;\n    }}\n")).collect();
+    let repo = package(&[("crate/src/fakes.rs", "")]);
+    repo.put("crate/src/lib.rs", format!("#[cfg(test)]\nmod fakes;\n\n{LIB}").as_bytes());
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "--quiet", "-m", "fakes"]);
+    repo.put("crate/src/lib.rs", format!("mod fakes;\n\n{LIB}").as_bytes());
+    repo.put("crate/src/fakes.rs", format!("pub fn answer(mut x: u32) -> u32 {{\n{ifs}    x\n}}\n").as_bytes());
+    let rules: Vec<(String, Option<u32>, String)> =
+        found(&repo).into_iter().map(|f| (f.0.unwrap_or_default(), f.1, f.2)).collect();
+    let complexity = ("crate/src/fakes.rs".to_string(), Some(1), "cognitive-complexity over-limit".to_string());
+    assert!(rules.contains(&complexity), "{rules:?}");
+}
+
+#[test]
 fn a_test_file_that_is_not_utf_8_on_a_side_fails_the_gate_as_unreadable() {
     // Among the tests by its place: its base cannot be decoded, so the gate cannot tell which tests the change removes.
     let latin1 = [IT.as_bytes(), b"// caf\xe9\n"].concat();

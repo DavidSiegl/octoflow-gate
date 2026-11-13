@@ -178,8 +178,7 @@ fn an_inline_module_whose_tests_all_went_is_one_finding() {
 
 #[test]
 fn two_tests_of_one_name_are_two_tests() {
-    // Under cfgs that never hold together, as two platforms' versions of one test. Wrapped so that no line starts
-    // with a cfg, which the gate would read as a skip added to this test's body (#47).
+    // Under cfgs that never hold together, as two platforms' versions of one test.
     let twins = "#[cfg(unix)]\n#[test]\nfn twin() {\n    assert!(add(1, 1) == 2);\n}\n\n#[cfg(not(unix))]\n\
                  #[test]\nfn twin() {\n    assert!(add(2, 2) == 4);\n    assert!(add(0, 2) == 2);\n}\n";
     let base = format!("use tiny::add;\n\n{twins}");
@@ -245,6 +244,16 @@ fn a_platform_cfg_on_a_test_its_module_or_its_file_is_weighed_not_a_skip() {
 }
 
 #[test]
+fn an_inner_attribute_in_a_test_s_body_turns_the_test_off_whether_a_module_holds_it_or_not() {
+    let lib = "pub fn one() -> i32 {\n    1\n}\n\n#[cfg(test)]\n#[test]\nfn t() {\n    assert_eq!(one(), 1);\n}\n\n\
+               #[cfg(test)]\n#[test]\nfn u() {\n    assert_eq!(one(), 1);\n}\n";
+    let after = edit(lib, "fn t() {\n", "fn t() {\n    #![cfg(miri)]\n");
+    let after = edit(&after, "fn u() {\n", "fn u() {\n    #![cfg(unix)]\n");
+    let found = check(&[edited(LIB_PATH, lib, &after)]);
+    assert_eq!(wheres(&found), vec![at(LIB_PATH, Some(8), "skip"), at(LIB_PATH, Some(15), "platform-only")]);
+}
+
+#[test]
 fn a_platform_cfg_with_another_condition_or_inside_a_test_is_a_skip() {
     let it = edit(
         IT,
@@ -298,8 +307,7 @@ fn a_helper_removed_from_a_test_module_is_no_removed_test() {
 
 #[test]
 fn attributes_in_or_on_a_module_that_holds_no_test_are_not_skips() {
-    // Modules before and after the one holding the tests; the attributes are kept off the start of a line here, as
-    // the gate would read them as skips added to this test (#47).
+    // Modules before and after the one holding the tests.
     let base = edit(LIB, "\n#[cfg(test)]", "\nmod before {\n    pub fn x() {}\n}\n\n#[cfg(test)]");
     let base = format!("{base}\nmod after {{\n    pub fn y() {{}}\n}}\n");
     let inner = "    #![cfg(feature = \"slow\")]\n";
@@ -424,6 +432,22 @@ fn a_const_that_calls_is_bound_twice_or_is_shadowed_by_the_test_is_not_followed(
     let shadowed = |text: &str| edit(text, "fn adds_large() {\n", "fn adds_large() {\n        const EXPECTED: i32 = 30;\n");
     let edited_shadowed = edit(&shadowed(&code), "const EXPECTED: i32 = 30;", "const EXPECTED: i32 = 31;");
     assert_eq!(check(&[edited(LIB_PATH, &shadowed(HELD), &edited_shadowed)]), vec![]);
+}
+
+#[test]
+fn a_constructor_is_a_path_with_a_capital_and_a_method_call_on_a_constant_is_a_call() {
+    let code = edit(HELD, "    a + b\n", "    a + b + 1\n");
+    let with =
+        |text: &str, expr: &str| edit(text, "const EXPECTED: i32 = 30;", &format!("const EXPECTED: i32 = {expr};"));
+    // A method called on a capitalized receiver calls it.
+    let found = check(&[edited(LIB_PATH, &with(HELD, "LIMIT.min(30)"), &with(&code, "LIMIT.min(31)"))]);
+    assert_eq!(found, vec![]);
+    // Turbofish arguments leave a constructor one.
+    let wrapped = |text: &str, n: u32| {
+        edit(text, "const EXPECTED: i32 = 30;", &format!("const EXPECTED: Option<i32> = Some::<i32>({n});"))
+    };
+    let found = check(&[edited(LIB_PATH, &wrapped(HELD, 30), &wrapped(&code, 31))]);
+    assert_eq!(wheres(&found), vec![at(LIB_PATH, Some(20), "expected-value-changed")]);
 }
 
 #[test]

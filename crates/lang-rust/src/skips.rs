@@ -8,17 +8,21 @@ use model::{first_line, Lines, Weakening, WeakeningKind};
 use crate::syntax::{Attr, Fn, Mod};
 
 /// The skips in a Rust file, one for each line an attribute [`skipping`] matches starts on: an attribute of one of
-/// `tests`, its own or one written in its body; an outer attribute of a module of `holding`, the inline modules that
-/// hold a test; or one of `inner`, the file's inner attributes, `#![...]`, inside such a module, or anywhere in the file
-/// when `among_tests` places it among the tests. A cfg naming only platforms ([`platform_only`]) is a platform-only
-/// weakening instead, but never in a test's body: there it turns an assertion off on a platform where the test still
-/// runs. A line with any other skip on it is a skip.
+/// `tests`, its own or one written in its body (syntax::Fn::body_attrs); an outer attribute of a module of `holding`,
+/// the inline modules that hold a test; or one of `inner`, the file's inner attributes, `#![...]`, inside such a
+/// module, or anywhere in the file when `among_tests` places it among the tests. A cfg naming only platforms
+/// ([`platform_only`]) is a platform-only weakening instead, but never on a statement or item in a test's body: there
+/// it turns an assertion off on a platform where the test still runs. A line with any other skip on it is a skip.
 pub fn skips(tests: &[&Fn], holding: &[&Mod], inner: &[Attr], among_tests: bool) -> Vec<Weakening> {
     let inside = |line: u32| among_tests || holding.iter().any(|m| m.line <= line && line <= m.end);
     // Each attribute judged, and whether a platform-only cfg is weighed there rather than a skip.
     let judged = tests
         .iter()
-        .flat_map(|t| t.attrs.iter().map(|a| (a, true)).chain(t.body_attrs.iter().map(|a| (a, false))))
+        // A body's inner attribute is the test's own, as an outer one is, and turns the whole of it off.
+        .flat_map(|t| {
+            let own = t.attrs.iter().map(|a| (a, true));
+            own.chain(t.body_attrs.iter().map(|a| (a, a.text.starts_with("#!"))))
+        })
         .chain(holding.iter().flat_map(|m| m.attrs.iter().map(|a| (a, true))))
         .chain(inner.iter().filter(|a| inside(a.line)).map(|a| (a, true)));
     let mut by_line: BTreeMap<u32, (Vec<&Attr>, bool)> = BTreeMap::new();

@@ -1047,3 +1047,38 @@ fn a_tracked_symlink_to_a_fifo_is_not_opened() {
     let found = rx.recv_timeout(Duration::from_secs(60)).expect("duplicated-blocks blocked on the FIFO");
     assert_eq!(found, [("weights.py".into(), 1, "prices.py:1".into())]);
 }
+
+/// The lines of a `#[cfg(test)]` module run whenever its tests pass, so counting them would cover a new function's
+/// lack of tests with its tests' own lines.
+#[test]
+fn the_coverage_of_new_rust_code_leaves_out_the_lines_of_its_test_module() {
+    let repo = package(&[("pyproject.toml", "[tool.ruff]\n"), ("gate.toml", "[linters]\nclippy = []\n")]);
+    let lets: String = (1..=13).map(|k| format!("    let x = x + {k};\n")).collect();
+    let scale = format!("\npub fn scale(x: i32) -> i32 {{\n{lets}    x\n}}\n");
+    let tests = "\n#[cfg(test)]\nmod scale_tests {\n    use super::*;\n\n    #[test]\n    fn scales() {\n        \
+                 let s = scale(0);\n        assert_ne!(s, -1);\n    }\n}\n";
+    repo.put("crate/src/lib.rs", format!("{LIB}{scale}{tests}").as_bytes());
+    repo.git(&["add", "-A"]);
+    // As cargo-llvm-cov reports it: the function's 15 lines never run, the test's body did.
+    let first = LIB.lines().count() as u32 + 2;
+    let mut lcov = format!("SF:{}\n", repo.repo.join("crate/src/lib.rs").display());
+    for n in first..first + 15 {
+        lcov += &format!("DA:{n},0\n");
+    }
+    for n in first + 17 + 6..first + 17 + 9 {
+        lcov += &format!("DA:{n},1\n");
+    }
+    lcov += "end_of_record\n";
+    repo.put("results.xml", b"<?xml version=\"1.0\"?><testsuites><testsuite name=\"t\"/></testsuites>");
+    repo.put("lcov.info", lcov.as_bytes());
+    let given = Given {
+        tests: vec![repo.repo.join("results.xml")],
+        coverage: vec![repo.repo.join("lcov.info")],
+        mutation_budget: Some(0),
+        base_run_budget: Some(0),
+        ..Given::default()
+    };
+    let report = judge_change(&repo.repo, "HEAD", &given).unwrap();
+    let coverage = report.coverage.unwrap();
+    assert_eq!((coverage.lines, coverage.covered_lines), (15, 0));
+}

@@ -789,10 +789,10 @@ cargo llvm-cov nextest --locked --workspace --exclude xtask --ignore-run-fail --
 ```
 
 - **What it measures** is lines, not branches: branch coverage of Rust needs a nightly compiler. Each line of the
-  workspace's own crates that the compiler maps to code counts, the dependencies' do not. That includes the lines of
-  a `#[cfg(test)]` module: the tests'
-  own lines count as covered when they run, so they raise a change's coverage that adds both a function and its tests
-  (#50).
+  workspace's own crates that the compiler maps to code counts, the dependencies' do not. The report lists the lines
+  of test code too, which run whenever its tests pass; the gate leaves out those of each `#[cfg(test)]` item, as a
+  module, a fn or an impl, and of each file among the tests, so a change that adds a function and a test of it is
+  judged on the function alone (#50).
 - **Paths.** cargo-llvm-cov names each file relative to the workspace's directory, which it gives as the report's
   `<source>`, as an absolute path, so the gate reads `src/main.rs` of a workspace in `engine/` as
   `engine/src/main.rs`, as long as the report was written in the tree the gate judges; an absolute path stands as it

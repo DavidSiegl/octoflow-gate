@@ -2,7 +2,7 @@
 
 use model::{token_shape, CodeToken};
 
-use crate::syntax::{children, line};
+use crate::syntax::{children, is_literal, line};
 
 /// The tokens of the Go source `source`'s code, in the order they are written, each a [`CodeToken`]: a literal of a
 /// basic type stands for its kind (an interpreted or raw string, a rune, an integer, a float, an imaginary number),
@@ -22,8 +22,7 @@ pub fn code_tokens(source: &[u8]) -> Vec<CodeToken> {
         if node.is_extra() || matches!(kind, "package_clause" | "import_declaration") {
             continue;
         }
-        let literal = kind.ends_with("_literal") && !matches!(kind, "composite_literal" | "func_literal");
-        let shown = if literal {
+        let shown = if is_literal(node) {
             format!("${kind}")
         } else if node.child_count() > 0 {
             pending.extend(children(node).into_iter().rev());

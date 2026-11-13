@@ -250,8 +250,9 @@ removing one or changing its output is not seen (#73). The findings are Python's
   helper's calls are not followed into the tests that call it: `check(t, Add(1, 2), 3)`, where `check` holds the
   `t.Errorf`, is no assertion of the test, so a test that asserts only through helpers has none to lose (#72);
 - `swallowed-error`: on an added line anywhere in the file, `_ = err`, or an `if err != nil {}` whose block holds no
-  statement, `err` being a name Go gives an error by habit: `err`, `err` then a capital or a digit, or a name ending
-  in `Err`. A parser knows no types, so an error thrown away under another name, or as `v, _ := f()`, is not seen;
+  statement, its lines those from the `if` to the block's `{`, `err` being a name Go gives an error by habit: `err`,
+  `err` then a capital or a digit, or a name ending in `Err`. A parser knows no types, so an error thrown away under
+  another name, or as `v, _ := f()`, is not seen;
 - `expected-value-changed`: as Rust's, an assertion whose literals (numbers, runes and strings) changed while its shape
   stayed, an `if`'s initializer and condition included, in a change that also edits Go code outside the tests.
   Constants and a table-driven test's table of cases are not followed, so an expected value held there is not seen;

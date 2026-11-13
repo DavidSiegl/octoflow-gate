@@ -8,6 +8,12 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
 
 ## Open issues
 
+- **Rust and Go `expected-value-changed` keep a literal's sign and brackets out of the literal.** As cross-review 33
+  put it (F6, 2026-11-13): "`blank_literals` pushes `-` as a token of the shape, so `assert_eq!(f(), -5)` becoming
+  `assert_eq!(f(), 5)` beside a code change changes the shape. The assertions do not pair, and there is no finding."
+  todo/10 closed this for Python alone (`shape_and_literals`, `crates/lang-python/src/testing.rs`). Closes by folding
+  a value of literals alone into one literal in `blank_literals` (`crates/lang-rust/src/syntax.rs`) and its Go
+  counterpart (`crates/lang-go/src/testing.rs`), as the Python front end does.
 - **The gate reads an XML report only in UTF-8, or in UTF-16 that opens with a byte-order mark.** As cross-review 09 put
   it (F21, 2026-11-07): "Without a UTF-16 byte-order mark, `report_format` takes every report as UTF-8: one that
   declares another encoding (`<?xml version='1.0' encoding='ISO-8859-1'?>` and a byte such as `E9` in a path) fails

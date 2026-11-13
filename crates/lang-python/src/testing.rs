@@ -122,7 +122,8 @@ fn shape_and_literals(assertion: Node, text: Text) -> (String, Vec<String>) {
         from: (usize, usize),
         /// Whether all its tokens so far may make it one literal; never for a kind outside [`CONSTANT_KINDS`].
         constant: bool,
-        /// Its tokens so far, words and literals as written, each folded node among them as its one literal.
+        /// Its tokens so far, words and literals as written, each folded node among them as its one literal; kept
+        /// only while `constant` holds, as they are read only then.
         written: Vec<String>,
     }
     let (mut shape, mut literals) = (vec![], vec![]);
@@ -139,11 +140,15 @@ fn shape_and_literals(assertion: Node, text: Text) -> (String, Vec<String>) {
             Token::Word(word) => {
                 shape.push(word.into());
                 innermost.constant &= CONSTANT_WORDS.contains(&word);
-                innermost.written.push(word.into());
+                if innermost.constant {
+                    innermost.written.push(word.into());
+                }
             }
             Token::Literal(literal) => {
                 shape.push("$lit".into());
-                innermost.written.push(literal.clone());
+                if innermost.constant {
+                    innermost.written.push(literal.clone());
+                }
                 literals.push(literal);
             }
             Token::Close => {
@@ -162,8 +167,10 @@ fn shape_and_literals(assertion: Node, text: Text) -> (String, Vec<String>) {
                 shape.truncate(node.from.0);
                 shape.push("$lit".into());
                 literals.truncate(node.from.1);
-                literals.push(literal.clone());
-                outer.written.push(literal);
+                if outer.constant {
+                    outer.written.push(literal.clone());
+                }
+                literals.push(literal);
             }
         }
     });

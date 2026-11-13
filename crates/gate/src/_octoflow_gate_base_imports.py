@@ -11,26 +11,25 @@ resolved, and the root, so that a link on the way to either changes nothing; the
 that is a link is named by the link. A namespace package has no __file__, and none is written.
 """
 
-from __future__ import annotations
-
 import contextlib
 import json
 import os
 import sys
 from typing import TYPE_CHECKING
 
-# Only for mypy: pytest exports these from 7.0 on, and the judged project's pytest may be older.
+# Only for mypy, so the annotations naming them are strings: pytest exports these from 7.0 on, and the judged project's
+# pytest may be older, on a Python too old for `from __future__ import annotations` (3.6).
 if TYPE_CHECKING:
     from pytest import Parser, Session
 
 
-def pytest_addoption(parser: Parser) -> None:
+def pytest_addoption(parser: "Parser") -> None:
     """Add the two options the gate gives each run at the base."""
     parser.addoption("--gate-imports-root")
     parser.addoption("--gate-imports-report")
 
 
-def pytest_sessionfinish(session: Session) -> None:
+def pytest_sessionfinish(session: "Session") -> None:
     """Write the report of the modules imported from under the root."""
     root = os.path.realpath(session.config.getoption("gate_imports_root"))
     found: dict[str, str] = {}

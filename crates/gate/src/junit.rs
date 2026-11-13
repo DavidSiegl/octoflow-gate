@@ -21,10 +21,10 @@ pub enum Outcome {
 /// `classname.name`; "" for an outcome other than Failed.
 ///
 /// What failed is a failure's or an error's message, else its text. A message that says no more than that the test
-/// failed, as gotestsum's `Failed`, gives way to a text that is not empty: then what failed is the text without the
-/// lines `go test -v` frames a test's output with (`=== RUN`, `--- FAIL:` and the like), so that it opens with the
-/// test's own first line, such as a `t.Errorf`'s or, for a package that does not compile, gotestsum's
-/// `FAIL <package> [build failed]`. Errs when the report cannot be read or parsed.
+/// failed, as gotestsum's `Failed`, gives way to the text without the lines `go test -v` frames a test's output with
+/// (`=== RUN`, `--- FAIL:` and the like), unless nothing but whitespace is left of it, as of a `t.Fail()` that logged
+/// nothing: so it opens with the test's own first line, such as a `t.Errorf`'s or, for a package that does not
+/// compile, gotestsum's `FAIL <package> [build failed]`. Errs when the report cannot be read or parsed.
 pub fn junit_outcomes(report: &Path) -> Result<Vec<(String, Outcome, String)>, Unjudged> {
     let doc = xml::parse_file(report)
         .map_err(|e| Unjudged(format!("cannot read the test report {}: {e}", crate::text::path(report.as_os_str()))))?;
@@ -34,10 +34,11 @@ pub fn junit_outcomes(report: &Path) -> Result<Vec<(String, Outcome, String)>, U
         let name = name.trim_matches('.').to_string();
         if let Some(failed) = case.child("failure").or_else(|| case.child("error")) {
             let message = failed.get("message").unwrap_or("");
+            let output = without_go_test_framing(&failed.text);
             let detail = if message.is_empty() {
                 failed.text.clone()
-            } else if message.trim().eq_ignore_ascii_case("failed") && !failed.text.trim().is_empty() {
-                without_go_test_framing(&failed.text)
+            } else if message.trim().eq_ignore_ascii_case("failed") && !output.trim().is_empty() {
+                output
             } else {
                 message.to_string()
             };
@@ -117,6 +118,8 @@ mod tests {
              <testcase classname=\"\" name=\"TestMain\"><failure message=\"Failed\" type=\"\">\
              FAIL&#x9;example.com/calc/bad [build failed]&#xA;</failure></testcase>\
              <testcase classname=\"t\" name=\"a\"><failure message=\" failed \"></failure></testcase>\
+             <testcase classname=\"t\" name=\"b\"><failure message=\"Failed\">=== RUN   b&#xA;--- FAIL: b (0.00s)&#xA;\
+             </failure></testcase>\
              </testsuite></testsuites>",
         )
         .unwrap();
@@ -128,6 +131,7 @@ mod tests {
                 ("example.com/calc.TestAdd".into(), "    calc_test.go:6: got 2, want 3\n".into()),
                 ("TestMain".into(), "FAIL\texample.com/calc/bad [build failed]\n".into()),
                 ("t.a".into(), " failed ".into()),
+                ("t.b".into(), "Failed".into()),
             ]
         );
     }

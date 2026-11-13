@@ -335,11 +335,10 @@ pub fn duplicated_blocks(sources: &Sources) -> Result<Vec<Finding>, Unjudged> {
     let change = sources.change;
     let languages: [(&Language, ReadTokens); 3] =
         [(&PYTHON, lang_python::code_tokens), (&RUST, lang_rust::code_tokens), (&GO, lang_go::code_tokens)];
-    let no_gone = HashSet::new();
     let mut out = vec![];
     for (language, code_tokens) in languages {
         let wanted = |path: &OsStr| {
-            !change.settings.duplicates_exempt.matches(path) && holds_source(change, &no_gone, path, language)
+            !change.settings.duplicates_exempt.matches(path) && holds_source(change, &sources.go.gone, path, language)
         };
         // Every window the check reports lies on added lines, so without one in a judged file the tree is not read.
         if !change.changed.iter().any(|(path, lines)| !lines.is_empty() && wanted(path)) {
@@ -526,13 +525,15 @@ impl<'a> Stored<'a> {
 
 /// Whether the working tree's file at `path`, from the tree's top, holds `language`'s source by its name or its first
 /// line ([`Language::holds`]), in one of the language's projects where it has them ([`in_its_project`], `gone` as
-/// there). A file that cannot be read has no first line.
+/// there). A file that is not a regular one, or cannot be read, has no first line: opening a FIFO, or a symlink to
+/// one, would block ([`Sources`]).
 fn holds_source(change: &Change, gone: &HashSet<PathBuf>, path: &OsStr, language: &Language) -> bool {
     let head = || {
+        let full = change.root.join(path);
         let mut head = vec![];
         let first = |file: std::fs::File| file.take(FIRST_LINE_BYTES as u64).read_to_end(&mut head);
-        let read = std::fs::File::open(change.root.join(path)).and_then(first);
-        if read.is_ok() { head } else { vec![] }
+        let read = regular_file(&full).then(|| std::fs::File::open(&full).and_then(first));
+        if matches!(read, Some(Ok(_))) { head } else { vec![] }
     };
     (language.holds)(path.as_bytes(), &head) && in_its_project(change, gone, path, language)
 }

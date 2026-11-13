@@ -984,3 +984,17 @@ fn go_outside_every_module_is_neither_judged_nor_matched() {
     repo.put("mod/big.go", big.as_bytes());
     assert_eq!(copies(&repo, Settings::default()), [("mod/big.go".into(), 22, "mod/big.go:4".into())]);
 }
+
+#[test]
+fn a_tracked_symlink_to_a_fifo_is_not_opened() {
+    let repo = Repo::with(&[("prices.py", TOTAL.as_bytes())]);
+    let fifo = repo.outside.join("pipe");
+    assert!(Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+    std::os::unix::fs::symlink(&fifo, repo.repo.join("run")).unwrap();
+    repo.put("weights.py", TOTAL.replace("total", "weight").as_bytes());
+    // Opened for reading with no writer, a FIFO blocks for good, so the check runs apart and is given a minute.
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || tx.send(copies(&repo, Settings::default())).unwrap());
+    let found = rx.recv_timeout(Duration::from_secs(60)).expect("duplicated-blocks blocked on the FIFO");
+    assert_eq!(found, [("weights.py".into(), 1, "prices.py:1".into())]);
+}

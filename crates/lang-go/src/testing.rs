@@ -313,14 +313,17 @@ impl<'t> Walk<'t> {
             .filter(|s| s.kind() != "comment")
             .collect();
         if statements.is_empty() && node.child_by_field_name("condition").is_some_and(|c| self.error_not_nil(c)) {
-            // The `if` up to its empty block: an `else` after it is the path that did not fail.
+            // The `if` up to its empty block: an `else` after it is the path that did not fail. gofmt writes that
+            // `else` on the line of the block's `}`, so the weakening's lines then end on the line before it.
             let head: Vec<&str> = children(node)
                 .into_iter()
                 .take_while(|c| c.kind() != "else")
                 .flat_map(|c| tokens(c, self.text))
                 .collect();
+            let has_else = node.child_by_field_name("alternative").is_some();
+            let last = if has_else { end_line(block).saturating_sub(1).max(line(node)) } else { end_line(block) };
             self.weakenings.push(Weakening {
-                lines: Lines { first: line(node), last: end_line(block) },
+                lines: Lines { first: line(node), last },
                 kind: WeakeningKind::SwallowedError,
                 code: digest_of(&head),
                 message: format!(

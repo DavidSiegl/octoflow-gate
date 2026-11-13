@@ -4,4 +4,4 @@
 # new release only after that release exists and has been checked (sha256sum -c on the downloaded tarball). The
 # release named here must read this commit's gate.toml, which scripts/gate checks, and be 0.7.0 or later: scripts/gate
 # runs no release before the first that ships `gate`, so a rollback below 0.7.0 is a revert of scripts/gate too.
-0.7.0 9700f6072b5d6926b9ce32c01ed582fde7bf887424b62e9ec0ced868b24509e1
+0.10.0 8f6007f046be5fcf516496201a41bc7185a3af53c5e7778a9489a0d10414525a

@@ -1,3 +1,15 @@
+<!-- The languages badge repeats the languages the first sentence below names, and docs/quality-gate.md's "It reads
+     Python, Rust and Go": a change to one changes all three. -->
+<!-- pyml disable-next-line first-line-heading -->
+<p align="center">
+  <a href="https://github.com/DavidSiegl/octoflow-gate/releases/latest"><img src="https://img.shields.io/github/v/release/DavidSiegl/octoflow-gate" alt="Latest release"></a>
+  <a href="https://github.com/DavidSiegl/octoflow-gate/releases"><img src="https://img.shields.io/github/downloads/DavidSiegl/octoflow-gate/total?label=asset%20downloads" alt="Downloads of all release assets"></a>
+  <a href="#what-it-judges"><img src="https://img.shields.io/badge/judges-Python%20%7C%20Rust%20%7C%20Go-informational" alt="Judges Python, Rust and Go"></a>
+  <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/built%20with-Rust-B7410E?logo=rust&logoColor=white" alt="Built with Rust"></a>
+  <a href="https://github.com/DavidSiegl/octoflow-gate/commits/main"><img src="https://img.shields.io/github/last-commit/DavidSiegl/octoflow-gate" alt="Last commit"></a>
+  <a href="https://ko-fi.com/davidsiegl"><img src="https://img.shields.io/badge/Ko--fi-support%20me-FF5E5B?logo=kofi&logoColor=white" alt="Support me on Ko-fi"></a>
+</p>
+
 # octoflow-gate
 
 octoflow-gate is a quality gate for changes to Python, Rust and Go projects. `gate` judges what a git working tree

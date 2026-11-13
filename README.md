@@ -18,10 +18,11 @@ against it.
 - **Tests and coverage**, from JUnit reports and Cobertura, LCOV or Go coverage reports: a failing test fails the
   gate, and so does coverage below 80% on 20 or more new lines to cover.
 - **Checks of what the change did**: tests it weakened (removed, skipped, fewer assertions, expected values changed
-  together with the code), functions whose cognitive complexity it took over 15, and, as findings to weigh that do not
-  fail the gate, tests that are flaky, tests that pass without the change, surviving mutants of the functions it
-  edits, and vague names it binds. Go gets all of these but two: tests are rerun for flakiness in Python alone, and
-  run without the change in Python and Rust.
+  together with the code), functions whose cognitive complexity it took over 15, imports it added that close a cycle
+  between the project's Python or Rust modules, and, as findings to weigh that do not fail the gate, tests that are
+  flaky, tests that pass without the change, surviving mutants of the functions it edits, and vague names it binds. Go
+  gets all of these but three: tests are rerun for flakiness in Python alone, and run without the change in Python and
+  Rust, and Go's compiler refuses an import cycle itself.
 - **What to read**: the suppressions it added and the build configuration it edited.
 
 [docs/quality-gate.md](docs/quality-gate.md) says what each of these judges and why.
@@ -106,10 +107,11 @@ change](docs/quality-gate.md#whose-rules-judge-a-change) says.
 ## Settings: `gate.toml`
 
 Which files are tests, which go with them, which hold expected output, which the complexity check leaves alone, which
-further files are build configuration, which files each linter reads, the checks' time budgets and the commands that
-run the tests: a `gate.toml` at the project's top level says each, or the file `--config` names. Every key has a
-default, so a project without one is judged as the gate always judged; [the gate's
-settings](docs/quality-gate.md#the-gates-settings) lists them. An unknown key or a value of the wrong kind exits 2.
+take part in no dependency cycle, which further files are build configuration, which files each linter reads, the
+checks' time budgets and the commands that run the tests: a `gate.toml` at the project's top level says each, or the
+file `--config` names. Every key has a default, so a project without one is judged as the gate always judged; [the
+gate's settings](docs/quality-gate.md#the-gates-settings) lists them. An unknown key or a value of the wrong kind
+exits 2.
 
 octoflow's, for example:
 

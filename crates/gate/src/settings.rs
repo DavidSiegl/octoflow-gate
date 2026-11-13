@@ -29,6 +29,8 @@ pub struct Settings {
     pub golden: Globs,
     /// Files whose functions the cognitive-complexity check does not score.
     pub complexity_exempt: Globs,
+    /// Files the dependency-cycles check leaves out of every cycle, their imports and the imports of them both.
+    pub cycles_exempt: Globs,
     /// (path, note) for each file beyond BUILD_CONFIG_FILES that alters how the project is built or judged, in
     /// gate.toml's order: the note, a sentence, follows "The change edits `path`." in the quality file.
     pub build_config: Vec<(String, String)>,
@@ -66,6 +68,13 @@ impl Default for Settings {
             test_support: Globs::new(&["**/conftest.py", "**/tests/**"]),
             golden: Globs::new(&["**/tests/**/golden/**"]),
             complexity_exempt: Globs::new(&["tests/**", "**/tests/**/*.rs", "**/tests.rs"]),
+            cycles_exempt: Globs::new(&[
+                "**/tests/**",
+                "**/tests.rs",
+                "**/test_*.py",
+                "**/*_test.py",
+                "**/conftest.py",
+            ]),
             build_config: vec![],
             linters: vec![],
             mutation_budget: 600,
@@ -101,6 +110,9 @@ impl Settings {
         }
         if let Some(exempt) = file.complexity.and_then(|c| c.exempt) {
             settings.complexity_exempt = Globs::new(&exempt);
+        }
+        if let Some(exempt) = file.dependency_cycles.and_then(|c| c.exempt) {
+            settings.cycles_exempt = Globs::new(&exempt);
         }
         for (name, note) in file.build_config.map(|n| n.0).unwrap_or_default() {
             settings.build_config.push(build_config_entry(name, note).map_err(invalid)?);
@@ -241,7 +253,9 @@ struct File {
     python: Option<String>,
     #[serde(rename = "test-files")]
     test_files: Option<TestFiles>,
-    complexity: Option<Complexity>,
+    complexity: Option<Exempt>,
+    #[serde(rename = "dependency-cycles")]
+    dependency_cycles: Option<Exempt>,
     #[serde(rename = "build-config")]
     build_config: Option<InOrder<String>>,
     linters: Option<InOrder<Vec<String>>>,
@@ -258,9 +272,10 @@ struct TestFiles {
     golden: Option<Vec<String>>,
 }
 
+/// A check's table that holds only the globs of the files the check leaves alone, as `[complexity]`.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Complexity {
+struct Exempt {
     exempt: Option<Vec<String>>,
 }
 

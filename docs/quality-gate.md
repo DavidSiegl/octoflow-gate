@@ -107,6 +107,7 @@ committed by accident. Deleting such files is no fault.
 |---|---|---|
 | `test-integrity` | yes, but for removed tests, fewer assertions, changed expected values and Rust and Go tests left out on other platforms | tests the change weakened, in test files (by default `tests/**`, `test_*.py`, `*_test.py`; Rust's below) |
 | `cognitive-complexity` | yes | functions the change edits or adds that it takes over a cognitive complexity of 15 |
+| `dependency-cycles` | yes | imports the change adds that close a cycle of imports between the project's Python or Rust modules |
 | `flaky-tests` | no | tests the change adds or edits that pass in one order and fail in another |
 | `surviving-mutants` | no | changes to the functions the change edits that no test notices |
 | `passes-at-base` | no | tests the change adds or edits that pass without the rest of the change |
@@ -318,6 +319,39 @@ cognitive complexity catches, but it still catches a flat function of many branc
 lower. It reports at the `def` line, and the gate keeps a linter's finding only on a line the change adds: when a change
 grows an existing function, only this check reports it. A function whose `def` line the change adds, such as a new
 one, and that both flag, is two findings at its `def`.
+
+**Dependency cycles** finds the import a change adds that closes a cycle between the project's own modules: two
+modules that import each other, directly or through others, can no longer be read, tested or moved apart. It runs on
+the languages the change holds Python or Rust of, `crates/checks/src/cycles.rs` judging the import graphs the front
+ends read (`imports` in `crates/lang-python` and `crates/lang-rust`) over every file of the language the tree tracks
+outside `mutants/`, named `.py` or `.rs`: once as the base holds them and once as the working tree does, the base's
+files under the names the change gives them. Each node is a file; a `dependency-cycles` finding, which fails the gate,
+lies on an import that closes a cycle where the import is from one file of another the base's file did not import and
+the change added a line of the statement that writes it, and names the cycle's files in order from it, `a.py` →
+`b.py` → `a.py`. It lies at the import's own line, the imported name's in a statement of several lines, where the
+change added that, else at the statement's first added line, as where only `from a import (` above the names was
+edited. Two imports that close cycles of the same files are one finding. A cycle is new, and so a finding, where it
+goes through such an import, also where every file of it was in a cycle at the base: an import from `a` of `c`, added
+where `a` → `b` → `c` → `a` was already, closes `a` → `c` → `a`. A cycle the change only adds an import to between
+two files already joined is not one, nor is a cycle the base holds that the change adds no import to, as nothing
+outside a change's added lines is a finding anywhere else in the gate. Nor is a cycle closed by an edit only to a line
+outside the import's statement that decides whether it is read at all, as `#[cfg(test)]` above a `use` rewritten to
+`#[cfg(feature = "x")]`, or `if TYPE_CHECKING:` to `if FLAG:`. The files the settings exempt, by default the tests,
+take part in no cycle.
+
+- Python: `import a.b` and `from a import b`, absolute from the tree's top or from `src/`, and relative ones (`from .
+  import x`, `from ..a import b`), are imports of the file `a/b.py` or `a/b/__init__.py`: `import a.b.c` of the
+  deepest of `a.b.c`, `a.b` and `a` that has one, and `from m import n` of the submodule `m.n` where there is one,
+  else of `m`. An import that names no file of the tree is a third party's and none. An import inside a function
+  counts, the finding saying it is deferred, as the modules depend on each other all the same; one in the body of `if
+  TYPE_CHECKING:` does not, as it never runs. A package's `__init__.py` and its submodules are modules like any other.
+- Rust: a path that starts at `crate`, `self` or `super`, in a `use` or in code, is an import of the file of the
+  longest of its prefixes that is a module, the module tree read from the `mod` declarations as rustc reads it (a
+  `#[path]` outside inline modules too), an inline module being its file's. A path that starts anywhere else, as at
+  another crate, is none: cargo already refuses a cycle between crates. An import between a module and one it holds,
+  at any depth, as `super::` from a child, is none either, so a crate root takes part in no cycle; nor is any in test
+  code, an item marked `#[cfg(test)]` and a file only such items declare. A macro's arguments are not read.
+- Go: none. The compiler refuses an import cycle.
 
 **Flaky tests** reruns the tests the change adds or edits, so a test that passed the build's one run by luck of
 the order is caught. A test counts when the change adds or removes a line of it in a test file outside `mutants/`, as
@@ -757,9 +791,9 @@ coverage = ["coverage-go.out"]
 
 The gate parses source itself, on [tree-sitter](https://tree-sitter.github.io/tree-sitter/): Rust with
 `crates/lang-rust`, Go with `crates/lang-go` and Python with `crates/lang-python`, which is not Python's own `ast`, so
-the checks that only read a change (test integrity, cognitive complexity and vague names) start no other program and
-need no Python. Each front end reads a file into the model of `crates/model`, which the checks of `crates/checks` judge
-whatever the language; another language is another front end.
+the checks that only read a change (test integrity, cognitive complexity, dependency cycles and vague names) start no
+other program and need no Python. Each front end reads a file into the model of `crates/model`, which the checks of
+`crates/checks` judge whatever the language; another language is another front end.
 
 **Which files.** The gate reads, once per run, each file of the change that holds Rust, by a `.rs` name, Python, by a
 `.py` name or a first line that is a `#!` naming python, or Go, by a `.go` name in a directory that holds a `go.mod`, or
@@ -843,6 +877,7 @@ trailing `/**` for all below.
 | `test-files.support` | `**/conftest.py`, `**/tests/**` | files that go with the tests rather than the code, which the checks that run tests take from the working tree |
 | `test-files.golden` | `**/tests/**/golden/**` | golden files, which test integrity reads as expected values |
 | `complexity.exempt` | `tests/**`, `**/tests/**/*.rs`, `**/tests.rs` | files whose functions cognitive complexity does not score |
+| `dependency-cycles.exempt` | `**/tests/**`, `**/tests.rs`, `**/test_*.py`, `**/*_test.py`, `**/conftest.py` | files that take part in no dependency cycle, their imports and the imports of them both left out |
 | `build-config` | none | a table of file to note, a sentence the quality file gives after "The change edits `file`." |
 | `linters.<name>` | the table above | the globs of the files that linter reads, for `ruff`, `mypy`, `pymarkdown`, `shellcheck`, `actionlint`, `clippy` or `golangci-lint`; `[]` runs it on none. Clippy lints the workspaces of the `Cargo.toml` files among its files, and golangci-lint the modules of the `go.mod` files, so their globs must take those in |
 | `budgets.mutation` | 600 | seconds, as `--mutation-budget`, which replaces it |

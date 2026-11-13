@@ -807,7 +807,7 @@ fn sub_patterns(node: Node) -> Vec<Node> {
 }
 
 /// The attribute items right before the item `node`, in order: tree-sitter makes them its siblings.
-fn preceding_attributes(node: Node) -> Vec<Node> {
+pub fn preceding_attributes(node: Node) -> Vec<Node> {
     let mut out = vec![];
     let mut at = node.prev_sibling();
     while let Some(sibling) = at {
@@ -869,7 +869,7 @@ fn path_segments(node: Node, text: Text) -> Vec<String> {
 
 /// Whether the attribute item `item` is a `cfg` whose predicate holds only under `cfg(test)`: `test`, or an `all`
 /// with such an argument.
-fn holds_only_under_test(item: Node, text: Text) -> bool {
+pub fn holds_only_under_test(item: Node, text: Text) -> bool {
     let Some(attribute) = named(item).into_iter().find(|c| c.kind() == "attribute") else { return false };
     let path = attribute.named_child(0).map(|p| text.of(p));
     let arguments = attribute.child_by_field_name("arguments");

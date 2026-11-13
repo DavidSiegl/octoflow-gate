@@ -126,7 +126,11 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   - F9, `crates/gate/src/python_at_base.rs`, `mutants.rs`: "The Python halves and the Rust halves' modules import each
     other (`passes_at_base` <-> `python_at_base` for `budget_reached`; `mutants` <-> `python_mutants` for `KILL_WAIT`,
     `STOP_GRACE`, `SURVIVOR_EXAMPLES`), consts widened to `pub(crate)` to cross the cycle." Closes with what both halves
-    of a check share in a module neither half is.
+    of a check share in a module neither half is. The dependency-cycles check (structural-checks/01) fails a change
+    that closes such a cycle from now on, but not one the base has that the change adds no import of a new file to, so
+    these two stay until a change breaks them; an import a change adds between two files of such a cycle that were not
+    yet joined does fail it. The run over 50 commits found more such cycles in `crates/gate` (`judge` holds `Change`
+    and calls every check that imports it; `report` <-> `config_edits`, `golangci` <-> `linters`).
   - F12, `crates/gate/src/glob.rs`: "`fnmatch` arrives as an `across_slashes` flag through `translate_name` and
     `bracket` with two added match arms, the bolted-on flag the user's CLAUDE.md design rule names; it also compiles a
     Regex on each call." Closes with fnmatch's translation a function of its own, compiled once a pattern.
@@ -172,9 +176,29 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   by where it starts and ends, not by its lines, so `go_profile_lines` (`crates/gate/src/coverage.rs`) counts every
   line between, covered or not as the block is, as gocover-cobertura and Codecov read profiles too. Found with
   go-support/01 (2026-11-11). Closes with each such line read from the file and left out when it holds no token.
-- **Two golangci-lint runs at once fail the later one.** golangci-lint takes a lock file on start and, without
-  `--allow-serial-runners`, exits 3 with "parallel golangci-lint is running" when it cannot, so `lint_module`
-  (`crates/gate/src/golangci.rs`) reports a failed condition whenever another golangci-lint runs on the machine. The
-  gate's own tests hit it: `crates/gate/tests/golangci_lint.rs` run in parallel fails up to three of its nine tests,
-  and one failed `scripts/gate` on 2026-11-12 (todo-tickets triage); with one test thread all nine pass. Closes with
-  `--allow-serial-runners` among `lint_module`'s arguments, so a run waits for the lock rather than fail.
+- **A file tree-sitter cannot parse goes unread by dependency-cycles, saying nothing.** `imports` in
+  `crates/lang-rust/src/imports.rs` and `crates/lang-python/src/imports.rs` read such a file as making no imports and
+  declaring no modules. A changed file that does not parse already fails the gate, cognitive-complexity's `not-scored`
+  finding (`crates/checks/src/complexity.rs`); a file the change leaves alone does not, and as cross-review 24 put it
+  (F3, 2026-11-12): "one construct it rejects anywhere in `src/lib.rs` drops all its `mod` declarations, every module
+  becomes its own crate root, `crate::` paths stop resolving, and a cycle the change closes among them is passed with
+  OK. The gate's verdict then says nothing about the check not having read the crate." Closes with the front ends
+  saying which files they could not read, and the gate naming those in a note that fails nothing.
+- **dependency-cycles reads and parses every tracked file of a language twice a run.** As cross-review 24 put it (F6,
+  2026-11-12): "Every untouched file's bytes are cloned into `base` and each tree is parsed in full by `imports`, so a
+  one-line change parses the repository's whole `.py`/`.rs` set twice; `git ls-files -z` repeats `judge_change`'s
+  listing, and the base side reruns `ls-tree`/`cat-file` for files `Stored` already read" (`trees` in
+  `crates/gate/src/parser_checks.rs`). Closes with an untouched file's imports read once for both sides, and the
+  listing and the base's files taken from what the gate already read.
+- **lang-rust reads an item's outer attributes two ways.** As cross-review 24 put it (F7, 2026-11-12): `path_attribute`
+  (`crates/lang-rust/src/imports.rs`) "looks back through siblings, the pattern e7f9115 removed for test detection",
+  via `syntax::preceding_attributes`, while `walk_children` passes each item's attributes as it walks them. Closes with
+  `walk_children` collecting a `mod` declaration's `#[path]` as it collects `cfg(test)`.
+- **dependency-cycles does not read an edit to the line that decides whether an import counts.** As cross-review 24 put
+  it (F11, 2026-11-12): "Base `src/a.rs`: `#[cfg(test)]\nuse crate::b::X;`, `src/b.rs`: `use crate::a::Y;`. The change
+  edits only line 1 to `#[cfg(feature = "x")]`. a → b is now an edge the base lacked, but `added` for a.rs is {1},
+  the statement is 2..=2, `added_line` is None, and a → b → a passes with OK." Python's `if TYPE_CHECKING:` rewritten
+  to `if FLAG:` likewise; docs/quality-gate.md says so. Such a line may sit far from the import: an inline module's or
+  a file's `#![cfg(test)]`, or the `#[cfg(test)] mod x;` in another file that makes all of `x.rs` test code. Closes
+  with `model::Import::statement` taking in the lines that gate it (`cycles::added_line`), each front end giving the
+  attribute, `if` or declaration lines it read the import under.

@@ -9,7 +9,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use gate::judge::{judge_change, Change, Given};
-use gate::parser_checks::{too_complex, vague_names, weakened_tests, Sources};
+use gate::parser_checks::{dependency_cycles, too_complex, vague_names, weakened_tests, Sources};
 use gate::settings::Settings;
 
 use common::Repo;
@@ -70,10 +70,10 @@ fn edit(repo: &Repo, path: &str, old: &str, new: &str) {
     repo.put(path, text.replacen(old, new, 1).as_bytes());
 }
 
-/// The findings of test-integrity, cognitive-complexity and vague-names on `change`, in that order.
+/// The findings of test-integrity, cognitive-complexity, dependency-cycles and vague-names on `change`, in that order.
 fn run_checks(change: &Change) -> Vec<Vec<gate::report::Finding>> {
     let sources = Sources::read(change).unwrap();
-    vec![weakened_tests(&sources), too_complex(&sources), vague_names(&sources)]
+    vec![weakened_tests(&sources), too_complex(&sources), dependency_cycles(&sources).unwrap(), vague_names(&sources)]
 }
 
 /// A finding as these tests compare it: its path, line, rule and severity.
@@ -265,10 +265,39 @@ fn a_check_s_errors_fail_the_gate_and_its_warnings_are_to_weigh() {
 }
 
 #[test]
+fn a_dependency_cycle_the_change_closes_fails_the_gate() {
+    let repo = package(&[("pyproject.toml", "[tool.ruff]\n"), ("gate.toml", "[linters]\nclippy = []\n")]);
+    edit(&repo, "crate/src/lib.rs", "pub fn add", "mod first;\nmod second;\n\npub fn add");
+    repo.put("crate/src/first.rs", b"pub struct First;\n");
+    repo.put("crate/src/second.rs", b"use crate::first::First;\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "--quiet", "-m", "two modules"]);
+    repo.put("crate/src/first.rs", b"use crate::second::Second;\n\npub struct First;\n");
+    repo.git(&["add", "-A"]);
+    let report = judge_change(&repo.repo, "HEAD", &Given::default()).unwrap();
+    assert_eq!(report.conditions, ["1 findings of the `dependency-cycles` check; each is listed below."]);
+    let found: Vec<_> = report.issues.iter().map(|f| (f.path.clone().unwrap(), f.line, f.rule.as_str())).collect();
+    assert_eq!(found, [("crate/src/first.rs".into(), Some(1), "dependency-cycles")]);
+}
+
+#[test]
+fn a_dependency_cycle_the_base_has_under_a_name_the_change_gives_a_file_is_not_found() {
+    let body = "import a\n\nLIMIT = 10\nNAMES = ['first', 'second', 'third']\n";
+    let repo = Repo::with(&[("a.py", b"import b\n"), ("b.py", body.as_bytes())]);
+    repo.git(&["mv", "b.py", "c.py"]);
+    repo.put("a.py", b"import c\n");
+    assert_eq!(found(&repo), vec![]);
+    // Without the rename, the same import closes a cycle.
+    repo.put("d.py", body.as_bytes());
+    repo.put("a.py", b"import c\nimport d\n");
+    assert_eq!(found(&repo), vec![(Some("a.py".into()), Some(2), "dependency-cycles".into(), "error".into())]);
+}
+
+#[test]
 fn the_checks_run_in_the_gate_s_order_one_list_each() {
     let repo = package(&[]);
     let change = Change::from_tree(&repo.repo, "HEAD", Settings::default(), None).unwrap();
-    assert_eq!(run_checks(&change), vec![vec![], vec![], vec![]]);
+    assert_eq!(run_checks(&change), vec![vec![], vec![], vec![], vec![]]);
     // A new fn over the limit, and a vague name, beside a skip.
     let ifs: String = (0..16).map(|k| format!("    if x == {k} {{\n        x += {k};\n    }}\n")).collect();
     repo.put("crate/src/big.rs", format!("pub fn big(mut x: u32) -> u32 {{\n{ifs}    let info = x;\n    info\n}}\n").as_bytes());

@@ -15,10 +15,9 @@
 # skip, without them.
 #
 # Each is pinned to the sha256 of its linux x86_64 archive as its release publishes it: cargo-nextest's in the .sha256
-# file beside the archive, and cargo-llvm-cov's as the asset's digest on its GitHub release page, which has no
-# checksums file. cargo-mutants publishes neither, so its sha256 is that of the archive as downloaded when it was
-# pinned (2026-10-30). The musl builds of cargo-llvm-cov and cargo-nextest are static, so they run whatever C library
-# the agent image has; cargo-mutants releases only a glibc build for linux x86_64.
+# file beside the archive, and cargo-llvm-cov's and cargo-mutants' as the asset's digest on its GitHub release page,
+# as neither publishes a checksums file. The musl builds of cargo-llvm-cov and cargo-nextest are static, so they run
+# whatever C library the agent image has; cargo-mutants releases only a glibc build for linux x86_64.
 set -eu
 
 [ $# -eq 1 ] || { echo "usage: install-tools.sh <dir>" >&2; exit 2; }

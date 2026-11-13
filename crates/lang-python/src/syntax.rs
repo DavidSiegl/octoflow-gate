@@ -114,7 +114,7 @@ pub fn unparenthesized(mut node: Node) -> Node {
 /// Only the first is given: after it the tree may not be the file's, with or without an error in it, since such a
 /// value's `#` or quote moves where the strings after it begin and end. The tree of the source without that `=`
 /// says where the next one is. The first is a guess too where a later spec made an error around it: a set inside a
-/// field is then taken for a field (`TODO.md`, "A set inside a replacement field...").
+/// field is then taken for a field, a misreading accepted as rare (docs/port-differences.md says what it costs).
 pub fn first_misread_spec_start(root: Node) -> Option<usize> {
     // For each bracket open at the token at hand, the outermost first, whether it opens a replacement field; and
     // how many strings are open there.

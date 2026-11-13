@@ -380,7 +380,7 @@ fn f(x: Result<u8, ()>) -> Result<u8, ()> {
 #[test]
 fn a_fn_is_judged_by_its_path_of_modules_impls_and_traits_but_not_in_a_test_module() {
     // concat! keeps the cfg off the start of a line, where the gate reads it as a skip added to this test's body
-    // (TODO.md, "A line of a string literal in a test's body...").
+    // (#47).
     let scores = scores_of(concat!(r#"
 fn free() {}
 trait Shape { fn declared(&self); fn defaulted(&self) {} }

@@ -3,8 +3,8 @@
 //! each inline module; and every name the file binds.
 //!
 //! A macro's arguments are walked as code when they are expressions separated by commas, as an assertion's or
-//! `vec![...]`'s are; any other macro's tokens are a language of its own (TODO.md, "A macro whose arguments are no
-//! expressions separated by commas…"). tree-sitter leaves them a token tree, so [`Walk::macro_args`] parses each
+//! `vec![...]`'s are; any other macro's tokens are a language of its own, left unread, as clippy's own
+//! `cognitive_complexity` reads no macro. tree-sitter leaves them a token tree, so [`Walk::macro_args`] parses each
 //! argument again on its own.
 
 use model::{Assertion, Binding, Flow};

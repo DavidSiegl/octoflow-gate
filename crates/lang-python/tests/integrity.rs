@@ -203,6 +203,20 @@ fn a_kept_test_s_mark_moved_to_another_parametrized_case_is_found() {
                     pytest.param(2)])\ndef test_b(n):\n    assert n\n";
     let both = one_line.replace("pytest.param(2)", "pytest.param(2, marks=pytest.mark.xfail)");
     assert_eq!(found(&[edited(OTHER_PATH, one_line, &both)]).0, [at(OTHER_PATH, 4, "skip")]);
+    // So is one on a second case like the first.
+    let twice = one_line.replace("pytest.param(2)", "pytest.param(1, marks=pytest.mark.xfail)");
+    assert_eq!(found(&[edited(OTHER_PATH, one_line, &twice)]).0, [at(OTHER_PATH, 4, "skip")]);
+}
+
+#[test]
+fn a_test_moved_with_a_case_s_marks_rewrapped_adds_no_skip() {
+    let base = "import pytest\n\n\n@pytest.mark.parametrize('n', [pytest.param(1, marks=[pytest.mark.skip, \
+                pytest.mark.xfail])])\ndef test_b(n):\n    assert n\n";
+    let wrapped = base.replace(
+        "marks=[pytest.mark.skip, pytest.mark.xfail]",
+        "marks=[\n        pytest.mark.skip,\n        pytest.mark.xfail,\n    ]",
+    );
+    assert_eq!(found(&[deleted(OTHER_PATH, base), added("tests/test_new.py", &wrapped)]).0, []);
 }
 
 #[test]

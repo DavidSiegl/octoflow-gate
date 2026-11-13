@@ -218,11 +218,13 @@ fn written_whole(node: Node) -> Node {
 }
 
 /// What weakens a test in the test module `root`: each name or attribute that skips a test or expects it to fail
-/// ([`SKIP_NAMES`]), once per line and code, so that two parametrized cases' marks on one line are two, and each
-/// `except` that swallows what it catches ([`swallows`]).
+/// ([`SKIP_NAMES`]), once per code it is written in ([`written_whole`]), at the line of its first such name, so that
+/// each parametrized case's marks are one however they are wrapped; and each `except` that swallows what it catches
+/// ([`swallows`]).
 pub fn weakenings(root: Node, text: Text) -> Vec<Weakening> {
     let mut out = vec![];
-    let mut seen: HashSet<(u32, String)> = HashSet::new();
+    // The ids of the nodes `written_whole` gave for the skips read so far.
+    let mut seen: HashSet<usize> = HashSet::new();
     let mut todo = vec![root];
     while let Some(node) = todo.pop() {
         let skip = match node.kind() {
@@ -230,12 +232,12 @@ pub fn weakenings(root: Node, text: Text) -> Vec<Weakening> {
             "attribute" => node.child_by_field_name("attribute").map(|a| text.of(a)),
             _ => None,
         };
-        let code = skip.filter(|name| SKIP_NAMES.contains(name)).map(|_| digest(written_whole(node), text));
-        if let Some(code) = code.filter(|code| seen.insert((line(node), code.clone()))) {
+        let whole = skip.filter(|name| SKIP_NAMES.contains(name)).map(|_| written_whole(node));
+        if let Some(whole) = whole.filter(|whole| seen.insert(whole.id())) {
             out.push(Weakening {
                 line: line(node),
                 kind: WeakeningKind::Skip,
-                code,
+                code: digest(whole, text),
                 message: format!("`{}` added: it skips a test or expects it to fail.", first_line(text.of(node))),
             });
         }

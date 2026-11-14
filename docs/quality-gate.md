@@ -570,7 +570,8 @@ outside functions, such as to a `use` or a `const`, gives nothing. The findings 
 - `not-run`: cargo-mutants could not start, wrote no outcomes the gate can read, or found the unmutated baseline not
   passing, as for tests that fail or code that does not build in the copy; the copy could not be made; or a changed
   `.rs` file could not be parsed;
-- `not-mutated`: a changed `.rs` file with no `Cargo.toml` above it, or one whose workspace cargo cannot tell;
+- `not-mutated`: a changed `.rs` file with no `Cargo.toml` above it, one whose workspace cargo cannot tell, or one
+  whose workspace's directory is not above it, as a `package.workspace` can name;
 - `not-removed`: the copy could not be removed afterwards; the findings stand.
 
 cargo-mutants' own skip attribute, `#[mutants::skip]`, also inside a `cfg_attr`, wrapped or not, is a suppression: the

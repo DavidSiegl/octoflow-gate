@@ -252,6 +252,33 @@ fn a_workspace_cargo_cannot_tell_is_not_mutated() {
 }
 
 #[test]
+fn a_file_whose_workspace_is_not_above_it_is_not_mutated() {
+    let repo = repo(&[]);
+    repo.put("src/lib.rs", format!("{LIB}{ADDED}").as_bytes());
+    // cargo takes a workspace root that a member's `package.workspace` names anywhere, as `tools/ws` with the member
+    // `../..`.
+    let path = cargo_stub(&repo, "locate-project", "echo tools/ws/Cargo.toml");
+    assert_eq!(findings(&repo, None, &[("PATH", path)]), vec![(
+        Some("src/lib.rs".into()),
+        None,
+        "not-mutated".into(),
+        "was not mutation-tested: its workspace at `tools/ws` is not above it.".into(),
+    )]);
+}
+
+#[test]
+fn a_file_that_does_not_parse_is_not_run() {
+    let repo = repo(&[]);
+    repo.put("src/lib.rs", format!("{LIB}\npub fn broken(a: u32 {{\n").as_bytes());
+    assert_eq!(findings(&repo, None, &[]), vec![(
+        Some("src/lib.rs".into()),
+        Some(5),
+        "not-run".into(),
+        "does not parse as Rust (unexpected `pub`), so its functions were not mutation-tested.".into(),
+    )]);
+}
+
+#[test]
 fn a_workspace_cargo_is_missing_to_tell_names_cargo_mutants() {
     let repo = repo(&[]);
     repo.put("src/lib.rs", format!("{LIB}{ADDED}").as_bytes());

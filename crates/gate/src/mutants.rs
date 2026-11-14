@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use checks::Finding;
@@ -17,7 +17,7 @@ use crate::clippy::workspaces;
 use crate::copies::{copy_tracked, finding, in_scratch_directory, sort_by_place, Budget};
 use crate::diff::removal_points;
 use crate::go_mutants::{edited_functions, go_mutants};
-use crate::parser_checks::{RustChange, Sources};
+use crate::parser_checks::{project_dir, RustChange, Sources};
 use crate::process::{run_with, Extras, Finished};
 use crate::python_mutants::{python_mutants, Mutmut};
 use crate::text;
@@ -132,8 +132,9 @@ fn edited_rust(rust: &RustChange) -> (Vec<Edited>, Vec<Finding>) {
 /// the files git tracks, as [`on_copy`] says. Each function with mutants that survived is a `survived` finding at the
 /// line its fn starts, with how many of the mutants tried of it they were and the first [`SURVIVOR_EXAMPLES`] of
 /// them. A function with nothing to mutate gives nothing. The budget running out is a `budget-reached` finding; a
-/// file in no workspace cargo can tell is a `not-mutated` one on it; a run that cannot be made or read is a `not-run`
-/// finding saying why, and a copy that cannot be removed afterwards a `not-removed` one.
+/// file in no workspace cargo can tell, or whose workspace's directory is not above it, is a `not-mutated` one on it;
+/// a run that cannot be made or read is a `not-run` finding saying why, and a copy that cannot be removed afterwards a
+/// `not-removed` one.
 fn rust_mutants(rust: &RustChange, functions: &[Edited], budget: &Budget) -> Vec<Finding> {
     if functions.is_empty() {
         return vec![];
@@ -162,10 +163,15 @@ fn on_copy(rust: &RustChange, dir: &Path, functions: &[Edited], budget: &Budget)
     }
     let mut roots: BTreeMap<OsString, Vec<&Edited>> = BTreeMap::new();
     for (path, mine) in by_path {
-        match cargo_root(&tree, path) {
-            Ok(root) => roots.entry(root).or_default().extend(mine),
-            Err(why) => out.push(finding(Some(path), None, "not-mutated", format!("was not mutation-tested: {why}."))),
-        }
+        let why = match cargo_root(&tree, path) {
+            Ok(root) if Path::new(path).starts_with(&root) => {
+                roots.entry(root).or_default().extend(mine);
+                continue;
+            }
+            Ok(root) => format!("its workspace at `{}` is not above it", dir_name(&root)),
+            Err(why) => why,
+        };
+        out.push(finding(Some(path), None, "not-mutated", format!("was not mutation-tested: {why}.")));
     }
     let roots: Vec<_> = roots.into_iter().collect();
     for (n, (root, mine)) in roots.iter().enumerate() {
@@ -190,12 +196,8 @@ fn on_copy(rust: &RustChange, dir: &Path, functions: &[Edited], budget: &Budget)
 /// the package whose Cargo.toml is nearest above it. Errs with why, a clause, when no Cargo.toml lies above it, or
 /// cargo cannot tell its workspace.
 fn cargo_root(tree: &Path, path: &OsStr) -> Result<OsString, String> {
-    let dirs: Vec<&[u8]> = path.as_bytes().split(|&b| b == b'/').collect();
-    let dirs = &dirs[..dirs.len() - 1];
-    let nearest = (0..=dirs.len())
-        .rev()
-        .map(|k| dirs[..k].iter().map(|d| OsStr::from_bytes(d)).collect::<PathBuf>().join("Cargo.toml"))
-        .find(|manifest| tree.join(manifest).is_file())
+    let nearest = project_dir(path, "Cargo.toml", |manifest| tree.join(manifest).is_file())
+        .map(|dir| dir.join("Cargo.toml"))
         .ok_or_else(|| "no Cargo.toml lies above it".to_string())?;
     let (manifests, problems) = workspaces("cargo-mutants", tree, &[nearest.clone().into_os_string()]);
     match (manifests.first(), problems.first()) {
@@ -216,9 +218,9 @@ pub(crate) fn dir_name(dir: &OsStr) -> String {
 }
 
 /// cargo-mutants' `--re` for the mutants of `f`, a function in the workspace at `root`, a directory from the tree's
-/// top, empty for the top: each mutant's name, as `--list` shows it, opens with its file's path from the workspace's
-/// directory, its line and its column, as `src/lib.rs:2:5: replace add -> u32 with 0`, and the lines of `f` hold every
-/// mutant of it.
+/// top, empty for the top, that `f`'s path lies under: each mutant's name, as `--list` shows it, opens with its file's
+/// path from the workspace's directory, its line and its column, as `src/lib.rs:2:5: replace add -> u32 with 0`, and
+/// the lines of `f` hold every mutant of it.
 fn mutants_of(root: &OsStr, f: &Edited) -> String {
     let path = f.path.as_bytes();
     let path = if root.is_empty() { path } else { &path[root.len() + 1..] };
@@ -274,7 +276,7 @@ fn run_workspace(run: &Run, root: &OsStr, functions: &[&Edited], budget: &Budget
 /// to mutate. A `not-run` finding alone when its outcomes cannot be read, as they may not be when it was stopped, or
 /// its unmutated baseline failed.
 fn run_findings(done: &Finished, output: &Path, root: &OsStr, budget: u64) -> Vec<Finding> {
-    // cargo-mutants writes no outcomes when it finds nothing to mutate in the diff, and exits 0.
+    // cargo-mutants writes no outcomes when no mutant matches the `--re` filters, and exits 0.
     if done.status == 0 && !done.stopped && output.join("outcomes.json").symlink_metadata().is_err() {
         return vec![];
     }

@@ -39,10 +39,10 @@ const TIMEOUT_COEFFICIENT: u32 = 10;
 /// whose functions cannot be told, as one that does not parse.
 ///
 /// A function counts when the change edits it (mutants::edits): a function or method, with a body, of a Go file that
-/// is code under test (GoChange::is_code) and read in the working tree, so not generated, vendored or a symlink. One whose file's base has a function of its name with the same declaration, its
-/// receiver, parameters, results and body, whatever its comments and layout ([`unchanged_declarations`]), does not
-/// count: an edit to its comments or layout alone changes nothing gremlins mutates, while one to its signature alone
-/// can change what its body does.
+/// is code under test (GoChange::is_code) and read in the working tree, so not generated, vendored or a symlink. One
+/// whose file's base has a function of its name with the same declaration, its receiver, parameters, results and body,
+/// whatever its comments and layout ([`unchanged_declarations`]), does not count: an edit to its comments or layout
+/// alone changes nothing gremlins mutates, while one to its signature alone can change what its body does.
 pub(crate) fn edited_functions(go: &GoChange) -> (Vec<Edited>, Vec<Finding>) {
     let removals = removal_points(&go.change.diff);
     let (mut edited, mut unread) = (vec![], vec![]);

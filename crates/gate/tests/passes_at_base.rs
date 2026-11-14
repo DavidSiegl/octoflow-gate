@@ -246,6 +246,20 @@ fn a_run_stopped_by_the_budget_is_a_finding() {
 }
 
 #[test]
+fn a_test_judged_in_a_target_that_finished_is_found_when_the_budget_stops_a_later_one() {
+    let repo = calc(&[]);
+    two_targets(&repo);
+    let found = Command::new("sh").args(["-c", "command -v cargo"]).output().unwrap();
+    let cargo = String::from_utf8(found.stdout).unwrap();
+    let script =
+        format!("case \" $* \" in *\" --test more \"*) exec sleep 120;; esac\nexec '{}' \"$@\"\n", cargo.trim());
+    let bin = repo.stub("cargo", &script);
+    let how = Gate { budget: 40, env: vec![("PATH", path_after(&bin))] };
+    let found: Vec<_> = findings(&repo, how).into_iter().map(|(path, line, rule, _)| (path, line, rule)).collect();
+    assert_eq!(found, vec![(None, None, "budget-reached".into()), at("tests/calc.rs", 2, "passes-at-base")]);
+}
+
+#[test]
 fn a_cargo_that_cannot_start_is_a_finding_for_each_test() {
     let repo = calc(&[]);
     two_targets(&repo);

@@ -196,3 +196,27 @@ fn ctrl_c_writes_nothing_and_exits_130() {
     assert!(start.elapsed() < std::time::Duration::from_secs(20), "{:?}", start.elapsed());
     assert!(!out.exists() && !repo.outside.join("quality.json").exists());
 }
+
+#[test]
+fn the_base_files_of_a_change_are_read_by_one_git_process() {
+    let repo = Repo::with(&[
+        ("notes.md", b"notes\n"),
+        ("run", b"#!/bin/sh\necho run\n"),
+        ("tool", b"#!/usr/bin/env python3\nprint(1)\n"),
+    ]);
+    for (path, contents) in [("notes.md", "more notes\n"), ("run", "#!/bin/sh\necho ran\n"), ("tool", "print(2)\n")] {
+        repo.put(path, contents.as_bytes());
+    }
+    let log = repo.outside.join("git.log");
+    let found = Command::new("sh").args(["-c", "command -v git"]).output().unwrap();
+    let git = String::from_utf8(found.stdout).unwrap();
+    let bin = repo.stub("git", &format!("echo \"$*\" >> '{}'\nexec '{}' \"$@\"", log.display(), git.trim()));
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    let done = repo.gate_command("HEAD").arg("--out").arg(repo.outside.join("quality.md")).env("PATH", path)
+        .output().unwrap();
+    assert!(matches!(done.status.code(), Some(0 | 1)), "{}", String::from_utf8_lossy(&done.stderr));
+    let logged = std::fs::read_to_string(&log).unwrap();
+    let reads: Vec<&str> = logged.lines().filter(|line| line.contains(" cat-file ")).collect();
+    assert_eq!(reads.len(), 1, "{reads:?}");
+    assert!(reads[0].ends_with(" cat-file --batch"), "{reads:?}");
+}

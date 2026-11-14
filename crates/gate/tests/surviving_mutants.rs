@@ -333,3 +333,24 @@ fn no_room_for_cargo_mutants_is_a_finding() {
          error 2); nothing ran, so the check judged nothing.",
     )]);
 }
+
+#[test]
+fn cargo_tells_the_workspace_of_a_package_once_however_many_of_its_files_the_change_edits() {
+    let repo = repo(&[]);
+    repo.put("src/lib.rs", format!("mod more;\n{LIB}{ADDED}").as_bytes());
+    repo.put("src/more.rs", ADDED.replace("checked", "doubled").as_bytes());
+    let log = repo.outside.join("located");
+    let found = Command::new("sh").args(["-c", "command -v cargo"]).output().unwrap();
+    let real: OsString = String::from_utf8(found.stdout).unwrap().trim().into();
+    // cargo-mutants finds nothing to mutate at once, so the test waits on no build.
+    let stub = format!(
+        "[ \"$1\" = mutants ] && exit 0\n[ \"$1\" = locate-project ] && echo \"$*\" >> '{}'\n\
+         exec \"$REAL_CARGO\" \"$@\"",
+        log.display()
+    );
+    let bin = repo.stub("cargo", &stub);
+    let path: OsString = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()).into();
+    assert_eq!(findings(&repo, None, &[("PATH", path), ("REAL_CARGO", real)]), vec![]);
+    let located = std::fs::read_to_string(&log).unwrap();
+    assert_eq!(located.lines().count(), 1, "{located}");
+}

@@ -5,7 +5,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::time::Duration;
 
-use crate::process::{self, Finished};
+use crate::process::{self, Extras, Finished};
 use crate::text;
 use crate::Unjudged;
 
@@ -15,9 +15,15 @@ const TIMEOUT: u64 = 60;
 /// `git -C cwd args`, run as [`process::run`] runs a program, for a command whose failure the caller interprets: its
 /// exit status and what it printed, as git printed it. Errs when git cannot be started or runs longer than a minute.
 pub fn run<S: AsRef<OsStr>>(cwd: &Path, args: &[S]) -> Result<Finished, Unjudged> {
+    run_fed(cwd, args, &[])
+}
+
+/// [`run`] with `input` on git's standard input.
+fn run_fed<S: AsRef<OsStr>>(cwd: &Path, args: &[S], input: &[u8]) -> Result<Finished, Unjudged> {
     let mut argv: Vec<&OsStr> = vec![OsStr::new("git"), OsStr::new("-C"), cwd.as_os_str()];
     argv.extend(args.iter().map(AsRef::as_ref));
-    match process::run(&argv, Path::new("."), Duration::from_secs(TIMEOUT)) {
+    let extras = Extras { input, ..Extras::default() };
+    match process::run_with(&argv, Path::new("."), Duration::from_secs(TIMEOUT), &extras) {
         Err(e) => Err(Unjudged(format!("{}: {e}", command(cwd, args)))),
         Ok(done) if done.stopped => {
             Err(Unjudged(format!("{}: did not finish within {TIMEOUT} seconds", command(cwd, args))))
@@ -29,12 +35,45 @@ pub fn run<S: AsRef<OsStr>>(cwd: &Path, args: &[S]) -> Result<Finished, Unjudged
 /// The standard output of `git -C cwd args`, as git printed it. Errs as [`run`] does, and when git exits with a
 /// status other than 0.
 pub fn output<S: AsRef<OsStr>>(cwd: &Path, args: &[S]) -> Result<Vec<u8>, Unjudged> {
-    let done = run(cwd, args)?;
+    output_fed(cwd, args, &[])
+}
+
+/// [`output`] with `input` on git's standard input.
+fn output_fed<S: AsRef<OsStr>>(cwd: &Path, args: &[S], input: &[u8]) -> Result<Vec<u8>, Unjudged> {
+    let done = run_fed(cwd, args, input)?;
     if done.status != 0 {
         let said = text::lossless(&done.stderr);
         return Err(Unjudged(format!("{} failed: {}", command(cwd, args), text::py_strip(&said))));
     }
     Ok(done.stdout)
+}
+
+/// The contents of the objects of the repository at `cwd` that `ids`, their full object ids in hex, name, in the
+/// order given, all read by one `git cat-file --batch`. Errs as [`output`] does, and when the repository has no object
+/// of one of the ids.
+pub fn objects(cwd: &Path, ids: &[&[u8]]) -> Result<Vec<Vec<u8>>, Unjudged> {
+    if ids.is_empty() {
+        return Ok(vec![]);
+    }
+    let args = ["cat-file", "--batch"];
+    let input: Vec<u8> = ids.iter().flat_map(|id| [*id, b"\n"]).flatten().copied().collect();
+    let printed = output_fed(cwd, &args, &input)?;
+    let failed = |why: String| Unjudged(format!("{}: {why}", command(cwd, &args)));
+    let mut rest = printed.as_slice();
+    let mut out = Vec::with_capacity(ids.len());
+    for id in ids {
+        // Each object is printed as `<id> <type> <size>\n<contents>\n`, one git does not have as `<id> missing\n`.
+        let end = rest.iter().position(|&b| b == b'\n').unwrap_or(rest.len());
+        let header = &rest[..end];
+        let size = header.rsplit(|&b| b == b' ').next().and_then(|n| std::str::from_utf8(n).ok()?.parse().ok());
+        let contents = size.filter(|_| header.starts_with(id)).and_then(|n: usize| rest.get(end + 1..end + 1 + n));
+        let Some(contents) = contents else {
+            return Err(failed(format!("printed `{}` for {}", text::lossless(header), text::lossless(id))));
+        };
+        out.push(contents.to_vec());
+        rest = rest.get(end + 2 + contents.len()..).unwrap_or_default();
+    }
+    Ok(out)
 }
 
 /// `git -C cwd args` as a shell would take it, for a message.
@@ -79,6 +118,27 @@ mod tests {
         assert_eq!(shell_quote("a b"), "'a b'");
         assert_eq!(shell_quote("it's"), "'it'\"'\"'s'");
         assert_eq!(shell_quote_bytes(b"/tmp/a\xff b"), b"'/tmp/a\xff b'");
+    }
+
+    #[test]
+    fn objects_are_read_in_the_order_asked_and_a_missing_one_is_an_error() {
+        let dir = std::env::temp_dir().join(format!("gate-git-objects-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        output(&dir, &["init", "--quiet"]).unwrap();
+        let mut ids = vec![];
+        for contents in ["one\n", "", "two\nlines\n"] {
+            let file = dir.join("f");
+            std::fs::write(&file, contents).unwrap();
+            let id = output(&dir, &[OsStr::new("hash-object"), OsStr::new("-w"), file.as_os_str()]).unwrap();
+            ids.push(id.trim_ascii().to_vec());
+        }
+        let asked: Vec<&[u8]> = [2, 0, 1, 2].iter().map(|&k| ids[k].as_slice()).collect();
+        let read = objects(&dir, &asked);
+        let missing = objects(&dir, &[ids[0].as_slice(), &[b'0'; 40]]);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(read.unwrap(), [&b"two\nlines\n"[..], b"one\n", b"", b"two\nlines\n"]);
+        let Err(Unjudged(said)) = missing else { panic!("a missing object was read") };
+        assert!(said.ends_with(&format!("cat-file --batch: printed `{0} missing` for {0}", "0".repeat(40))), "{said}");
     }
 
     #[test]

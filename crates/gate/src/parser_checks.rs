@@ -3,7 +3,6 @@
 //! (crates/lang-go) are the languages read ([`Sources`]). What is read of Rust ([`RustChange`]) serves the checks that
 //! run a change's Rust too, as passes_at_base.
 
-use std::cell::OnceCell;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::io::Read;
@@ -44,8 +43,7 @@ impl<'a> Sources<'a> {
             python_test(settings, path) || other.is_some_and(|o| python_test(settings, o))
         };
         let (python, bases_not_python) = stored.files(&PYTHON, &python_tests)?;
-        let mut rust = RustChange::of(change, stored.gone.clone())?;
-        rust.files = stored.files(&RUST, &|path, _, at_base| rust.among_tests(path, at_base))?.0;
+        let rust = RustChange::of(change, &stored)?;
         let (go, _) = stored.files(&GO, &|path, _, _| lang_go::among_tests(path.as_bytes()))?;
         Ok(Sources {
             change,
@@ -137,8 +135,8 @@ pub struct RustChange<'a> {
     /// Each file of the change with a .rs path on a side, in the change's order, read with crates/lang-rust as
     /// [`Sources`] says. A side [`RustChange::among_tests`] places among the tests is read as test code whole.
     pub files: Vec<ChangedFile>,
-    /// The base paths the change deletes or renames, where a Cargo.toml may have stood.
-    gone: HashSet<PathBuf>,
+    /// The paths on a side of the change that are Rust code under test, as [`RustChange::is_code`] says.
+    code: HashSet<OsString>,
     /// The paths of the base's .rs files that only test code takes in (lang_rust::test_modules); none when the
     /// change touches no .rs path.
     test_modules_at_base: HashSet<OsString>,
@@ -147,17 +145,46 @@ pub struct RustChange<'a> {
 }
 
 impl<'a> RustChange<'a> {
-    /// `change`'s Rust, `gone` its base paths it deletes or renames, without its files, which [`Sources::read`]
-    /// reads by [`RustChange::among_tests`]. Errs when git cannot list the tree's files or show one at the base, or
-    /// one cannot be read in the working tree.
-    fn of(change: &'a Change, gone: HashSet<PathBuf>) -> Result<RustChange<'a>, Unjudged> {
+    /// `change`'s Rust, its files read from `stored` by [`RustChange::among_tests`]. Errs when git cannot list the
+    /// tree's files or show one at the base, or one cannot be read in the working tree.
+    fn of(change: &'a Change, stored: &Stored) -> Result<RustChange<'a>, Unjudged> {
         let (mut test_modules_at_base, mut test_modules_now) = (HashSet::new(), HashSet::new());
         if any_path(change, |path| path.as_bytes().ends_with(b".rs")) {
             let (base, now) = trees(change, b".rs")?;
             test_modules_at_base = lang_rust::test_modules(&base);
             test_modules_now = lang_rust::test_modules(&now);
         }
-        Ok(RustChange { change, files: vec![], gone, test_modules_at_base, test_modules_now })
+        let mut rust =
+            RustChange { change, files: vec![], code: HashSet::new(), test_modules_at_base, test_modules_now };
+        rust.files = stored.files(&RUST, &|path, _, at_base| rust.among_tests(path, at_base))?.0;
+        rust.code = rust.code_paths(&stored.gone);
+        Ok(rust)
+    }
+
+    /// The paths on a side of the change that are Rust code under test, as [`RustChange::is_code`] says, `gone` being
+    /// the base paths the change deletes or renames, where a Cargo.toml may have stood.
+    fn code_paths(&self, gone: &HashSet<PathBuf>) -> HashSet<OsString> {
+        let change = self.change;
+        // Whether the change edits code at each path a file was read at, outside the test code of a file that is not
+        // among the tests whole on each side it has.
+        let mut edited: HashMap<&OsStr, bool> = HashMap::new();
+        for f in &self.files {
+            let sides = || [&f.before, &f.after].into_iter().flatten();
+            let edits = !sides().all(|s| s.among_tests) && integrity::edits_code(f);
+            for side in sides() {
+                *edited.entry(&side.path).or_default() |= edits;
+            }
+        }
+        let paths = change.files.iter().flat_map(|f| [&f.before, &f.after]).flatten();
+        paths
+            .filter(|path| {
+                path.as_bytes().ends_with(b".rs")
+                    && !change.settings.rust_tests.matches(path)
+                    && edited.get(path.as_os_str()).copied().unwrap_or(true)
+                    && in_project(change, gone, path, CARGO_MANIFEST)
+            })
+            .cloned()
+            .collect()
     }
 
     /// Whether the file at `path`, at the base when `at_base` and in the working tree otherwise, is among Rust's tests
@@ -172,26 +199,17 @@ impl<'a> RustChange<'a> {
     /// Whether `path`, on either side of the change, is Rust code under test: a .rs file of a Cargo package
     /// ([`in_project`]) that `test-files.rust` does not match, which the change adds, deletes, renames or edits
     /// outside its test code ([`integrity::edits_code`]), unless it is among the tests whole on each side it has
-    /// ([`RustChange::among_tests`]). A path no file was read at, as a symlink's, counts as edited.
+    /// ([`RustChange::among_tests`]). A path no file was read at, as a symlink's, counts as edited; a path on no side
+    /// of the change is not code under test.
     pub fn is_code(&self, path: &OsStr) -> bool {
-        let change = self.change;
-        if !path.as_bytes().ends_with(b".rs")
-            || change.settings.rust_tests.matches(path)
-            || !in_project(change, &self.gone, path, CARGO_MANIFEST)
-        {
-            return false;
-        }
-        let at = |side: &Option<Side>| side.as_ref().is_some_and(|s| s.path == path);
-        let tests_whole = |f: &ChangedFile| [&f.before, &f.after].into_iter().flatten().all(|s| s.among_tests);
-        let mut read = self.files.iter().filter(|f| at(&f.before) || at(&f.after)).peekable();
-        read.peek().is_none() || read.any(|f| !tests_whole(f) && integrity::edits_code(f))
+        self.code.contains(path)
     }
 
     /// Whether the change edits Rust code under test: whether a path on a side of one of its files [`is_code`].
     ///
     /// [`is_code`]: RustChange::is_code
     pub fn edits_code(&self) -> bool {
-        any_path(self.change, |path| self.is_code(path))
+        !self.code.is_empty()
     }
 }
 
@@ -332,12 +350,7 @@ fn trees(change: &Change, suffix: &[u8]) -> Result<(TreeFiles, TreeFiles), Unjud
         now.iter().filter(|(path, _)| !touched.contains(path.as_os_str())).cloned().collect();
     let before: Vec<OsString> =
         change.files.iter().filter_map(|f| f.before.clone()).filter(|p| p.as_bytes().ends_with(suffix)).collect();
-    for path in regular_files_at_base(change, &before)? {
-        let mut spec = OsString::from(format!("{}:", change.base));
-        spec.push(&path);
-        let bytes = git::output(&change.root, &[OsStr::new("cat-file"), OsStr::new("blob"), &spec])?;
-        base.push((path, bytes));
-    }
+    base.extend(regular_files_at_base(change, &before)?);
     Ok((base, now))
 }
 
@@ -450,8 +463,8 @@ pub(crate) const GO_MANIFEST: &str = "go.mod";
 /// What git and the working tree hold of a change's files, for each [`Language`] to read its own from.
 struct Stored<'a> {
     change: &'a Change,
-    /// The base paths of the change's files that are regular files there.
-    regular_at_base: HashSet<OsString>,
+    /// The contents at the base of each of the change's files that is a regular file there, by its base path.
+    at_base: HashMap<OsString, Vec<u8>>,
     /// The lines of its base the change removed from each file, by the file's path in the working tree.
     removed: ChangedLines,
     /// The base paths the change deletes or renames, where a project's file ([`Language::project`]) may have stood.
@@ -459,13 +472,13 @@ struct Stored<'a> {
 }
 
 impl<'a> Stored<'a> {
-    /// Errs when git cannot list the base's tree.
+    /// Errs when git cannot list the base's tree or show a file of it.
     fn of(change: &'a Change) -> Result<Stored<'a>, Unjudged> {
         let base_paths: Vec<OsString> = change.files.iter().filter_map(|f| f.before.clone()).collect();
         let gone = change.files.iter().filter(|f| f.before != f.after).filter_map(|f| f.before.as_deref());
         Ok(Stored {
             change,
-            regular_at_base: regular_files_at_base(change, &base_paths)?,
+            at_base: regular_files_at_base(change, &base_paths)?,
             removed: removed_lines(&change.diff),
             gone: gone.map(PathBuf::from).collect(),
         })
@@ -476,8 +489,7 @@ impl<'a> Stored<'a> {
     /// and the base paths among them that held none of it by their name or first line, read all the same
     /// ([`Language::base_of_any_name`]). `among_tests(path, other, at_base)` says whether a side at `path`, the base's
     /// when `at_base`, whose other side, where the change gives it one, is at `other`, is among the language's tests
-    /// as a whole, and is read as test code. Errs when git cannot show such a file at the base, or one cannot be read
-    /// in the working tree.
+    /// as a whole, and is read as test code. Errs when such a file cannot be read in the working tree.
     fn files(
         &self,
         language: &Language,
@@ -497,15 +509,13 @@ impl<'a> Stored<'a> {
                 None => None,
             };
             let whatever_it_holds = language.base_of_any_name && after.is_some();
-            let before = match file.before.as_ref().filter(|path| self.regular_at_base.contains(*path)) {
-                Some(path) => self.at_base(path, language, whatever_it_holds)?.map(|(blob, holds)| {
-                    if !holds {
-                        bases_holding_none.insert(path.clone());
-                    }
-                    side(path, &file.after, &blob, true)
-                }),
-                None => None,
-            };
+            let before = file.before.as_ref().and_then(|path| {
+                let (blob, holds) = self.at_base(path, language, whatever_it_holds)?;
+                if !holds {
+                    bases_holding_none.insert(path.clone());
+                }
+                Some(side(path, &file.after, blob, true))
+            });
             if before.is_none() && after.is_none() {
                 continue;
             }
@@ -516,32 +526,16 @@ impl<'a> Stored<'a> {
         Ok((out, bases_holding_none))
     }
 
-    /// The bytes of the base's regular file at `path`, when it holds `language`'s source or `whatever_it_holds`, lies
-    /// in one of the language's projects ([`in_its_project`]) and is not generated ([`Language::generated`]),
-    /// with whether it holds that source. A file git cannot show is not the language's when its name would have to
-    /// decide and does not, and an error otherwise.
-    fn at_base(
-        &self,
-        path: &OsStr,
-        language: &Language,
-        whatever_it_holds: bool,
-    ) -> Result<Option<(Vec<u8>, bool)>, Unjudged> {
-        let blob = OnceCell::new();
-        let show = || {
-            blob.get_or_init(|| {
-                let mut spec = OsString::from(format!("{}:", self.change.base));
-                spec.push(path);
-                git::output(&self.change.root, &[OsStr::new("cat-file"), OsStr::new("blob"), &spec])
-            })
-        };
-        let head = || show().as_ref().map(|blob| blob[..blob.len().min(FIRST_LINE_BYTES)].to_vec()).unwrap_or_default();
-        let holds = (language.holds)(path.as_bytes(), &head);
+    /// The bytes of the base's file at `path`, when it is a regular file there that holds `language`'s source or
+    /// `whatever_it_holds`, lies in one of the language's projects ([`in_its_project`]) and is not generated
+    /// ([`Language::generated`]), with whether it holds that source.
+    fn at_base(&self, path: &OsStr, language: &Language, whatever_it_holds: bool) -> Option<(&[u8], bool)> {
+        let blob = self.at_base.get(path)?;
+        let holds = (language.holds)(path.as_bytes(), &|| blob[..blob.len().min(FIRST_LINE_BYTES)].to_vec());
         if (!whatever_it_holds && !holds) || !in_its_project(self.change, &self.gone, path, language) {
-            return Ok(None);
+            return None;
         }
-        show();
-        let bytes = blob.into_inner().transpose()?;
-        Ok(bytes.filter(|bytes| !(language.generated)(bytes)).map(|bytes| (bytes, holds)))
+        Some((blob.as_slice(), holds)).filter(|(blob, _)| !(language.generated)(blob))
     }
 
     /// The bytes of the working tree's regular file at `path`, when it holds `language`'s source in one of its
@@ -580,11 +574,12 @@ fn in_its_project(change: &Change, gone: &HashSet<PathBuf>, path: &OsStr, langua
     language.project.is_none_or(|manifest| in_project(change, gone, path, manifest))
 }
 
-/// Those of `paths`, each a path of the tree at `change`'s base, that are regular files there, as git's tree records
-/// them: not a symlink or a submodule. Errs when git cannot list the base's tree.
-fn regular_files_at_base(change: &Change, paths: &[OsString]) -> Result<HashSet<OsString>, Unjudged> {
+/// (path, bytes) of each of `paths`, each a path of the tree at `change`'s base, that is a regular file there, as
+/// git's tree records it: not a symlink or a submodule. Errs when git cannot list the base's tree or show one of the
+/// files.
+fn regular_files_at_base(change: &Change, paths: &[OsString]) -> Result<HashMap<OsString, Vec<u8>>, Unjudged> {
     if paths.is_empty() {
-        return Ok(HashSet::new());
+        return Ok(HashMap::new());
     }
     // The whole tree, listed once: naming the paths instead would put as many on one command line as the change
     // touches, more than the system allows (E2BIG) for a change to a large vendored tree.
@@ -592,8 +587,16 @@ fn regular_files_at_base(change: &Change, paths: &[OsString]) -> Result<HashSet<
     let wanted: HashSet<&[u8]> = paths.iter().map(|p| p.as_bytes()).collect();
     // Each entry is `<mode> <type> <object>\t<path>`, NUL-ended; a regular file's mode is 100644 or 100755.
     let regular = listed.split(|&b| b == 0).filter(|entry| entry.starts_with(b"100"));
-    let paths = regular.filter_map(|entry| entry.iter().position(|&b| b == b'\t').map(|k| &entry[k + 1..]));
-    Ok(paths.filter(|p| wanted.contains(p)).map(|p| OsStr::from_bytes(p).to_os_string()).collect())
+    let (mut found, mut objects) = (vec![], vec![]);
+    for entry in regular {
+        let Some(tab) = entry.iter().position(|&b| b == b'\t') else { continue };
+        let (path, object) = (&entry[tab + 1..], entry[..tab].rsplit(|&b| b == b' ').next().unwrap_or_default());
+        if wanted.contains(path) {
+            found.push(OsStr::from_bytes(path).to_os_string());
+            objects.push(object);
+        }
+    }
+    Ok(found.into_iter().zip(git::objects(&change.root, &objects)?).collect())
 }
 
 /// Whether `path` is a regular file, not a symlink to one.

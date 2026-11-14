@@ -486,7 +486,7 @@ impl CrateLayout {
     /// and [`Unplaced::Unbuilt`] when it cannot start, fails, or prints what cannot be read so.
     fn cargo_metadata(&self, dir: &Path) -> Result<Workspace, Unplaced> {
         let argv = ["cargo", "metadata", "--no-deps", "--format-version", "1"].map(OsStr::new);
-        let extras = Extras { env: &[("CARGO_TERM_COLOR", OsStr::new("never"))], soft_stop: None };
+        let extras = Extras { env: &[("CARGO_TERM_COLOR", OsStr::new("never"))], ..Extras::default() };
         let left = self.deadline.saturating_duration_since(Instant::now());
         let shown = if dir.as_os_str().is_empty() {
             "the top level".to_string()
@@ -579,7 +579,7 @@ fn run_target(run: &Run, target: &Target, named: &[&str], budget: &Budget) -> Ra
     argv.extend([run.config.as_os_str(), OsStr::new("--profile"), OsStr::new(NEXTEST_PROFILE)]);
     argv.extend(target.args.iter().map(OsStr::new));
     argv.extend([OsStr::new("-E"), OsStr::new(&filter)]);
-    let extras = Extras { env: &[("CARGO_TERM_COLOR", OsStr::new("never"))], soft_stop: None };
+    let extras = Extras { env: &[("CARGO_TERM_COLOR", OsStr::new("never"))], ..Extras::default() };
     let done = match run_with(&argv, &run.tree.join(&target.package), left, &extras) {
         Ok(done) => done,
         Err(e) => {

@@ -130,6 +130,10 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   would pass there. Accepted: the check reports only, and splitting the file's tests from its imports would mean
   rewriting them. Closes, if its run metrics show these files are common, by importing such names inside the tests that
   use them, or by running each test with the failing import stubbed. Moved from octoflow-ai on 2026-11-05.
+- **flaky-tests copies the tracked tree twice when a change touches both Python and Go tests.** As cross-review 39
+  put it (R1-11, 2026-11-14): "`crates/gate/src/flaky_tests.rs:228` (Go's `copy_tracked` at `:231`) beside Python's
+  own copy; one copy could serve both reruns." Costs a second copy of the tree's tracked files, and its time, on such
+  a change; nothing is judged wrongly. Closes with one copy that both halves rerun in.
 - **A test file whose name is not UTF-8 is never rerun by `flaky-tests`.** pytest-randomly 5.0.0 hashes each node id as
   strict UTF-8 (`pytest_randomly._crc32`, called from `pytest_runtest_setup` and its neighbours) and stops with an
   internal error, exit status 3. `run` in `crates/gate/src/pytest.rs` already lets pytest print such an id
@@ -188,7 +192,7 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
     The dependency-cycles check (structural-checks/01) fails a change that closes such a cycle from now on, but not one
     the base has that the change adds no import of a new file to, so these stay until a change breaks them; an import
     a change adds between two files of such a cycle that were not yet joined does fail it. The run over 50 commits
-    found more such cycles in `crates/gate` (`report` <-> `config_edits`, `golangci` <-> `linters`).
+    found one more such cycle in `crates/gate`, `golangci` <-> `linters`.
   - F12, `crates/gate/src/glob.rs`: "`fnmatch` arrives as an `across_slashes` flag through `translate_name` and
     `bracket` with two added match arms, the bolted-on flag the user's CLAUDE.md design rule names; it also compiles a
     Regex on each call." Closes with fnmatch's translation a function of its own, compiled once a pattern.

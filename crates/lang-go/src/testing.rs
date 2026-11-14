@@ -152,11 +152,12 @@ struct Walk<'t> {
     /// The names the top-level function the walk is in binds to testify's `New`, whose methods are assertions
     /// ([`read`]).
     assertors: HashSet<&'t str>,
-    /// The names of the top-level functions met so far that are helpers ([`read`]) by a failing call of their own;
-    /// [`Walk::keep_helper_calls`] adds those that are helpers by calling one.
+    /// The names of the top-level functions known so far to be helpers ([`read`]).
     helpers: HashSet<String>,
     /// Each call met of a function by its name with a testing variable among its arguments, as a helper is called,
-    /// where it was met, with the name of the function called.
+    /// where it was met, with the name of the function called. A [`Caller::Test`]'s index stays that of the call's
+    /// assertion because, until the walk ends, a test's assertions are only pushed to, never inserted, reordered or
+    /// removed.
     helper_calls: Vec<(Caller, &'t str)>,
 }
 

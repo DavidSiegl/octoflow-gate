@@ -24,7 +24,8 @@ const GATE_TOML: &str = "[[test]]\nname = \"t\"\ncommand = [\"true\"]\n";
 
 /// A released gate, as [`fetching`] unpacks it. It refuses a gate.toml that sets `new_key`, as a gate refuses a key
 /// it does not know, unless the pin it was fetched by names 0.8.0. Asked to write a quality file, it writes its
-/// arguments, a line each, to GATE_ARGS and the gate.toml it judges by to GATE_SETTINGS, and exits FAKE_GATE_EXIT.
+/// arguments, a line each, to GATE_ARGS, the gate.toml it judges by to GATE_SETTINGS and the CARGO_HOME it was given
+/// to GATE_CARGO_HOME, and exits FAKE_GATE_EXIT.
 const GATE_STUB: &str = r#"#!/bin/sh
 args=$(printf '%s\n' "$@")
 config= out=
@@ -42,6 +43,7 @@ fi
 [ -n "$out" ] || exit 0
 echo "$args" > "$GATE_ARGS"
 cp "$config" "$GATE_SETTINGS"
+printf '%s' "${CARGO_HOME-}" > "$GATE_CARGO_HOME"
 exit "$FAKE_GATE_EXIT"
 "#;
 
@@ -80,6 +82,8 @@ struct Judged {
     gate_args: Option<Vec<String>>,
     /// The gate.toml the gate judged by, None when it did not judge.
     settings: Option<String>,
+    /// The CARGO_HOME the gate ran with, empty when it was unset; None when it did not judge.
+    cargo_home: Option<String>,
 }
 
 /// Runs `repo`'s scripts/gate as outside a Jenkins build, with stubs first on PATH for the tools it asks for before
@@ -97,16 +101,18 @@ fn run_gate_with(repo: &Repo, gate_exit: i32, env: &[(&str, &Path)]) -> Judged {
         bin = repo.stub(tool, script);
     }
     let (gate_args, settings) = (repo.outside.join("gate.args"), repo.outside.join("gate.settings"));
+    let cargo_home = repo.outside.join("gate.cargo-home");
     let done = Command::new("bash")
         .arg("scripts/gate")
         .current_dir(&repo.repo)
         .env("PATH", format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()))
-        .envs([("GATE_ARGS", &gate_args), ("GATE_SETTINGS", &settings)])
+        .envs([("GATE_ARGS", &gate_args), ("GATE_SETTINGS", &settings), ("GATE_CARGO_HOME", &cargo_home)])
         .env("FAKE_GATE_EXIT", gate_exit.to_string())
         .env_remove("WORKSPACE")
         .env_remove("WORKSPACE_TMP")
         .env_remove("CHANGE_TARGET")
         .env_remove("JENKINS_URL")
+        .env_remove("CARGO_HOME")
         .envs(env.iter().copied())
         .output()
         .unwrap();
@@ -115,6 +121,7 @@ fn run_gate_with(repo: &Repo, gate_exit: i32, env: &[(&str, &Path)]) -> Judged {
         stderr: String::from_utf8(done.stderr).unwrap(),
         gate_args: std::fs::read_to_string(gate_args).ok().map(|args| args.lines().map(String::from).collect()),
         settings: std::fs::read_to_string(settings).ok(),
+        cargo_home: std::fs::read_to_string(cargo_home).ok(),
     }
 }
 
@@ -179,7 +186,7 @@ fn a_workspace_outside_a_jenkins_build_changes_nothing() {
     let judged = run_gate_with(&repo, 0, &[("WORKSPACE", &workspace), ("WORKSPACE_TMP", &workspace_tmp)]);
     assert_eq!(judged.status, Some(0), "{}", judged.stderr);
     assert!(kept.exists());
-    assert!(!workspace.join(".cargo-home").exists());
+    assert_eq!(judged.cargo_home.as_deref(), Some(""));
 }
 
 #[test]
@@ -195,6 +202,7 @@ fn a_jenkins_build_keeps_its_temporary_files_in_its_workspace() {
     let judged = run_gate_with(&repo, 0, &build);
     assert_eq!(judged.status, Some(0), "{}", judged.stderr);
     assert!(workspace_tmp.join("tmp").is_dir());
+    assert_eq!(judged.cargo_home, Some(workspace.join(".cargo-home").display().to_string()));
 }
 
 #[test]

@@ -8,6 +8,21 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
 
 ## Open issues
 
+- **A Go test helper is followed only in the calling test's file.** As cross-review 37 put it (F5, 2026-11-14):
+  "`Walk` is per file, and `keep_helper_calls` drops a test's call of a function not among this file's helpers.
+  Base: calc_test.go holds `check` (with `t.Errorf`) and `TestAdd` calling `check(t, Add(1, 2), 3)`. The change moves
+  `check` unchanged to helpers_test.go. At head the call is no assertion, and every caller gets a fewer-assertions
+  finding (to weigh) although no test changed." todo/30 scoped helpers to the file; `read` and `Walk` are in
+  `crates/lang-go/src/testing.rs`. Closes with helpers read package-wide, the front end told the package's other
+  test files.
+- **Go's and Python's readers repeat work that nothing needs repeated.** As cross-review 36 put it (F9,
+  2026-11-14): "`Walk::function` (`testing.rs:154`) recomputes `binds::bindings` for every top-level function,
+  helpers whose assertions are dropped included, although `lang_go::read` already computes the file's bindings.
+  `testing::constants` runs for every Go file (`crates/lang-go/src/lib.rs:78`), and only a test file's are used.
+  `mark_for_mutmut` (`crates/gate/src/python_mutants.rs:681-690`) stats every file of the copy, then
+  `outside_mutmut` rebuilds the source_paths and pattern vectors for each one. Nothing here gives a wrong result."
+  Closes with each computed once per file or copy: the function's bindings taken from the file's, the constants
+  only where a test may name them, and mutmut's patterns built once.
 - **surviving-mutants reads each base Go file with a git process of its own.** As cross-review 35 put it (F7,
   2026-11-14): "`crates/gate/src/go_mutants.rs:104` still starts one `git cat-file blob` per base Go file", where
   todo/19 had the parser checks' base files read by one `git::objects` (`crates/gate/src/git.rs`).
@@ -217,6 +232,12 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   `go1.28`, so the constant wants raising, in a `patch` release, once the first of them ships, and so on for each
   release. The user's choice in go-support/01 (2026-11-11), over reading the tag set from the go tool on `PATH`, which
   would make the finding depend on the machine. Closes only if that choice is revisited.
+- **A Go test file's name and its constraint lines are judged apart.** A `_windows` suffix the change gives a test
+  file's name is a `platform-only` finding whatever the file's `//go:build` says (`GoChange::platform_named`,
+  `crates/gate/src/parser_checks.rs`), and a constraint line is judged without the name (`constraint::weakenings`), so
+  `calc_test.go` with `//go:build linux` renamed to `calc_windows_test.go`, which then builds nowhere, is a finding to
+  weigh rather than a failing `skip`. Found with todo/28 (2026-11-14). Closes with the name's suffix and'd into the
+  constraint each is judged by, which needs the front end told the file's name.
 - **A comment or blank line inside a Go block of statements is a line to cover.** A Go coverage profile gives a block
   by where it starts and ends, not by its lines, so `go_profile_lines` (`crates/gate/src/coverage.rs`) counts every
   line between, covered or not as the block is, as gocover-cobertura and Codecov read profiles too. Found with

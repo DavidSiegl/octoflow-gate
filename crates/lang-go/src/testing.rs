@@ -1,12 +1,15 @@
-//! The tests of a `_test.go` file, their assertions, and what in the file weakens them.
+//! The tests of a `_test.go` file, their assertions, and what in the file weakens them; and the constants of a Go
+//! file that its tests' assertions can name.
 
 use std::collections::HashSet;
 
-use model::{first_line, Assertion, Lines, Test, Weakening, WeakeningKind};
+use model::{first_line, on_one_line, Assertion, Constant, Lines, Test, Weakening, WeakeningKind};
 use tree_sitter::Node;
 
-use crate::constraint;
-use crate::syntax::{children, digest, digest_of, doc_line, end_line, function_name, is_literal, line, named, tokens, Text};
+use crate::syntax::{
+    children, digest, digest_of, doc_line, end_line, fields, function_name, is_literal, line, named, tokens, Text,
+};
+use crate::{binds, constraint};
 
 /// The methods of `testing.T`, `B` and `F` that fail the test they are called on.
 const FAILING: &[&str] = &["Error", "Errorf", "Fatal", "Fatalf", "Fail", "FailNow"];
@@ -22,20 +25,36 @@ const TESTIFY: &[&str] = &["github.com/stretchr/testify/assert", "github.com/str
 ///   them, X empty or not starting with a lowercase letter; and a subtest, a `t.Run("name", func(...) {...})` whose
 ///   name is a string literal, named after the test holding it as `go test` names it, `TestX/name`, a space in the
 ///   literal written `_`. A `t.Run` named by any other expression, as a table-driven test's, is part of the test
-///   holding it.
+///   holding it. An example, `ExampleX()`, is a test too where `go test` runs it, as [`example_output`] says, its one
+///   assertion its output comment.
 /// - Its assertions are those in its body but its subtests', in the order written: a call of testify's `assert` or
-///   `require` (`assert.Equal(t, 3, got)`, by the names the file imports them under, `assert.New` not one); and a
+///   `require` (`assert.Equal(t, 3, got)`, by the names the file imports them under, `assert.New` not one), or of a
+///   method of a name that a `:=` or a `var` in the same top-level function binds to such a `New` (`a :=
+///   assert.New(t)`, then `a.Equal(3, got)`), whatever the scope, a name it is copied to not followed; and a
 ///   call of `Error`, `Errorf`, `Fatal`, `Fatalf`, `Fail` or `FailNow` on a variable that a parameter of type
 ///   `*testing.T`, `*testing.B`, `*testing.F` or `testing.TB` names, of a function or a `func` literal. Such a call
 ///   that is a statement of an `if`'s block is that `if`'s assertion, the `if` counting once whatever number of them
 ///   it holds: its text the `if` to the end of its block, and its literals and shape those of its initializer and
 ///   condition and of those calls, so that `if got != 3 { t.Errorf(...) }` changing its 3 is a changed expected
-///   value. A literal is a number, a rune or a string.
-/// - A weakening is a `Skip`, `Skipf` or `SkipNow` called on such a variable anywhere in the file; a `//go:build`
-///   line above its `package` clause ([`constraint::weakening`]); and, anywhere in the file, an error thrown away by
-///   `_ = err` or by an `if err != nil {}` whose block holds no statement, `err` being any name of an error by Go's
-///   habit: `err`, `err` then a capital or a digit, as `errClose`, or a name ending in `Err`. A parser knows no
-///   types, so an error thrown away under any other name, or as `v, _ := f()`, is not seen.
+///   value. A call, by its name, of a helper of the file, as `check(t, Add(1, 2), 3)`, with such a variable among its
+///   arguments, is one too where its result is not kept ([`Walk::result_unkept`]), its literals the call's: a
+///   statement, `if !ok(t, got, 3) { return }` or `defer check(t)`, but not a fixture whose result is bound or passed
+///   on, as `srv := newServer(t, ":8080")`: a helper is a top-level function that holds such a failing
+///   call or a testify assertion outside any test, or calls another helper so. A literal is a number, a rune or a
+///   string.
+/// - A table of cases in its body, a composite literal that a `for … range` in the same top-level function ranges
+///   over, written there or by a name a `:=` or a `var` there binds to it, as `[]struct{ in, want int }{{in: 2, want:
+///   4}}`, holds its expected values: each of its elements written in braces of their own, its key with it in a
+///   map's, is an assertion too, in the order written, its literals and shape its own and its text on one line
+///   ([`on_one_line`]). A literal in a case is part of that case.
+/// - An assertion reads ([`Assertion::reads`]) each name in it that the top-level function holding it binds nowhere
+///   ([`binds::bindings`]), but a field's name keying an element of a literal not of a map type, as `want` in
+///   `{want: 4}`.
+/// - A weakening is a `Skip`, `Skipf` or `SkipNow` called on such a variable anywhere in the file; a build constraint
+///   line in its header ([`constraint::weakenings`]); and, anywhere in the file, an error thrown away by `_ = err` or
+///   by an `if err != nil {}` whose block holds no statement, `err` being any name of an error by Go's habit: `err`,
+///   `err` then a capital or a digit, as `errClose`, or a name ending in `Err`. A parser knows no types, so an error
+///   thrown away under any other name, or as `v, _ := f()`, is not seen.
 pub fn read(root: Node, text: Text) -> (Vec<Test>, Vec<Weakening>) {
     let imports = Imports::of(root, text);
     let mut walk = Walk {
@@ -47,22 +66,20 @@ pub fn read(root: Node, text: Text) -> (Vec<Test>, Vec<Weakening>) {
         owner: None,
         consumed: HashSet::new(),
         function: String::new(),
+        own: HashSet::new(),
+        tables: HashSet::new(),
+        assertors: HashSet::new(),
+        helpers: HashSet::new(),
+        helper_calls: vec![],
     };
+    walk.weakenings.extend(constraint::weakenings(text.0));
     for node in named(root) {
-        match node.kind() {
-            "comment" if node.end_byte() <= package_start(root) => {
-                walk.weakenings.extend(constraint::weakening(text.of(node), line(node)));
-            }
-            "function_declaration" | "method_declaration" => walk.function(node),
-            _ => {}
+        if matches!(node.kind(), "function_declaration" | "method_declaration") {
+            walk.function(node);
         }
     }
+    walk.keep_helper_calls();
     (walk.tests, walk.weakenings)
-}
-
-/// Where the file's `package` clause starts; the file's end where it has none.
-fn package_start(root: Node) -> usize {
-    named(root).into_iter().find(|n| n.kind() == "package_clause").map_or(root.end_byte(), |p| p.start_byte())
 }
 
 /// The names a file imports the packages a test is written with under.
@@ -129,6 +146,28 @@ struct Walk<'t> {
     consumed: HashSet<usize>,
     /// The name of the top-level function the walk is in, as a finding names it.
     function: String,
+    /// The names the top-level function the walk is in binds anywhere, which its assertions do not read as the file's.
+    own: HashSet<String>,
+    /// The tables of cases ([`read`]) of the top-level function the walk is in, by their nodes' ids.
+    tables: HashSet<usize>,
+    /// The names the top-level function the walk is in binds to testify's `New`, whose methods are assertions
+    /// ([`read`]).
+    assertors: HashSet<&'t str>,
+    /// The names of the top-level functions known so far to be helpers ([`read`]).
+    helpers: HashSet<String>,
+    /// Each call met of a function by its name with a testing variable among its arguments, as a helper is called,
+    /// where it was met, with the name of the function called. A [`Caller::Test`]'s index stays that of the call's
+    /// assertion because, until the walk ends, a test's assertions are only pushed to, never inserted, reordered or
+    /// removed.
+    helper_calls: Vec<(Caller, &'t str)>,
+}
+
+/// Where a call [`Walk::helper_calls`] holds was met.
+enum Caller {
+    /// In a test: its index in [`Walk::tests`], and the index among its assertions of the one the call was taken for.
+    Test(usize, usize),
+    /// In the top-level function of this name, outside any test.
+    Function(String),
 }
 
 impl<'t> Walk<'t> {
@@ -136,16 +175,22 @@ impl<'t> Walk<'t> {
     fn function(&mut self, node: Node<'t>) {
         let Some(body) = node.child_by_field_name("body") else { return };
         self.function = function_name(node, self.text);
+        self.own = binds::bindings(node, self.text).into_iter().map(|b| b.name).collect();
+        let bound = named_initializers(body, self.text);
+        self.tables = ranged_literals(body, &bound, self.text);
+        let assertors = bound.iter().filter(|(_, initializer)| self.testify_new(*initializer));
+        self.assertors = assertors.map(|(name, _)| *name).collect();
         let params = self.testing_params(node);
         self.owner = None;
-        if node.kind() == "function_declaration" && self.is_test(node) {
+        let output = example_output(node, self.text);
+        if node.kind() == "function_declaration" && (self.is_test(node) || output.is_some()) {
             self.owner = Some(self.tests.len());
             self.tests.push(Test {
                 name: self.function.clone(),
                 line: line(node),
                 lines: Lines { first: doc_line(node).unwrap_or(line(node)), last: end_line(node) },
                 body: digest(body, self.text),
-                assertions: vec![],
+                assertions: output.into_iter().collect(),
             });
         }
         let depth = self.scope.len();
@@ -215,6 +260,10 @@ impl<'t> Walk<'t> {
                 self.discard(node);
                 self.children(node);
             }
+            "composite_literal" if self.tables.contains(&node.id()) => {
+                self.table(node);
+                self.children(node);
+            }
             _ => self.children(node),
         }
     }
@@ -228,23 +277,31 @@ impl<'t> Walk<'t> {
     /// The method a call, `node`, calls on a testing variable in scope, as `Errorf` for `t.Errorf(...)`; None for
     /// any other call.
     fn testing_method(&self, node: Node<'t>) -> Option<&'t str> {
-        let callee = node.child_by_field_name("function").filter(|f| f.kind() == "selector_expression")?;
-        let operand = callee.child_by_field_name("operand").filter(|o| o.kind() == "identifier")?;
-        if !self.scope.contains(&self.text.of(operand)) {
-            return None;
-        }
-        Some(self.text.of(callee.child_by_field_name("field")?))
+        let (operand, field) = self.selector_call(node)?;
+        self.scope.contains(&operand).then_some(field)
     }
 
     /// Whether the call `node` is a testify assertion: a function of a package the file imports testify's `assert`
-    /// or `require` under, but `New`.
+    /// or `require` under, but `New`, or a method of one of [`Walk::assertors`].
     fn testify(&self, node: Node) -> bool {
-        let Some(callee) = node.child_by_field_name("function").filter(|f| f.kind() == "selector_expression") else {
-            return false;
-        };
-        let operand = callee.child_by_field_name("operand").filter(|o| o.kind() == "identifier");
-        let field = callee.child_by_field_name("field").map(|f| self.text.of(f));
-        operand.is_some_and(|o| self.imports.testify.iter().any(|n| n == self.text.of(o))) && field != Some("New")
+        let Some((operand, field)) = self.selector_call(node) else { return false };
+        (self.imports.testify.iter().any(|n| n == operand) && field != "New") || self.assertors.contains(operand)
+    }
+
+    /// Whether `node` is a call of testify's `New`, under a name the file imports `assert` or `require` by.
+    fn testify_new(&self, node: Node) -> bool {
+        let new = |(operand, field): (&str, &str)| field == "New" && self.imports.testify.iter().any(|n| n == operand);
+        self.selector_call(node).is_some_and(new)
+    }
+
+    /// The name and the selected field of a call, `node`, of `name.field`; None for any other node.
+    fn selector_call(&self, node: Node) -> Option<(&'t str, &'t str)> {
+        if node.kind() != "call_expression" {
+            return None;
+        }
+        let callee = node.child_by_field_name("function").filter(|f| f.kind() == "selector_expression")?;
+        let operand = callee.child_by_field_name("operand").filter(|o| o.kind() == "identifier")?;
+        Some((self.text.of(operand), self.text.of(callee.child_by_field_name("field")?)))
     }
 
     /// A subtest, when the call `node` starts one, `t.Run("name", func...)` in a test: records it and walks its
@@ -292,6 +349,104 @@ impl<'t> Walk<'t> {
         let failing = method.is_some_and(|m| FAILING.contains(&m)) && !self.consumed.contains(&node.id());
         if failing || self.testify(node) {
             let assertion = self.assertion(node, &[node], node.end_byte());
+            self.fail(assertion);
+        } else if let Some(callee) = self.passing_testing(node) {
+            let caller = match self.owner {
+                Some(test) => {
+                    let assertion = self.assertion(node, &[node], node.end_byte());
+                    self.assert(assertion);
+                    Caller::Test(test, self.tests[test].assertions.len() - 1)
+                }
+                None => Caller::Function(self.function.clone()),
+            };
+            self.helper_calls.push((caller, callee));
+        }
+    }
+
+    /// The name of the function a call, `node`, whose result is not kept ([`Walk::result_unkept`]), calls by its name
+    /// with a testing variable in scope among its arguments, as a helper is called; None for any other call, as a
+    /// fixture's whose result is kept.
+    fn passing_testing(&self, node: Node<'t>) -> Option<&'t str> {
+        if !self.result_unkept(node) {
+            return None;
+        }
+        let callee = node.child_by_field_name("function").filter(|f| f.kind() == "identifier")?;
+        let args = node.child_by_field_name("arguments").map(named).unwrap_or_default();
+        let passed = |a: &Node| a.kind() == "identifier" && self.scope.contains(&self.text.of(*a));
+        args.iter().any(passed).then(|| self.text.of(callee))
+    }
+
+    /// Whether the result of a call, `node`, is not kept, as an assertion's is not: the call is a statement, deferred,
+    /// started by `go`, or returned outside any test, as a helper returns what another found, or its result is only
+    /// tested, a condition of an `if` or a `for`, through `!`, `&&`, `||` and parentheses. Its result bound to a name,
+    /// passed on as an argument, or returned in a test, as a closure there returns a fixture's, is kept.
+    fn result_unkept(&self, node: Node) -> bool {
+        let mut tested = node;
+        while let Some(p) = tested.parent() {
+            let operator = p.child_by_field_name("operator").map(|o| self.text.of(o));
+            let combines = match p.kind() {
+                "parenthesized_expression" => true,
+                "unary_expression" => operator == Some("!"),
+                "binary_expression" => matches!(operator, Some("&&" | "||")),
+                _ => false,
+            };
+            if !combines {
+                break;
+            }
+            tested = p;
+        }
+        let Some(p) = tested.parent() else { return false };
+        match p.kind() {
+            "expression_statement" | "defer_statement" | "go_statement" => true,
+            "expression_list" => self.owner.is_none() && p.parent().is_some_and(|r| r.kind() == "return_statement"),
+            "if_statement" | "for_clause" => p.child_by_field_name("condition") == Some(tested),
+            // A `for` with a condition alone holds it as an unnamed child.
+            "for_statement" => true,
+            _ => false,
+        }
+    }
+
+    /// An assertion that fails the test it is in: the test's; outside any test, what makes the top-level function the
+    /// walk is in a helper.
+    fn fail(&mut self, assertion: Assertion) {
+        if self.owner.is_some() {
+            self.assert(assertion);
+        } else {
+            self.helpers.insert(self.function.clone());
+        }
+    }
+
+    /// Adds to [`Walk::helpers`] each function that calls one, then drops from the tests the assertions taken for
+    /// calls of a function that is no helper.
+    fn keep_helper_calls(&mut self) {
+        loop {
+            let calling = self.helper_calls.iter().filter_map(|(caller, callee)| match caller {
+                Caller::Function(name) if self.helpers.contains(*callee) && !self.helpers.contains(name) => Some(name),
+                _ => None,
+            });
+            let found: Vec<String> = calling.cloned().collect();
+            if found.is_empty() {
+                break;
+            }
+            self.helpers.extend(found);
+        }
+        // In reverse, so that each index still points at the assertion it was taken for.
+        for (caller, callee) in self.helper_calls.iter().rev() {
+            match caller {
+                Caller::Test(test, k) if !self.helpers.contains(*callee) => {
+                    self.tests[*test].assertions.remove(*k);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// A table of cases, `node` ([`read`]): each case an assertion of the test the walk is in.
+    fn table(&mut self, node: Node<'t>) {
+        let elements = node.child_by_field_name("body").map(named).unwrap_or_default();
+        for case in elements.into_iter().filter(|e| is_case(*e)) {
+            let mut assertion = self.assertion(case, &[case], case.end_byte());
+            assertion.text = on_one_line(&assertion.text);
             self.assert(assertion);
         }
     }
@@ -345,7 +500,7 @@ impl<'t> Walk<'t> {
             ["initializer", "condition"].iter().filter_map(|f| node.child_by_field_name(f)).collect();
         parts.extend(&calls);
         let assertion = self.assertion(node, &parts, block.end_byte());
-        self.assert(assertion);
+        self.fail(assertion);
     }
 
     /// The assertion that starts at `node` and ends at the byte `end`, its literals and shape those of `parts`.
@@ -361,8 +516,33 @@ impl<'t> Walk<'t> {
             text: self.text.0[node.start_byte()..end].into(),
             shape: shape.join(" "),
             literals,
-            reads: vec![],
+            reads: self.reads(parts),
         }
+    }
+
+    /// The names `parts`, an assertion's, read as the file's, each once, in the order written ([`read`]).
+    fn reads(&self, parts: &[Node]) -> Vec<String> {
+        let field = |n: Node| {
+            let element = n.parent().filter(|p| p.kind() == "literal_element");
+            let keyed = element.and_then(|e| e.parent()).filter(|k| k.kind() == "keyed_element");
+            let key = keyed.and_then(|k| k.child_by_field_name("key")) == element && element.is_some();
+            // A map's key is an expression; a literal whose type is elided, nested in another, is taken for a struct.
+            let literal = keyed.and_then(|k| k.parent()).and_then(|body| body.parent());
+            let of_map = literal.and_then(|l| l.child_by_field_name("type")).is_some_and(|ty| ty.kind() == "map_type");
+            key && !of_map
+        };
+        let mut out: Vec<String> = vec![];
+        // Nodes still to read, the next one last.
+        let mut pending: Vec<Node> = parts.iter().rev().copied().collect();
+        while let Some(node) = pending.pop() {
+            let name = self.text.of(node);
+            let fresh = !self.own.contains(name) && !out.iter().any(|n| n == name);
+            if node.kind() == "identifier" && !field(node) && fresh {
+                out.push(name.into());
+            }
+            pending.extend(named(node).into_iter().rev());
+        }
+        out
     }
 
     /// Whether `condition` is `err != nil` or `nil != err`, `err` naming an error ([`names_an_error`]).
@@ -398,6 +578,170 @@ impl<'t> Walk<'t> {
             }
         }
     }
+}
+
+/// The constants of `root`, a Go file's tree, in the order written: each name of a top-level `const` given a value of
+/// its own that calls nothing, as `const want = 3`; a name `_`, and one an `iota` run gives its value implicitly, as
+/// `B` in `const (A = iota; B)`, are left out. The go tool refuses a second top-level declaration of a name in a
+/// package, so each is bound once.
+pub fn constants(root: Node, text: Text) -> Vec<Constant> {
+    let declarations = named(root).into_iter().filter(|d| d.kind() == "const_declaration");
+    let specs = declarations.flat_map(named).filter(|s| s.kind() == "const_spec");
+    let mut out = vec![];
+    for spec in specs {
+        for (name, initializer) in fields(spec, "name").into_iter().zip(initializers(spec)) {
+            if text.of(name) != "_" && !holds_call(initializer) {
+                let expression = digest(initializer, text);
+                out.push(Constant { name: text.of(name).into(), line: line(spec), expression });
+            }
+        }
+    }
+    out
+}
+
+/// The output comment of the example `node` declares, as an assertion, where `go test` runs it: a function
+/// `ExampleX` with no parameters and no results, X empty or not starting with a lowercase letter, whose body's last
+/// comment group ([`last_comment_group`]) starts with `Output:` or `Unordered output:`, either in any case, after the
+/// comment's `//` or `/*` and spaces (<https://pkg.go.dev/testing#hdr-Examples>). The assertion's text is the group as
+/// written; its shape which of the two it starts with, in lowercase; and its one literal the output: the text after
+/// that start, each line without its comment's `//` and the one space after, as go/doc reads a comment, and with the
+/// space around the whole taken off, as `go test` compares it. None for any other node.
+fn example_output(node: Node, text: Text) -> Option<Assertion> {
+    let name = text.of(node.child_by_field_name("name")?);
+    let suffix = name.strip_prefix("Example")?;
+    let params = node.child_by_field_name("parameters").map(named).unwrap_or_default();
+    if node.kind() != "function_declaration"
+        || suffix.starts_with(char::is_lowercase)
+        || params.iter().any(|p| p.kind() != "comment")
+        || node.child_by_field_name("result").is_some()
+        || node.child_by_field_name("type_parameters").is_some()
+    {
+        return None;
+    }
+    let mut comments: Vec<Node> = vec![];
+    let mut pending = vec![node.child_by_field_name("body")?];
+    while let Some(n) = pending.pop() {
+        if n.kind() == "comment" {
+            comments.push(n);
+        }
+        pending.extend(named(n));
+    }
+    comments.sort_by_key(Node::start_byte);
+    let group = last_comment_group(&comments, text);
+    let last = group.last()?;
+    let uncommented = |c: &Node| {
+        let written = text.of(*c);
+        match written.strip_prefix("//") {
+            Some(rest) => rest.strip_prefix(' ').unwrap_or(rest),
+            None => written.trim_start_matches("/*").trim_end_matches("*/"),
+        }
+    };
+    let joined = group.iter().map(uncommented).collect::<Vec<_>>().join("\n");
+    let start = joined.trim_start();
+    let (shape, output) = ["unordered output:", "output:"].into_iter().find_map(|shape| {
+        let head = start.get(..shape.len()).filter(|h| h.eq_ignore_ascii_case(shape))?;
+        Some((shape, &start[head.len()..]))
+    })?;
+    Some(Assertion {
+        line: line(group[0]),
+        text: text.0[group[0].start_byte()..last.end_byte()].into(),
+        shape: shape.into(),
+        literals: vec![output.trim().into()],
+        reads: vec![],
+    })
+}
+
+/// The last comment group of `comments`, a function body's in the order written, as go/parser groups them: a comment
+/// after code on its line starts a group that ends with the line its last comment ends on; any other runs on while
+/// each next comment starts on the line the one before ends on or the next, with nothing but space between them.
+fn last_comment_group<'t>(comments: &[Node<'t>], text: Text) -> Vec<Node<'t>> {
+    let mut group: Vec<Node> = vec![];
+    // Whether the group's first comment has code before it on its line.
+    let mut trailing = false;
+    for c in comments {
+        let gap = group.last().map(|p| &text.0[p.end_byte()..c.start_byte()]);
+        let newlines = gap.map(|g| g.matches('\n').count());
+        let adjacent = newlines.is_some_and(|n| n == 0 || (n == 1 && !trailing));
+        let joins = adjacent && gap.is_some_and(|g| g.trim().is_empty());
+        if !joins {
+            group.clear();
+            trailing = !text.0[..c.start_byte()].rsplit('\n').next().unwrap_or_default().trim().is_empty();
+        }
+        group.push(*c);
+    }
+    group
+}
+
+/// Whether `element`, of a composite literal's body, is a case of a table: written in braces of its own, its value's
+/// when it is keyed.
+fn is_case(element: Node) -> bool {
+    let written = match element.kind() {
+        "literal_element" => Some(element),
+        "keyed_element" => element.child_by_field_name("value"),
+        _ => None,
+    };
+    written.and_then(|w| w.named_child(0)).is_some_and(|v| v.kind() == "literal_value")
+}
+
+/// Each name a `:=` or a `var` anywhere in `body`, a function's, binds to an expression, whatever the scope, with
+/// that expression ([`initializers`]); a name declared with no value, or given one by `=`, is not one.
+fn named_initializers<'t>(body: Node<'t>, text: Text<'t>) -> Vec<(&'t str, Node<'t>)> {
+    let mut out = vec![];
+    let mut pending = vec![body];
+    while let Some(node) = pending.pop() {
+        match node.kind() {
+            "short_var_declaration" => {
+                let names = node.child_by_field_name("left").map(named).unwrap_or_default();
+                out.extend(names.into_iter().map(|n| text.of(n)).zip(initializers(node)));
+            }
+            "var_spec" => out.extend(fields(node, "name").into_iter().map(|n| text.of(n)).zip(initializers(node))),
+            _ => {}
+        }
+        pending.extend(named(node));
+    }
+    out
+}
+
+/// The composite literals that a `for … range` in `body`, a function's, ranges over, written in the `range` or bound
+/// to the name it ranges over as `bound`, `body`'s [`named_initializers`], says: its tables of cases, by their nodes'
+/// ids.
+fn ranged_literals(body: Node, bound: &[(&str, Node)], text: Text) -> HashSet<usize> {
+    let mut ranged = vec![];
+    let mut pending = vec![body];
+    while let Some(node) = pending.pop() {
+        if node.kind() == "range_clause" {
+            ranged.extend(node.child_by_field_name("right"));
+        }
+        pending.extend(named(node));
+    }
+    let literals = ranged.into_iter().flat_map(|r| match r.kind() {
+        "identifier" => {
+            let of_name = bound.iter().filter(|(name, _)| *name == text.of(r));
+            of_name.map(|(_, initializer)| *initializer).collect()
+        }
+        _ => vec![r],
+    });
+    literals.filter(|l| l.kind() == "composite_literal").map(|l| l.id()).collect()
+}
+
+/// The expressions a `const_spec`, `var_spec` or `short_var_declaration`, `node`, gives its names, in order, its
+/// comments left out.
+fn initializers(node: Node) -> Vec<Node> {
+    let field = if node.kind() == "short_var_declaration" { "right" } else { "value" };
+    let written = node.child_by_field_name(field).map(named).unwrap_or_default();
+    written.into_iter().filter(|v| v.kind() != "comment").collect()
+}
+
+/// Whether `node` is or holds a call.
+fn holds_call(node: Node) -> bool {
+    let mut pending = vec![node];
+    while let Some(node) = pending.pop() {
+        if node.kind() == "call_expression" {
+            return true;
+        }
+        pending.extend(named(node));
+    }
+    false
 }
 
 /// Whether `name` names an error by Go's habit: `err`, `err` then a capital or a digit, as `errClose` or `err2`, or a

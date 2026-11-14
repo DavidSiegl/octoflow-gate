@@ -179,6 +179,17 @@ fn a_configuration_s_issues_exit_code_drops_no_finding() {
 }
 
 #[test]
+fn a_configuration_above_the_tree_changes_no_finding() {
+    let repo = module_repo();
+    let above = repo.repo.parent().unwrap().join(".golangci.yml");
+    std::fs::write(above, "version: \"2\"\nlinters:\n  disable: [errcheck]\n").unwrap();
+    repo.put("calc/calc.go", format!("{CALC}{CLEAN}").as_bytes());
+    let (exit_code, out) = gate(&repo, None);
+    assert_eq!(exit_code, 1, "{out}");
+    assert!(out.contains("1. `calc/calc.go:12` error golangci-lint errcheck: "), "{out}");
+}
+
+#[test]
 fn a_module_under_testdata_is_not_linted() {
     let repo = module_repo();
     repo.commit(&[

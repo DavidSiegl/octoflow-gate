@@ -333,6 +333,37 @@ fn an_expected_value_changed_with_the_code_is_reported_as_the_pair_and_alone_not
 }
 
 #[test]
+fn expected_values_moved_onto_their_neighbours_old_ones_are_each_changed() {
+    let path = "tests/test_s.py";
+    let base = "def test_s():\n    assert next(c) == 1\n    assert next(c) == 2\n    assert next(c) == 3\n";
+    let raised = base.replace("== 3", "== 4").replace("== 2", "== 3").replace("== 1", "== 2");
+    let lines = |files: &[ChangedFile]| found(files).0.into_iter().map(|f| f.1).collect::<Vec<_>>();
+    assert_eq!(lines(&[code_edit(), edited(path, base, &raised)]), [Some(2), Some(3), Some(4)]);
+    let base = "def test_s():\n    assert f(0) == 1\n    assert f(0) == 2\n";
+    assert_eq!(lines(&[code_edit(), edited(path, base, &base.replace("== 1", "== 2"))]), [Some(2)]);
+}
+
+#[test]
+fn an_assertion_of_another_shape_added_or_removed_hides_no_edit_beside_it() {
+    let path = "tests/test_s.py";
+    let found = |base: &str, new: &str| {
+        let (place, _) = found(&[code_edit(), edited(path, base, new)]);
+        place.into_iter().map(|f| (f.1, f.2)).collect::<Vec<_>>()
+    };
+    let changed = |line| (Some(line), "expected-value-changed".to_string());
+    let base = "def test_s():\n    assert f(1) == 2\n    assert f(2) == 4\n";
+    let new = "def test_s():\n    assert f(1) == 2\n    assert isinstance(f(1), int)\n    assert f(2) == 5\n";
+    assert_eq!(found(base, new), [changed(4)]);
+    let base = "def test_s():\n    assert f(1) == 1\n    assert f(2) == 2\n    assert f(3) == 3\n    \
+                assert f(4) == 4\n";
+    let new = base.replace("    assert f(3)", "    assert g\n    assert f(3)").replace("== 4", "== 5");
+    assert_eq!(found(base, &new), [changed(6)]);
+    let base = "def test_s():\n    assert f(1) == 2\n    assert g\n    assert f(2) == 4\n";
+    let new = "def test_s():\n    assert f(1) == 2\n    assert f(2) == 5\n";
+    assert_eq!(found(base, new), [(Some(1), "fewer-assertions".to_string()), changed(3)]);
+}
+
+#[test]
 fn a_string_requoted_is_no_changed_value_and_one_of_another_prefix_or_text_is() {
     let base = "def test_s():\n    assert name() == 'a' \"b\"\n    assert f'{x}-{y}' == b'c'\n";
     let path = "tests/test_s.py";

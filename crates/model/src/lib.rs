@@ -124,7 +124,8 @@ pub struct Test {
     pub assertions: Vec<Assertion>,
 }
 
-/// One assertion of a test.
+/// One assertion of a test, or a case of a table of cases its body holds where the front end reads such a case as
+/// holding expected values, as lang-go does.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Assertion {
     pub line: u32,
@@ -256,6 +257,22 @@ pub fn first_line(text: &str) -> String {
     out
 }
 
+/// `written`, code of one or more lines, on one line: each line break, with the spaces around it and a backslash
+/// ending the line, Python's continuation, becomes one space, or nothing after an opening bracket or before a closing
+/// one. A finding quotes a piece of code by its [`first_line`], which is then all of it. A line break inside a string
+/// is joined as any other.
+pub fn on_one_line(written: &str) -> String {
+    let mut out = String::new();
+    for line in written.split('\n').map(|line| line.trim().trim_end_matches('\\').trim_end()) {
+        let opened = out.ends_with(['(', '[', '{']);
+        if !(out.is_empty() || opened || line.starts_with([')', ']', '}'])) {
+            out.push(' ');
+        }
+        out.push_str(line);
+    }
+    out
+}
+
 /// One token of a file's code as the duplicated-blocks check compares it, its language's front end having left out
 /// comments and imports. Two runs of tokens with equal shapes are the same code but for the names and literals in
 /// them: a name stands for what kind of name it is, a literal for what kind of literal, and every other token for
@@ -278,4 +295,16 @@ pub fn token_shape(text: &str) -> u64 {
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
     hash
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn code_of_several_lines_is_joined_with_no_space_inside_a_bracket() {
+        let written = "self.assertEqual(\n    f(a),\n    [\n        1,\n        2\n    ],\n    'x' \\\n    'y'\n)";
+        assert_eq!(on_one_line(written), "self.assertEqual(f(a), [1, 2], 'x' 'y')");
+        assert_eq!(on_one_line("assert a"), "assert a");
+    }
 }

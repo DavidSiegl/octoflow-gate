@@ -57,7 +57,7 @@ written whole or not at all. `gate --help` describes each option.
 | 0 | `GATE: OK` |
 | 1 | `GATE: ERROR` |
 | 2 | it could not judge the change, or its arguments were wrong; it wrote neither file |
-| 130 | Ctrl-C stopped it; it wrote neither file |
+| 130 | Ctrl-C or SIGTERM stopped it; it wrote neither file |
 
 ### Reading the report from a program
 

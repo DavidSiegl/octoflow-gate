@@ -31,7 +31,8 @@
 # the repo root quality.md and quality.json, which Jenkins archives, and the reports the
 # judge's test commands write, which Jenkins publishes the JUnit ones of.
 #
-# In a Jenkins build (WORKSPACE set), crates are fetched into the workspace (CARGO_HOME), so
+# In a Jenkins build (JENKINS_URL set, as Jenkins sets it for every build; WORKSPACE alone
+# may be any shell's or dev container's), crates are fetched into the workspace (CARGO_HOME), so
 # no build compiles sources an earlier one left, and temporary files go under WORKSPACE_TMP
 # rather than /tmp: the tests and the gate build Rust in temporary directories and run what
 # they build, and on the agent /tmp is the container's writable layer, where Falco reports
@@ -80,16 +81,16 @@ fi
 # the last one. The gate removes each test command's reports before it runs it.
 rm -f quality.md quality.json
 
-if [[ -n ${WORKSPACE:-} ]]; then
+if [[ -n ${JENKINS_URL:-} ]]; then
+	if [[ -z ${WORKSPACE:-} || -z ${WORKSPACE_TMP:-} ]]; then
+		echo "gate: JENKINS_URL is set but WORKSPACE or WORKSPACE_TMP is not, as no Jenkins build leaves them" >&2
+		exit 2
+	fi
 	export CARGO_HOME="$WORKSPACE/.cargo-home"
 	# What an earlier build left in TMPDIR goes first: on the volume, unlike in /tmp, it would
 	# stay. The chmod is for a directory a killed test left without write permission; a
 	# clear-out that still fails only warns, since failing would fail every later build of
 	# this workspace until someone cleaned the volume by hand.
-	if [[ -z ${WORKSPACE_TMP:-} ]]; then
-		echo "gate: WORKSPACE is set but WORKSPACE_TMP is not, as no Jenkins build leaves it" >&2
-		exit 2
-	fi
 	export TMPDIR="$WORKSPACE_TMP/tmp"
 	if [[ -e $TMPDIR ]]; then
 		{ chmod -R u+rwX "$TMPDIR" && rm -rf "$TMPDIR"; } ||

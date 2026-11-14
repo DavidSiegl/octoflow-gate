@@ -251,6 +251,33 @@ impl GoChange<'_> {
     pub fn edits_code(&self) -> bool {
         any_path(self.change, |path| self.is_code(path))
     }
+
+    /// The test-integrity platform-only findings on the `_test.go` files of [`files`] whose names the change gave a
+    /// platform suffix that narrows the platforms their names at the base built them on
+    /// (lang_go::narrowing_platform_suffix), as `calc_test.go` renamed to `calc_windows_test.go`, which turns its tests
+    /// off on the other platforms as a `//go:build windows` line would. One about each whole file, by its path in the
+    /// working tree.
+    ///
+    /// [`files`]: GoChange::files
+    fn platform_named(&self) -> Vec<Finding> {
+        let mut out = vec![];
+        for file in &self.files {
+            let Some(after) = file.after.as_ref().filter(|a| a.among_tests) else { continue };
+            let base = file.before.as_ref().map(|b| b.path.as_bytes());
+            if let Some(suffix) = lang_go::narrowing_platform_suffix(base, after.path.as_bytes()) {
+                out.push(Finding {
+                    path: Some(after.path.clone()),
+                    line: None,
+                    severity: "warning".into(),
+                    rule: "test-integrity platform-only".into(),
+                    message: format!(
+                        "`{suffix}` added to the file's name: it turns the file's tests off on the other platforms."
+                    ),
+                });
+            }
+        }
+        out
+    }
 }
 
 /// Whether `holds` is true of a path on a side of one of `change`'s files.
@@ -274,7 +301,9 @@ pub fn weakened_tests(sources: &Sources) -> Vec<Finding> {
     let mut out = if python_edited || rust_edited || go_edited { changed_golden_files(sources.change) } else { vec![] };
     out.extend(integrity::weakened_tests(&sources.python.files, python_edited));
     out.extend(integrity::weakened_tests(&sources.rust.files, rust_edited));
-    out.extend(integrity::weakened_tests(&sources.go.files, go_edited));
+    let mut go = integrity::weakened_tests(&sources.go.files, go_edited);
+    go.extend(sources.go.platform_named());
+    out.extend(by_path_and_line(go));
     out
 }
 
@@ -585,7 +614,7 @@ fn in_its_project(change: &Change, gone: &HashSet<PathBuf>, path: &OsStr, langua
 /// (path, bytes) of each of `paths`, each a path of the tree at `change`'s base, that is a regular file there, as
 /// git's tree records it: not a symlink or a submodule. Errs when git cannot list the base's tree or show one of the
 /// files.
-fn regular_files_at_base(change: &Change, paths: &[OsString]) -> Result<HashMap<OsString, Vec<u8>>, Unjudged> {
+pub(crate) fn regular_files_at_base(change: &Change, paths: &[OsString]) -> Result<HashMap<OsString, Vec<u8>>, Unjudged> {
     if paths.is_empty() {
         return Ok(HashMap::new());
     }

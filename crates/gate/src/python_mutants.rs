@@ -2,11 +2,12 @@
 //! Python code under test, and a function whose mutants its tests do not notice is a finding.
 //!
 //! mutmut 3 (3.8.0 here) is bounded to the functions the change edits like this. Its own selector, `mutmut run` with
-//! mutant names, only picks which mutants run: it first makes a mutant of every function in its source_paths, which
-//! for a large module takes minutes. So mutmut runs on a copy of the tree, and in the copy every function and class
-//! that holds no changed function gets [`SKIP`] at the end of the line its header ends on. mutmut skips such a
-//! function whole: no mutants, and none of the call tracing that slows the tests. Appending a comment keeps every
-//! line where it was, and mutmut writes its state, mutants/, into the copy, so the working tree is never written to.
+//! mutant names, only picks which mutants run: it first makes a mutant of every function in its source_paths, which for
+//! a large module takes minutes. So mutmut runs on a copy of the tree, and in the copy every function and class of the
+//! files mutmut mutates that holds no changed function gets [`SKIP`] at the end of the line its header ends on; files
+//! it does not mutate are left as they are. mutmut skips such a function whole: no mutants, and none of the call
+//! tracing that slows the tests. Appending a comment keeps every line where it was, and mutmut writes its state,
+//! mutants/, into the copy, so the working tree is never written to.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ffi::{OsStr, OsString};
@@ -24,7 +25,7 @@ use crate::copies::{copy_tracked, finding, in_scratch_directory};
 use crate::glob::fnmatch;
 use crate::judge::MUTMUT_STATE;
 use crate::mutants::{KILL_WAIT, STOP_GRACE, SURVIVOR_EXAMPLES};
-use crate::parser_checks::{python_test, PythonChange};
+use crate::parser_checks::{python_test, regular_files_at_base, PythonChange};
 use crate::paths::{normpath, real_path};
 use crate::process::{self, run_with, Extras, Finished};
 use crate::pytest::{self, truthy, Setup};
@@ -82,12 +83,15 @@ pub struct Mutmut<'a> {
 /// its name, and each severity "warning".
 ///
 /// Mutation-tests with mutmut each top-level function and method of a top-level class (lang_python::Unit) that the
-/// change adds lines to, decorators included, or removes lines from, in a Python file outside the tests that it
-/// leaves a regular file in the working tree. Lines removed right after a function's last line count too, though
-/// they may have been the blank lines below it; comments and blank lines above its first decorator do not, since
-/// they change nothing mutmut mutates. Reports at its def each such function with mutants its tests did not notice
-/// (`survived`), with how many of the mutants tried they were and what the first mutants::SURVIVOR_EXAMPLES change,
-/// as a line before and after; and each one no test calls (`untested`).
+/// change adds lines to, decorators included, or removes lines from, in a Python file outside the tests that it leaves
+/// a regular file in the working tree. Lines removed right after a function's last line count too, though they may have
+/// been the blank lines below it; comments and blank lines above its first decorator do not, since they change nothing
+/// mutmut mutates. Nor does a function whose file's base has one of its name with the same code, its decorators,
+/// parameters, defaults, annotations and body, whatever its comments and layout, in a file that holds no mutmut pragma
+/// on either side ([`edited`]): an edit to those alone changes nothing mutmut mutates, while one to its signature alone
+/// can change what its body does, and one to a pragma which of its lines mutmut mutates. Reports at its def each such
+/// function with mutants its tests did not notice (`survived`), with how many of the mutants tried they were and what the first
+/// mutants::SURVIVOR_EXAMPLES change, as a line before and after; and each one no test calls (`untested`).
 ///
 /// mutmut runs by the project's Python (judge::Change::python) on a copy of the files git tracks, without what the
 /// tree tracks under mutmut's state, so it starts without a cache. It runs there by the `[tool.mutmut]` of
@@ -108,7 +112,7 @@ pub struct Mutmut<'a> {
 /// results cannot be listed, rules that name no source_paths or no rules at all, a changed file that cannot be read
 /// or parsed, and a copy that cannot be made are `not-run` findings too, saying so; a copy that cannot be removed
 /// afterwards is a `not-removed` one.
-pub fn python_mutants(python: &PythonChange, mutmut: &Mutmut, seconds: f64) -> Vec<Finding> {
+pub fn python_mutants(python: &PythonChange, mutmut: &Mutmut, seconds: u64) -> Vec<Finding> {
     let in_scope = |path: &OsStr| !python_test(&python.change.settings, path);
     let (units, unreadable) = python.changed_units(in_scope, |unit, added, removal_points| {
         added.iter().any(|&n| unit.lines.first <= n && n <= unit.lines.last)
@@ -118,11 +122,54 @@ pub fn python_mutants(python: &PythonChange, mutmut: &Mutmut, seconds: f64) -> V
         finding(Some(&path), None, "not-run", format!("{why}, so its functions were not mutation-tested."))
     };
     let mut out: Vec<Finding> = unreadable.into_iter().map(not_read).collect();
-    let functions: Vec<Function> = units.into_iter().map(|(path, unit)| Function { path, unit }).collect();
+    let functions = edited(python, units);
     if !functions.is_empty() {
         out.extend(mutation_test(python, &functions, mutmut, seconds));
     }
     out
+}
+
+/// Those of `units`, each with its file's path as PythonChange::changed_units gives them, whose code the change
+/// edited, in the same order: all but a unit whose file's base has a unit of its name with the same code
+/// (lang_python::Unit::code), which only the unit's comments and layout can have changed, as nothing mutmut mutates
+/// does. Every unit of a file counts as edited where the file holds a mutmut pragma ([`mutmut_pragma`]) at the base or
+/// in the working tree, since a pragma is a comment that decides which lines mutmut mutates, by where it sits; and
+/// where its base is no regular file, cannot be read or parsed, or is none.
+fn edited(python: &PythonChange, units: Vec<(OsString, Unit)>) -> Vec<Function> {
+    // The base path of each file the units are in that has one.
+    let mut befores: HashMap<OsString, OsString> = HashMap::new();
+    for (path, _) in &units {
+        let file = python.files.iter().find(|f| f.after.as_ref().is_some_and(|after| &after.path == path));
+        if let Some(before) = file.and_then(|f| f.before.as_ref()) {
+            befores.insert(path.clone(), before.path.clone());
+        }
+    }
+    let wanted: Vec<OsString> = befores.values().cloned().collect();
+    let sources = regular_files_at_base(python.change, &wanted).unwrap_or_default();
+    // The units to compare a file's with: its base's, or None where each of its units counts as edited.
+    let comparable = |path: &OsStr| -> Option<Vec<Unit>> {
+        let base = sources.get(befores.get(path)?)?;
+        let now = std::fs::read(python.change.root.join(path)).ok()?;
+        if holds_pragma(base) || holds_pragma(&now) {
+            return None;
+        }
+        lang_python::units(base).ok()
+    };
+    let mut bases: HashMap<OsString, Option<Vec<Unit>>> = HashMap::new();
+    let mut out = vec![];
+    for (path, unit) in units {
+        let base = bases.entry(path.clone()).or_insert_with(|| comparable(&path));
+        let same = |b: &Unit| b.name == unit.name && b.code == unit.code;
+        if !base.as_ref().is_some_and(|base| base.iter().any(same)) {
+            out.push(Function { path, unit });
+        }
+    }
+    out
+}
+
+/// Whether a line of the Python source `source` holds a mutmut pragma ([`mutmut_pragma`]), in a comment or not.
+fn holds_pragma(source: &[u8]) -> bool {
+    source.split(|&b| b == b'\n').any(|line| mutmut_pragma(&String::from_utf8_lossy(line)).is_some())
 }
 
 /// A function the change touched, the unit mutmut mutates.
@@ -141,7 +188,7 @@ impl Function {
 
 /// [`python_mutants`]'s findings on `functions`, the change's changed functions: those mutmut does not mutate, then
 /// what a run of mutmut of `seconds` found of the others.
-fn mutation_test(python: &PythonChange, functions: &[Function], mutmut: &Mutmut, seconds: f64) -> Vec<Finding> {
+fn mutation_test(python: &PythonChange, functions: &[Function], mutmut: &Mutmut, seconds: u64) -> Vec<Finding> {
     let table = match mutmut.rules.map(mutmut_table) {
         Some(Ok(table)) => table,
         Some(Err(problem)) => return vec![not_run(&problem)],
@@ -437,74 +484,81 @@ fn time_left(deadline: Instant) -> Option<Duration> {
     deadline.checked_duration_since(Instant::now() + STOP_GRACE + KILL_WAIT).filter(|left| !left.is_zero())
 }
 
-/// The findings of mutmut run on `functions` for `seconds` in `copy`, which this makes in `tmp`, an empty private
-/// directory, of the files git tracks in `root`'s working tree (copies::copy_tracked), but for what it tracks under
-/// mutmut's state; marked for mutmut to skip all but `functions`, with `table`, the rules' `[tool.mutmut]`, in
-/// place of its own, and its pytest runs taking the configuration of the tests they run ([`test_places`]) and no
-/// configuration or conftest.py from above the copy; tests under more than one are a `not-run` finding. `recorded`,
-/// when given, are the node ids of the tests `--test-contexts` records reaching `functions`: mutmut is then given
-/// those of them its selection collects ([`narrowed_table`]).
+/// The findings of mutmut run on `functions` for `seconds` in `copy`, made as [`prepare_copy`] says, with `table`, the
+/// rules' `[tool.mutmut]`, in place of its own, and its pytest runs taking the configuration of the tests they run
+/// and no configuration or conftest.py from above the copy ([`give_mutmut`]). `recorded`, when given, are the node
+/// ids of the tests `--test-contexts` records reaching `functions`: mutmut is then given those of them its selection
+/// collects ([`narrowed_table`]), and none collected, it is not started and each function is an `untested` finding.
 fn on_copy(
     copy: &TreeCopy,
     root: &Path,
     tmp: &Path,
     functions: &[&Function],
     table: &Table,
-    seconds: f64,
+    seconds: u64,
     recorded: Option<&BTreeSet<String>>,
 ) -> Vec<Finding> {
-    let mut out = vec![];
-    let set_up = (|| -> Result<Option<Table>, String> {
-        copy_tracked(root, copy.tree).map_err(not_started)?;
-        // Before anything reads the copy's pyproject.toml, pytest's configuration among it.
-        own_pyproject(root, copy.tree)?;
-        // mutmut takes what it finds under its state for its own cache, results included, so it starts without
-        // what the tree tracks there.
-        let state = copy.state();
-        match state.symlink_metadata() {
-            Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(&state).map_err(not_started)?,
-            Ok(_) => std::fs::remove_file(&state).map_err(not_started)?,
-            Err(_) => {}
-        }
-        mark_for_mutmut(copy.tree, functions).map_err(not_started)?;
-        // One configuration for all of mutmut's pytest runs, as it takes one pytest_add_cli_args.
-        let places = test_places(copy.tree, table, recorded);
-        let groups = pytest::groups(copy.python, copy.tree, tmp, &places).map_err(not_started)?;
-        let config = match &groups[..] {
-            [group] => group.setup.inifile.clone(),
-            _ => return Err(several_configurations(&groups)),
-        };
-        let mut table = table.clone();
-        if let Some(recorded) = recorded {
-            // Rooted at the top, not the configuration's directory, as mutmut's --rootdir=. roots its runs.
-            let setup = Setup {
-                python: copy.python.to_path_buf(),
-                root: copy.tree.to_path_buf(),
-                inifile: config.clone(),
-                top: copy.tree.to_path_buf(),
-            };
-            match narrowed_table(&setup, &table, recorded) {
-                Narrowed::To(narrowed) => table = narrowed,
-                Narrowed::ToNothing => return Ok(None),
-                Narrowed::Not(why) => out.push(not_narrowed(&why)),
-            }
-        }
-        give_mutmut(copy, &table, &config)?;
-        Ok(Some(table))
-    })();
-    let ran = set_up.and_then(|table| match table {
-        Some(table) => match copy.mutmut(&["run"], Duration::from_secs_f64(seconds)) {
-            Ok(run) => Ok(Some((table, run))),
-            Err(e) => Err(format!("could not start mutmut with the Python `{}`: {e}", copy.python_named())),
-        },
-        None => Ok(None),
+    let config = match prepare_copy(copy, root, tmp, functions, table, recorded) {
+        Ok(config) => config,
+        Err(problem) => return vec![not_run(&problem)],
+    };
+    // Rooted at the top, not the configuration's directory, as mutmut's --rootdir=. roots its runs.
+    let setup = || Setup {
+        python: copy.python.to_path_buf(),
+        root: copy.tree.to_path_buf(),
+        inifile: config.clone(),
+        top: copy.tree.to_path_buf(),
+    };
+    let (table, mut out) = match recorded.map(|recorded| narrowed_table(&setup(), table, recorded)) {
+        None => (table.clone(), vec![]),
+        Some(Narrowed::To(narrowed)) => (narrowed, vec![]),
+        Some(Narrowed::ToNothing) => return untested_by_contexts(functions),
+        Some(Narrowed::Not(why)) => (table.clone(), vec![not_narrowed(&why)]),
+    };
+    let ran = give_mutmut(copy, &table, &config).and_then(|()| {
+        copy.mutmut(&["run"], Duration::from_secs(seconds))
+            .map_err(|e| format!("could not start mutmut with the Python `{}`: {e}", copy.python_named()))
     });
     match ran {
-        Ok(Some((table, run))) => out.extend(mutmut_findings(copy, functions, &run, seconds, &table)),
-        Ok(None) => return untested_by_contexts(functions),
+        Ok(run) => out.extend(mutmut_findings(copy, functions, &run, seconds, &table)),
         Err(problem) => out.push(not_run(&problem)),
     }
     out
+}
+
+/// Makes `copy`, in `tmp`, an empty private directory, of the files git tracks in `root`'s working tree
+/// (copies::copy_tracked), but for what it tracks under mutmut's state, and marks it for mutmut to skip all but
+/// `functions` ([`mark_for_mutmut`] by `table`, the rules' `[tool.mutmut]`). Returns the pytest configuration of the
+/// tests mutmut runs, those `table`'s selection names or, given, those of `recorded` under it ([`test_places`]), as
+/// pytest::groups finds it. Errs with the problem, a clause, when the copy cannot be made or marked, the
+/// configuration cannot be found, or the tests take more than one.
+fn prepare_copy(
+    copy: &TreeCopy,
+    root: &Path,
+    tmp: &Path,
+    functions: &[&Function],
+    table: &Table,
+    recorded: Option<&BTreeSet<String>>,
+) -> Result<PathBuf, String> {
+    copy_tracked(root, copy.tree).map_err(not_started)?;
+    // Before anything reads the copy's pyproject.toml, pytest's configuration among it.
+    own_pyproject(root, copy.tree)?;
+    // mutmut takes what it finds under its state for its own cache, results included, so it starts without what the
+    // tree tracks there.
+    let state = copy.state();
+    match state.symlink_metadata() {
+        Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(&state).map_err(not_started)?,
+        Ok(_) => std::fs::remove_file(&state).map_err(not_started)?,
+        Err(_) => {}
+    }
+    mark_for_mutmut(copy.tree, table, functions).map_err(not_started)?;
+    // One configuration for all of mutmut's pytest runs, as it takes one pytest_add_cli_args.
+    let places = test_places(copy.tree, table, recorded);
+    let groups = pytest::groups(copy.python, copy.tree, tmp, &places).map_err(not_started)?;
+    match &groups[..] {
+        [group] => Ok(group.setup.inifile.clone()),
+        _ => Err(several_configurations(&groups)),
+    }
 }
 
 /// Puts `table`, a `[tool.mutmut]`, in place of the one in the pyproject.toml of `copy`, with what makes mutmut's
@@ -634,14 +688,11 @@ fn narrowed_table(setup: &Setup, table: &Table, recorded: &BTreeSet<String>) -> 
         Ok(collected) => collected,
         Err(problem) => return Narrowed::Not(problem.clause),
     };
-    // At verbosity -1 pytest lists one node id a line, unindented, before its summary.
-    let printed = text::lossless(&collected.stdout);
-    let indented = |line: &str| !line.starts_with(text::py_strip(line));
-    let ids: BTreeSet<&str> = printed.split('\n').filter(|line| line.contains("::") && !indented(line)).collect();
-    if collected.status == 0 && ids.is_empty() {
-        let said = collected.said();
-        return Narrowed::Not(format!("pytest, {COLLECTING}, printed no node id the gate could read: {said}"));
-    }
+    let ids = match pytest::listed_node_ids(&collected, COLLECTING, |_| true) {
+        Ok(ids) => ids,
+        Err(problem) => return Narrowed::Not(problem),
+    };
+    let ids: BTreeSet<String> = ids.iter().map(|id| text::lossless(id.as_bytes())).collect();
     let tests: Vec<String> = recorded.iter().filter(|id| ids.contains(id.as_str())).cloned().collect();
     if tests.is_empty() {
         return Narrowed::ToNothing;
@@ -667,23 +718,25 @@ fn files_under(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
     Ok(out)
 }
 
-/// Marks for mutmut to skip ([`SKIP`]) each def and class in the regular files named *.py under `tree`, a copy of a
-/// tree, that holds none of `functions`, as lang_python::header_ends_outside chooses them. A Python file that
-/// cannot be decoded or parsed is left as it is. Errs, a clause, when a directory or a file cannot be read or a file
-/// cannot be written.
-fn mark_for_mutmut(tree: &Path, functions: &[&Function]) -> Result<(), String> {
+/// Marks for mutmut to skip ([`SKIP`]) each def and class that holds none of `functions`, as
+/// lang_python::header_ends_outside chooses them, in the regular files under `tree`, a copy of a tree, that mutmut
+/// set up by `table`, a `[tool.mutmut]` with source_paths, mutates ([`outside_mutmut`]); no other file is read. A
+/// Python file that cannot be decoded or parsed is left as it is. Errs, a clause, when a directory or one of those
+/// files cannot be read or written.
+fn mark_for_mutmut(tree: &Path, table: &Table, functions: &[&Function]) -> Result<(), String> {
     let mut kept: BTreeMap<&OsStr, BTreeSet<&str>> = BTreeMap::new();
     for f in functions {
         kept.entry(&f.path).or_default().insert(&f.unit.name);
     }
     let files = files_under(tree).map_err(|e| format!("cannot read the copy of the tree: {e}"))?;
     for path in files {
+        let Ok(rel) = path.strip_prefix(tree) else { continue };
         let regular = path.symlink_metadata().is_ok_and(|meta| meta.is_file());
-        if !regular || !path.as_os_str().as_bytes().ends_with(b".py") {
+        if !regular || outside_mutmut(rel.as_os_str(), table).is_some() {
             continue;
         }
         let source = std::fs::read(&path).map_err(|e| crate::copies::failed("read", &path, &e))?;
-        let mine = path.strip_prefix(tree).ok().and_then(|rel| kept.get(rel.as_os_str()));
+        let mine = kept.get(rel.as_os_str());
         let Ok(ends) = lang_python::header_ends_outside(&source, |name| mine.is_some_and(|mine| mine.contains(name)))
         else {
             continue;
@@ -778,7 +831,7 @@ fn mutmut_findings(
     copy: &TreeCopy,
     functions: &[&Function],
     run: &Finished,
-    seconds: f64,
+    seconds: u64,
     table: &Table,
 ) -> Vec<Finding> {
     /// The line mutmut 3.8.0 prints, exiting with status 1 before it tries any mutant, when no test calls any
@@ -981,7 +1034,7 @@ fn prefix_of(mutant: &str) -> &str {
 /// The finding that the budget of `seconds` stopped mutmut, having made the mutants of `statuses` and none yet of
 /// `unreached`, the functions it was given in modules it had not reached; of those, the ones in `cut_off`, paths of
 /// modules whose results the stop lost mid-save, are said to be so.
-fn budget_reached(statuses: &Statuses, seconds: f64, unreached: &[&Function], cut_off: &[OsString]) -> Finding {
+fn budget_reached(statuses: &Statuses, seconds: u64, unreached: &[&Function], cut_off: &[OsString]) -> Finding {
     let tried = statuses.iter().filter(|(_, status)| !UNTRIED.contains(&status.as_str())).count();
     let named = |functions: Vec<&&Function>| {
         let each: Vec<String> =
@@ -1287,6 +1340,26 @@ mod tests {
     }
 
     #[test]
+    fn only_the_files_mutmut_mutates_are_read_and_marked() {
+        use std::os::unix::fs::PermissionsExt;
+        let tree = ScratchDir::new();
+        std::fs::create_dir_all(tree.join("src")).unwrap();
+        std::fs::create_dir_all(tree.join("tests")).unwrap();
+        let source = "def f():\n    pass\n";
+        for file in ["src/a.py", "src/generated.py", "tests/test_a.py", "tests/unreadable.py"] {
+            std::fs::write(tree.join(file), source).unwrap();
+        }
+        // Read, it would fail the run.
+        std::fs::set_permissions(tree.join("tests/unreadable.py"), std::fs::Permissions::from_mode(0o000)).unwrap();
+        let settings = table("source_paths = [\"src\"]\ndo_not_mutate = [\"src/generated.py\"]\n");
+        assert_eq!(mark_for_mutmut(&tree, &settings, &[]), Ok(()));
+        let read = |file: &str| std::fs::read_to_string(tree.join(file)).unwrap();
+        assert_eq!(read("src/a.py"), "def f():  # pragma: no mutate block\n    pass\n");
+        assert_eq!(read("src/generated.py"), source);
+        assert_eq!(read("tests/test_a.py"), source);
+    }
+
+    #[test]
     fn a_marked_line_keeps_its_ending_and_no_line_moves() {
         let source = b"def f():\r\n    pass\r\ndef g():\n    pass\nclass C: pass";
         let expected = b"def f():  # pragma: no mutate block\r\n    pass\r\ndef g():  # pragma: no mutate block\n    \
@@ -1330,28 +1403,28 @@ mod tests {
     }
 
     #[test]
-    fn the_budget_s_finding_counts_the_tried_mutants_and_prints_the_seconds_plainly() {
+    fn the_budget_s_finding_counts_the_tried_mutants() {
         let statuses: Statuses = [("m.x_f__mutmut_1", "killed"), ("m.x_f__mutmut_2", "not checked")]
             .map(|(name, status)| (name.to_string(), status.to_string()))
             .to_vec();
         let stopped = "(`--mutation-budget`), so the mutants it did not try may survive too";
-        let found = budget_reached(&statuses, 1.0, &[], &[]);
+        let found = budget_reached(&statuses, 1, &[], &[]);
         assert_eq!((found.path, found.line, found.rule.as_str()), (None, None, "budget-reached"));
         assert_eq!(
             found.message,
             format!("budget reached after 1 of 2 mutants: mutmut was stopped at 1 seconds {stopped}.")
         );
-        let found = budget_reached(&vec![], 0.5, &[], &[]);
+        let found = budget_reached(&vec![], 3, &[], &[]);
         assert_eq!(
             found.message,
-            format!("budget reached before mutmut had made its mutants: mutmut was stopped at 0.5 seconds {stopped}.")
+            format!("budget reached before mutmut had made its mutants: mutmut was stopped at 3 seconds {stopped}.")
         );
     }
 
     #[test]
     fn the_budget_s_finding_names_the_functions_mutmut_did_not_reach_and_those_whose_results_the_stop_lost() {
         let (f, g) = (function("a.py", "def f():\n    pass\n"), function("b.py", "def g():\n    pass\n"));
-        let found = budget_reached(&vec![], 2.0, &[&f, &g], &["b.py".into()]);
+        let found = budget_reached(&vec![], 2, &[&f, &g], &["b.py".into()]);
         assert_eq!(
             found.message,
             "budget reached with none of the mutants mutmut made left to list: mutmut was stopped at 2 seconds \

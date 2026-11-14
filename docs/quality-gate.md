@@ -45,7 +45,7 @@ The files in the table are each linter's default, which a project's [settings](#
 | shellcheck | `**/*.sh` | its defaults |
 | actionlint | `.github/workflows/*.yml`, `*.yaml` | its defaults |
 | clippy | `**/*.rs` and `**/Cargo.toml`, in each Cargo workspace, here the one at the top level | the workspace's `[lints]` and `clippy.toml` |
-| golangci-lint | `**/*.go` and `**/go.mod`, in each Go module | the module's `.golangci.yml`, `.yaml`, `.toml` or `.json` |
+| golangci-lint | `**/*.go` and `**/go.mod`, in each Go module | the module's `.golangci.yml`, `.yaml`, `.toml` or `.json`, the nearest inside the tree |
 
 ruff's rules include the coding rules the agents are given as prose that a linter can apply, so that every harness
 gets them, every time: a docstring on every public module, class, method and function (`D100`-`D104`, `D106`,
@@ -74,19 +74,20 @@ that outlives its timeout is killed with every process it started, such as cargo
 
 golangci-lint runs as `golangci-lint run --allow-serial-runners --output.json.path stdout --show-stats=false
 --max-issues-per-linter 0 --max-same-issues 0 --issues-exit-code 1 --path-mode abs ./...` in the directory of each
-go.mod among its files, its tests included, but for a module the go tool leaves out of `./...`, as one under
-`testdata` or `vendor` (`linted_module` in `crates/gate/src/golangci.rs`). Which linters it runs, and how, is the
-module's own choice, the configuration golangci-lint finds from the module's directory up, as clippy's lints are the
-workspace's; without one it runs its standard set (errcheck, govet, ineffassign, staticcheck, unused). The gate asks
-for every finding, none held back as a repeat of another, and for exit status 1 on findings, whatever the
-configuration says, and each is an `error` named by its linter, as `golangci-lint errcheck`. Code that does not
-compile is a failed condition naming the type checker's first error, as clippy's is, since golangci-lint places it at
-the package clause, on no line the change added. A module with no Go file of its own, its code all in modules nested
-in it, has nothing to lint (exit status 5). A run that exits with any other status but 0 or 1, or prints no JSON
-report, as for a configuration it cannot read, is a failed condition quoting what it said. Another golangci-lint
-running with the same `TMPDIR`, where golangci-lint keeps its lock, as another gate's on a CI agent whose executors
-share one, makes it wait for that one to finish, within its timeout, rather than fail with "parallel golangci-lint is
-running".
+go.mod among its files, its tests included, but for a module the go tool leaves out of `./...`, as one under `testdata`
+or `vendor` (`linted_module` in `crates/gate/src/golangci.rs`). Which linters it runs, and how, is the module's own
+choice, as clippy's lints are the workspace's: the gate passes `--config` with the configuration golangci-lint would
+find itself from the module's directory up, but no higher than the tree's top, or `--no-config` where there is none
+(`config_flags`), so that a `.golangci.yml` above the tree or in the home directory, which no change shows, cannot
+change the findings. Without one it runs its standard set (errcheck, govet, ineffassign, staticcheck, unused). The gate
+asks for every finding, none held back as a repeat of another, and for exit status 1 on findings, whatever the
+configuration says, and each is an `error` named by its linter, as `golangci-lint errcheck`. Code that does not compile
+is a failed condition naming the type checker's first error, as clippy's is, since golangci-lint places it at the
+package clause, on no line the change added. A module with no Go file of its own, its code all in modules nested in it,
+has nothing to lint (exit status 5). A run that exits with any other status but 0 or 1, or prints no JSON report, as for
+a configuration it cannot read, is a failed condition quoting what it said. Another golangci-lint running with the same
+`TMPDIR`, where golangci-lint keeps its lock, as another gate's on a CI agent whose executors share one, makes it wait
+for that one to finish, within its timeout, rather than fail with "parallel golangci-lint is running".
 
 The gate runs each linter as a process, found on `PATH`. In this repository ruff, mypy and pymarkdownlnt are in uv's
 `dev` group, and `scripts/gate` starts the gate with `uv run`, which puts them there; shellcheck, actionlint, cargo
@@ -135,10 +136,15 @@ change cannot weaken its tests unseen. Each of these is a finding:
   edits code outside the tests, which is Python source as **Passes at base** below counts it, on either side of the
   change: the "update the expected value to match the output" move. A value written of literals alone is one
   literal, its sign and its brackets with it, so `-5` becoming `5` and `("a",)` becoming `"a"` count; parentheses
-  around such a value change nothing. The finding names the assertion before and after. An expected value held in a
-  constant counts too: when a kept test's assertions name a constant of its own file at the base and still name it,
-  bare or as `module.NAME` (the module by its dotted name or a module-level import alias of it), and the constant's
-  expression changed other than in layout, or it is no longer a
+  around such a value change nothing. The finding names the assertion before and after. The two sides' assertions
+  are paired in order, each with one of its own shape, in every language: of the pairings that pair the most, the one
+  that leaves the most unchanged. So raising every value of a sequence by one is a finding at each, even where the
+  new values repeat old ones, and an assertion added or removed, of any shape, as a case appended to a table, leaves
+  the others paired with themselves. Where two pairings tie, the earlier assertions are paired first, so an edit
+  beside an added assertion of its shape is reported against whichever of the two comes first. An expected
+  value held in a constant counts too: when a kept test's assertions name a constant of its own file at the base and
+  still name it, bare or as `module.NAME` (the module by its dotted name or a module-level import alias of it), and
+  the constant's expression changed other than in layout, or it is no longer a
   constant, that is one finding per constant and test, at the test's first assertion naming it, naming the constant
   and its line. A constant whose name the test binds anywhere, even by a binding that does nothing (`global NAME`, a
   comprehension target, a lambda parameter), is not checked, so such a line hides an edited constant; a reviewer
@@ -212,9 +218,9 @@ order. The findings are Python's, read of Rust:
   `catch_unwind`, which throws away the panic or the `Err` that would fail the test. A parser knows no types, so a
   `Result` thrown away that holds neither, as `let _ = check();` or `check().ok();`, is not seen, since that is
   also how a test's cleanup ignores a failure, nor a `catch_unwind` whose result is bound to a name and never read;
-- `expected-value-changed`: a kept test's assertion, its macro and its shape the same, whose literals changed, the
-  assertions of the two sides aligned by macro and shape, in a change that also edits Rust code outside the tests, on
-  either side. An expected value held in a constant counts too, as Python's does: when a kept test's assertions name a
+- `expected-value-changed`: a kept test's assertion, its macro and its shape the same, whose literals changed, in a
+  change that also edits Rust code outside the tests, on either side, the two sides' assertions paired as Python's
+  are. An expected value held in a constant counts too, as Python's does: when a kept test's assertions name a
   constant of its own file at the base and still name it, bare or by a path ending in it, as `super::EXPECTED`, and its
   value changed other than in layout or comments, or it is no longer a constant, that is one finding per constant and
   test, at the test's first assertion naming it. A constant is a `const` or `static` outside any `fn`, `impl`, `trait`
@@ -236,16 +242,23 @@ where the gate does not judge it: a vendored, generated or symlinked file is cod
 `FuzzX(f *testing.F)`, as `go test` finds them, and a subtest, `t.Run("name", func(t *testing.T) {...})`, named by its
 string literal after the test holding it, as `TestAdd/negative`, with `_` for a space as `go test` writes it. A subtest
 named by any other expression, as a table-driven test's `t.Run(tc.name, ...)`, is part of the test holding it. An
-example, `ExampleX()` with its `// Output:` comment, is no test, though `go test` runs it and checks its output, so
-removing one or changing its output is not seen (#73). The findings are Python's, read of Go:
+example, `ExampleX()`, is a test where `go test` runs it, as it does where the last comment of its body starts with
+`// Output:` or `// Unordered output:`: its one assertion is that comment, the output after it its expected value, so
+changing `// Output: 3` to `4` beside the code is an `expected-value-changed` finding. The findings are Python's, read
+of Go:
 
 - `removed-test`: a test or subtest gone from its file, its body compared by a digest of its tokens as Rust's is; a
   deleted file is one finding. Go has no item that holds tests, so there is no group finding;
 - `skip`: a `t.Skip`, `t.Skipf` or `t.SkipNow` on an added line, called on a parameter of type `*testing.T`, `*B`,
   `*F` or `testing.TB` of any function or `func` literal of the file, a helper's included; and a `//go:build` line
   added above the file's `package` clause, which builds the file's tests only where its expression holds, as Rust's
-  `cfg` does;
-- `platform-only`: such a `//go:build` line whose expression names no custom tag, only platforms (`GOOS` and `GOARCH`
+  `cfg` does. In a file with no `//go:build` line, each legacy `// +build` line added there is one too, as go 1.17
+  and later still obey it: its space-separated options or'd, each option's comma-separated tags and'd, a tag negated
+  by `!`, and the file's `// +build` lines and'd, each line judged by the whole they make. A term that is no tag, as
+  `foo-bar`, `!` or `!!linux`, is one no build sets, as go reads it, and a line of more than 100 operators, which go
+  ignores, is none. Go reads a `// +build` line only above a blank line before the `package` clause, so one in the
+  package's doc comment is none;
+- `platform-only`: such a constraint line whose expression names no custom tag, only platforms (`GOOS` and `GOARCH`
   values and `unix`), release tags (`go1.21`, written as go writes them) and the toolchain's tags (`cgo`, `gc`,
   `gccgo`), with `!`, `&&`, `||` and parentheses, and holds on at least one platform and toolchain, as
   `//go:build linux || darwin` or `//go:build go1.21`. A release tag, `go1.1` up to the newest Go release the gate
@@ -253,23 +266,46 @@ removing one or changing its output is not seen (#73). The findings are Python's
   set, as on the newest toolchain, where the tests that matter run; a `go1.N` above it, as `go1.99`, is set by no
   toolchain and is a custom tag, so until the constant is raised a test file naming a new release's tag is a `skip`.
   A `platform-only` finding is one to weigh, as Rust's is; a custom tag such as `integration` or `ignore` beside
-  those names makes the line a `skip`, as does an expression that holds nowhere, as `cgo && !cgo` or `!go1.21`;
-- `fewer-assertions`: a kept test with fewer assertions than at the base. An assertion is a call, in the test's own
-  body or a `func` literal in it, of testify's `assert` or `require` packages (`assert.Equal(t, 3, got)`, under the
-  names the file imports them by; `assert.New` is none, and a package imported with `.` is not followed, so its
-  unqualified `Equal(t, ...)` is none), or of `Error`, `Errorf`, `Fatal`, `Fatalf`, `Fail` or `FailNow` on a testing
-  parameter as above. Such a call that is a statement of an `if`'s block makes that `if` one assertion, however many
-  it holds, since the `if` holds the expected value: `if got := Add(1, 2); got != 3 { t.Errorf(...) }` is one. A
-  helper's calls are not followed into the tests that call it: `check(t, Add(1, 2), 3)`, where `check` holds the
-  `t.Errorf`, is no assertion of the test, so a test that asserts only through helpers has none to lose (#72);
+  those names makes the line a `skip`, as does an expression that holds nowhere, as `cgo && !cgo` or `!go1.21`. A
+  test file's name constrains it as such a line does, so a `_GOOS`, `_GOARCH` or `_GOOS_GOARCH` suffix the change
+  gives it, as `calc_test.go` renamed to `calc_windows_test.go`, is a `platform-only` finding about the whole file,
+  where it names a platform the name at the base did not, by itself or as one it implies, as `android` implies `linux`:
+  `calc_linux_amd64_test.go` renamed to `calc_amd64_test.go`, or `calc_android_test.go` to `calc_linux_test.go`, builds
+  the tests on more platforms, and is none;
+- `fewer-assertions`: a kept test with fewer assertions than at the base. An assertion is a call, in the test's own body
+  or a `func` literal in it, of testify's `assert` or `require` packages (`assert.Equal(t, 3, got)`, under the names the
+  file imports them by; `assert.New` is none, and a package imported with `.` is not followed, so its unqualified
+  `Equal(t, ...)` is none), or of a method of a name the test's function binds to their `New` by `:=` or `var` (`a :=
+  assert.New(t)`, then `a.Equal(3, got)`), or of `Error`, `Errorf`, `Fatal`, `Fatalf`, `Fail` or `FailNow` on a testing
+  parameter as above. A parser knows no types, so a name such a value is copied to, and a testify suite's methods
+  (`s.Equal(3, got)`), are not followed. Such a call that is a statement of an `if`'s block makes that `if` one
+  assertion, however many it holds, since the `if` holds the expected value: `if got := Add(1, 2); got != 3 {
+  t.Errorf(...) }` is one. A call of a helper of the same file by its name, with a testing variable among its arguments,
+  is one too where its result is not kept, its literals the call's, as `check(t, Add(1, 2), 3)` where `check` holds
+  the `t.Errorf`, `if !ok(t, got, 3) { return }` or `defer check(t)`, and not a fixture whose result is bound,
+  passed on or returned in the test, as `srv := newServer(t, ":8080")`: a helper is a
+  top-level function that holds a failing call or a testify assertion outside any test, or calls another helper so. A
+  helper of another file, a method, or a `func` value is not followed. Each case of a table of cases in the test's body
+  is an assertion too (`expected-value-changed` below), so a case removed is one fewer;
 - `swallowed-error`: on an added line anywhere in the file, `_ = err`, or an `if err != nil {}` whose block holds no
   statement, its lines those from the `if` to the block's `{`, `err` being a name Go gives an error by habit: `err`,
   `err` then a capital or a digit, or a name ending in `Err`. A parser knows no types, so an error thrown away under
   another name, or as `v, _ := f()`, is not seen; nor is a block the change empties by deleting or commenting out its
   statements, since that adds no line from its `if` to its `{`;
 - `expected-value-changed`: as Rust's, an assertion whose literals (numbers, runes and strings) changed while its shape
-  stayed, an `if`'s initializer and condition included, in a change that also edits Go code outside the tests.
-  Constants and a table-driven test's table of cases are not followed, so an expected value held there is not seen;
+  stayed, an `if`'s initializer and condition included, in a change that also edits Go code outside the tests. A
+  table-driven test's cases are such assertions. A table is a composite literal that a `for … range` in the test's
+  function ranges over, written in the `range` or bound to the name it ranges over by a `:=` or a `var` in that
+  function, as `for _, c := range []struct{ in, want int }{{in: 2, want: 4}}`; each of its elements written in
+  braces of its own, with its key in a map's, is a case, quoted on one line, so `{in: 2, want: 4}` becoming
+  `{in: 2, want: 5}` is a finding at the case. A literal in a case is part of that case. Any other composite literal
+  is no table: an input passed to the code, or an expected value in an assertion, which is that assertion's. A table
+  outside the test, as a package-level `var`, and a local such as `want := 3` are not read. An expected value held in
+  a constant counts as Rust's does, at the test's first assertion naming it: a top-level `const` given a value of its
+  own that calls nothing (a conversion, as `int64(3)`, is a call), not `_` and not one an `iota` run gives its value
+  implicitly. A name the test's function binds anywhere, as a parameter, a `:=` or a `var`, hides the constant it
+  shadows, as does a field's name keying an element, `want` in `{want: 4}`; a map's key, as `keyA` in
+  `map[string]int{keyA: 1}`, is read as any other name;
 - `unparsable`: as Rust's.
 
 Go's tests run through a `[[test]]` command, as [Go tests and coverage](#go-tests-and-coverage) says,
@@ -449,7 +485,11 @@ installed in the project's Python, so every pytest run there shuffles the tests 
 **Surviving mutants** mutation-tests the functions the change edits, so that code its tests run without checking what
 it does is found; coverage counts such code as tested. A function counts when the change adds lines to it or removes
 lines from it, decorators included, since a deleted guard clause needs a test as much as an added one: a top-level
-function, or a method of a top-level class, in a Python file outside the test files and, as above, `mutants/`.
+function, or a method of a top-level class, in a Python file outside the test files and, as above, `mutants/`; but
+not one whose file's base has a function of its name with the same code, its decorators, parameters, defaults,
+annotations and body, whatever its comments and layout, as an edit to those alone changes nothing mutmut mutates; a
+signature edited alone is an edit. A file that holds a `# pragma: no mutate` at the base or in the working tree has
+each function the change touches mutation-tested, since where such a comment sits decides which lines mutmut mutates.
 mutmut, installed in the project's Python, makes small changes to each, one at a time - an operator
 swapped, a number or a string altered, an argument dropped - and runs each of these mutants against the tests that
 call the function:
@@ -485,8 +525,9 @@ call the function:
 mutmut runs in the project's Python, on a copy of the files git tracks, so the working tree stays as it was; its state,
 `mutants/`, goes into the copy too. Its own selector, mutant names such as `pkg.x_parse__mutmut_*`, picks which mutants
 run only after mutmut has made a mutant of every function, which took minutes for octoflow's Python engine. So in the
-copy, each function and class the change does not touch gets mutmut's `# pragma: no mutate block` at the end of its
-header, and mutmut skips it. The rules' `[tool.mutmut]` says what can be mutated (`source_paths`, `only_mutate`,
+copy, each function and class the change does not touch in the files mutmut mutates gets mutmut's `# pragma: no
+mutate block` at the end of its header, and mutmut skips it; the copy's other files, the tests among them, are neither
+read nor changed. The rules' `[tool.mutmut]` says what can be mutated (`source_paths`, `only_mutate`,
 `do_not_mutate`), which tests run (`pytest_add_cli_args_test_selection`), what the tests read beside the code
 (`also_copy`), and which lines are left alone (`do_not_mutate_patterns`); see [whose rules judge a
 change](#whose-rules-judge-a-change). Python files are decoded by a byte order mark or a coding cookie, as [reading the
@@ -551,18 +592,20 @@ to such a text alone makes no mutant. Flag names that start a line of their own 
 functions a change edits outside the tests with [cargo-mutants](https://mutants.rs/): a `fn` with a body, from its `fn`
 line to its closing brace, that the change adds a line to or removes lines from, as Python's are chosen, outside test
 code in a `.rs` file of a Cargo package that is not among the tests (as for test integrity). A file the gate cannot
-parse is a `not-run` finding, its functions not mutated. The languages share the one budget in turn, Python, Rust,
-then Go (below): each has an equal share of what those before it left, among itself and the languages after it that
-have something to mutate, so it also takes whatever an earlier one left unused. With Python and Rust to mutate, mutmut
-gets half the budget and cargo-mutants the rest; with Go as well, mutmut a third, cargo-mutants half of what is left and
+parse is a `not-run` finding, its functions not mutated. The languages share the one budget in turn, Python, Rust, then
+Go (below): each has an equal share of what those before it left, among itself and the languages after it that have
+something to mutate, so it also takes whatever an earlier one left unused. With Python and Rust to mutate, mutmut gets
+half the budget and cargo-mutants the rest; with Go as well, mutmut a third, cargo-mutants half of what is left and
 gremlins the rest; a change with no Python functions to mutate gives cargo-mutants all of it, or half with Go to mutate.
-A `budget-reached` finding names the seconds of the share its tool was stopped at.
-cargo-mutants mutates only those functions, given as one `--re` each that matches its mutants by their file and line
-(`^src/lib\.rs:(?:5|6|7):`), `--in-place` in the gate's copy of the files git tracks, once per Cargo workspace (that
-of the nearest `Cargo.toml` above the file, as `cargo locate-project` tells it), with `--test-tool nextest` and
-`--timeout 60` for each mutant's tests. Its outcomes, from `mutants.out/outcomes.json`, count as mutmut's do: a missed
-mutant survived; a caught one, and a timeout, did not; an unviable one, which does not build, was not tried. A change
-outside functions, such as to a `use` or a `const`, gives nothing. The findings are mutmut's kinds:
+A `budget-reached` finding names the seconds of the share its tool was stopped at. cargo-mutants mutates only those
+functions, given as one `--re` each that matches its mutants by their file and line (`^src/lib\.rs:(?:5|6|7):`),
+`--in-place` in the gate's copy of the files git tracks, once per Cargo workspace (that of the nearest `Cargo.toml`
+above the file, as `cargo locate-project` tells it), with `--test-tool nextest`, `--minimum-test-timeout 60` and
+`--timeout-multiplier 2`: each mutant's tests have twice as long as the unmutated baseline's took, and at least 60
+seconds, while the baseline runs bounded only by the budget, so a workspace whose tests take longer than a minute still
+has its mutants tried. Its outcomes, from `mutants.out/outcomes.json`, count as mutmut's do: a missed mutant survived; a
+caught one, and a timeout, did not; an unviable one, which does not build, was not tried. A change outside functions,
+such as to a `use` or a `const`, gives nothing. The findings are mutmut's kinds:
 
 - `survived`: a function with missed mutants, at the line its `fn` starts, with how many of its tried mutants survived
   and the first three, each by its line and cargo-mutants' description, such as `replace > with == in unchecked`;
@@ -734,8 +777,8 @@ The gate is `GATE: ERROR` when any of these holds, and `GATE: OK` otherwise:
   import path, through the `module` line of the go.mod nearest above each changed `.go` file.
 
 Exit status 0 means `GATE: OK`, 1 `GATE: ERROR`, and 2 that the gate could not judge (a bad argument, `REV` names no
-commit, not a git tree, settings it cannot read, an unreadable report, a source file of the change it cannot read),
-in which case it writes nothing; 130 (`EXIT_INTERRUPTED`) means Ctrl-C stopped it, and it wrote nothing either.
+commit, not a git tree, settings it cannot read, an unreadable report, a source file of the change it cannot read), in
+which case it writes nothing; 130 (`EXIT_INTERRUPTED`) means Ctrl-C or SIGTERM stopped it, and it wrote nothing either.
 
 A change to a file whose contents are not UTF-8, such as a Latin-1 line or a binary file that git diffs as text,
 is judged like any other. The gate reads the diff, git's file lists and the linters' output as they were printed,
@@ -802,11 +845,12 @@ as one list, issues first, at most 50 in all, then a count:
 The Rust tests run with [cargo-nextest](https://nexte.st/), under
 [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov), which builds them with rustc's `-C instrument-coverage`
 and turns what they ran into a Cobertura report with the toolchain's own `llvm-profdata` and `llvm-cov`, from rustup's
-`llvm-tools-preview` component. This repository's `gate.toml` runs them in its one Cargo workspace, but for `xtask`,
-the workspace's own tasks, as a `[[test]]` command:
+`llvm-tools-preview` component. This repository's `gate.toml` runs them in its one Cargo workspace, `xtask`'s
+included, whose test holds each golden report under `tests/golden/` to `schema/quality-v1.json`, as a `[[test]]`
+command:
 
 ```bash
-cargo llvm-cov nextest --locked --workspace --exclude xtask --ignore-run-fail --profile ci \
+cargo llvm-cov nextest --locked --workspace --ignore-run-fail --profile ci \
     --config-file ci/nextest.toml --cobertura --output-path coverage-gate.xml
 ```
 
@@ -988,7 +1032,7 @@ judged is a failed condition of its own, naming the command, and none of its rep
 
 A coverage report a command wrote that cannot be read stops the gate, which exits 2, as one `--coverage` names does.
 `--tests` or `--coverage`, given at all, replace every command: a CI that has already run the tests passes their
-reports, and no command runs. Ctrl-C during a command kills its process group, and the gate exits 130.
+reports, and no command runs. Ctrl-C or SIGTERM during a command kills its process group, and the gate exits 130.
 
 A CI that judges a change by `main`'s settings, as below, runs `main`'s commands, so a change cannot alter which
 commands judge it.

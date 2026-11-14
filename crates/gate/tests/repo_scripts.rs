@@ -24,7 +24,8 @@ const GATE_TOML: &str = "[[test]]\nname = \"t\"\ncommand = [\"true\"]\n";
 
 /// A released gate, as [`fetching`] unpacks it. It refuses a gate.toml that sets `new_key`, as a gate refuses a key
 /// it does not know, unless the pin it was fetched by names 0.8.0. Asked to write a quality file, it writes its
-/// arguments, a line each, to GATE_ARGS and the gate.toml it judges by to GATE_SETTINGS, and exits FAKE_GATE_EXIT.
+/// arguments, a line each, to GATE_ARGS, the gate.toml it judges by to GATE_SETTINGS and the CARGO_HOME it was given
+/// to GATE_CARGO_HOME, and exits FAKE_GATE_EXIT.
 const GATE_STUB: &str = r#"#!/bin/sh
 args=$(printf '%s\n' "$@")
 config= out=
@@ -42,6 +43,7 @@ fi
 [ -n "$out" ] || exit 0
 echo "$args" > "$GATE_ARGS"
 cp "$config" "$GATE_SETTINGS"
+printf '%s' "${CARGO_HOME-}" > "$GATE_CARGO_HOME"
 exit "$FAKE_GATE_EXIT"
 "#;
 
@@ -80,11 +82,18 @@ struct Judged {
     gate_args: Option<Vec<String>>,
     /// The gate.toml the gate judged by, None when it did not judge.
     settings: Option<String>,
+    /// The CARGO_HOME the gate ran with, empty when it was unset; None when it did not judge.
+    cargo_home: Option<String>,
 }
 
 /// Runs `repo`'s scripts/gate as outside a Jenkins build, with stubs first on PATH for the tools it asks for before
 /// it judges, uv among them, which runs what it is given, and the released gate exiting `gate_exit`.
 fn run_gate(repo: &Repo, gate_exit: i32) -> Judged {
+    run_gate_with(repo, gate_exit, &[])
+}
+
+/// [`run_gate`], with the environment variables `env`, (name, value), set beside.
+fn run_gate_with(repo: &Repo, gate_exit: i32, env: &[(&str, &Path)]) -> Judged {
     let uv = "[ \"$1\" = sync ] && exit 0\nshift\nwhile [ \"${1#--}\" != \"$1\" ]; do shift; done\nexec \"$@\"";
     let mut bin = repo.stub("uv", uv);
     let installed = "echo clippy-x\necho llvm-tools-x";
@@ -92,15 +101,19 @@ fn run_gate(repo: &Repo, gate_exit: i32) -> Judged {
         bin = repo.stub(tool, script);
     }
     let (gate_args, settings) = (repo.outside.join("gate.args"), repo.outside.join("gate.settings"));
+    let cargo_home = repo.outside.join("gate.cargo-home");
     let done = Command::new("bash")
         .arg("scripts/gate")
         .current_dir(&repo.repo)
         .env("PATH", format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()))
-        .envs([("GATE_ARGS", &gate_args), ("GATE_SETTINGS", &settings)])
+        .envs([("GATE_ARGS", &gate_args), ("GATE_SETTINGS", &settings), ("GATE_CARGO_HOME", &cargo_home)])
         .env("FAKE_GATE_EXIT", gate_exit.to_string())
         .env_remove("WORKSPACE")
         .env_remove("WORKSPACE_TMP")
         .env_remove("CHANGE_TARGET")
+        .env_remove("JENKINS_URL")
+        .env_remove("CARGO_HOME")
+        .envs(env.iter().copied())
         .output()
         .unwrap();
     Judged {
@@ -108,6 +121,7 @@ fn run_gate(repo: &Repo, gate_exit: i32) -> Judged {
         stderr: String::from_utf8(done.stderr).unwrap(),
         gate_args: std::fs::read_to_string(gate_args).ok().map(|args| args.lines().map(String::from).collect()),
         settings: std::fs::read_to_string(settings).ok(),
+        cargo_home: std::fs::read_to_string(cargo_home).ok(),
     }
 }
 
@@ -156,6 +170,39 @@ fn the_release_is_fetched_by_the_judge_s_script_not_the_change_s() {
     repo.put("ci/fetch-gate.sh", b"#!/bin/sh\necho 'fetched by the change' >&2\nexit 1\n");
     let judged = run_gate(&repo, 0);
     assert_eq!((judged.status, judged.stderr.as_str()), (Some(2), "fetched by the judge\n"));
+}
+
+#[test]
+fn a_workspace_outside_a_jenkins_build_changes_nothing() {
+    let repo = script_repo();
+    commit_judge(&repo, "0.7.0", &fetching());
+    let (workspace, workspace_tmp) = (repo.outside.join("workspace"), repo.outside.join("workspace@tmp"));
+    let judged = run_gate_with(&repo, 0, &[("WORKSPACE", &workspace)]);
+    assert_eq!(judged.status, Some(0), "{}", judged.stderr);
+    // A Jenkins build empties $WORKSPACE_TMP/tmp first; outside one, it is someone else's to keep.
+    let kept = workspace_tmp.join("tmp/kept");
+    std::fs::create_dir_all(kept.parent().unwrap()).unwrap();
+    std::fs::write(&kept, b"").unwrap();
+    let judged = run_gate_with(&repo, 0, &[("WORKSPACE", &workspace), ("WORKSPACE_TMP", &workspace_tmp)]);
+    assert_eq!(judged.status, Some(0), "{}", judged.stderr);
+    assert!(kept.exists());
+    assert_eq!(judged.cargo_home.as_deref(), Some(""));
+}
+
+#[test]
+fn a_jenkins_build_keeps_its_temporary_files_in_its_workspace() {
+    let repo = script_repo();
+    commit_judge(&repo, "0.7.0", &fetching());
+    let (workspace, workspace_tmp) = (repo.outside.join("workspace"), repo.outside.join("workspace@tmp"));
+    let jenkins = Path::new("https://jenkins.example.com/");
+    let judged = run_gate_with(&repo, 0, &[("JENKINS_URL", jenkins), ("WORKSPACE", &workspace)]);
+    assert_eq!(judged.status, Some(2), "{}", judged.stderr);
+    assert!(judged.stderr.contains("WORKSPACE_TMP is not"), "{}", judged.stderr);
+    let build = [("JENKINS_URL", jenkins), ("WORKSPACE", &workspace), ("WORKSPACE_TMP", &workspace_tmp)];
+    let judged = run_gate_with(&repo, 0, &build);
+    assert_eq!(judged.status, Some(0), "{}", judged.stderr);
+    assert!(workspace_tmp.join("tmp").is_dir());
+    assert_eq!(judged.cargo_home, Some(workspace.join(".cargo-home").display().to_string()));
 }
 
 #[test]

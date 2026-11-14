@@ -18,7 +18,7 @@ const CHECK: &str = "test-integrity";
 ///   gone is one finding, and a file deleted, or left with no source of the language, one;
 /// - fewer-assertions: a test kept with fewer assertions than at the base;
 /// - expected-value-changed, when `code_changed`: an assertion of a kept test whose literals changed while the rest of
-///   it stayed, the assertions of the two sides aligned as Python's difflib aligns sequences; and a constant of the
+///   it stayed, the assertions of the two sides aligned as [`changed_literals`] says; and a constant of the
 ///   file's base ([`model::Constant`]) that a kept test's assertions name on both sides and that the change edited or
 ///   made no constant, at the first assertion now naming it;
 /// - skip, platform-only and swallowed-error: each [`model::Weakening`] whose code the change added a line to, at the
@@ -361,80 +361,48 @@ fn first_added(file: &ChangedFile, w: &Weakening) -> Option<u32> {
     file.added.range(w.lines.first..=w.lines.last).next().copied()
 }
 
-/// The (before, after) pairs of a test's assertions `was` and `now` that kept their shape but not their literals, the
-/// two aligned on their shapes by [`matching_pairs`].
+/// The (before, after) pairs of a test's assertions `was` and `now` that kept their shape but not their literals.
+///
+/// The two sides are aligned in order, an assertion paired only with one of its own shape: of the alignments that pair
+/// the most assertions, the one that pairs the most left whole. So every expected value of a sequence edited at once is
+/// reported, even where the new values repeat old ones; an assertion added or removed, of any shape, leaves the others
+/// paired with themselves; and where two alignments score the same, the earlier assertions are paired first, so an
+/// edit beside an added assertion of its shape is reported against whichever of the two comes first.
 fn changed_literals<'a>(was: &'a [Assertion], now: &'a [Assertion]) -> Vec<(&'a Assertion, &'a Assertion)> {
-    let a: Vec<&str> = was.iter().map(|x| x.shape.as_str()).collect();
-    let b: Vec<&str> = now.iter().map(|x| x.shape.as_str()).collect();
-    matching_pairs(&a, &b).into_iter().map(|(i, j)| (&was[i], &now[j])).filter(|(x, y)| x.literals != y.literals).collect()
-}
-
-/// The pairs (i, j), ascending, of the elements `a[i] == b[j]` that Python's
-/// `difflib.SequenceMatcher(None, a, b, autojunk=False).get_matching_blocks()` matches: the longest common run, the
-/// earliest in `a` of those, then the earliest in `b`, and the same again on each side of it.
-fn matching_pairs<T: PartialEq>(a: &[T], b: &[T]) -> Vec<(usize, usize)> {
+    let best = best_alignments(was, now);
     let mut out = vec![];
-    let mut todo = vec![(0, a.len(), 0, b.len())];
-    while let Some((alo, ahi, blo, bhi)) = todo.pop() {
-        let (i, j, k) = longest_match(&a[alo..ahi], &b[blo..bhi]);
-        let (i, j) = (alo + i, blo + j);
-        if k == 0 {
-            continue;
+    let (mut i, mut j) = (0, 0);
+    while i < was.len() && j < now.len() {
+        if paired_score(&was[i], &now[j], best[i + 1][j + 1]) == Some(best[i][j]) {
+            if was[i].literals != now[j].literals {
+                out.push((&was[i], &now[j]));
+            }
+            (i, j) = (i + 1, j + 1);
+        } else if best[i][j] == best[i + 1][j] {
+            i += 1;
+        } else {
+            j += 1;
         }
-        out.extend((0..k).map(|d| (i + d, j + d)));
-        todo.push((alo, i, blo, j));
-        todo.push((i + k, ahi, j + k, bhi));
     }
-    out.sort_unstable();
     out
 }
 
-/// The longest run of elements that `a` and `b` share, as (start in a, start in b, length), the earliest in `a` of
-/// the longest, then the earliest in `b`, as `difflib.SequenceMatcher.find_longest_match` breaks ties without junk;
-/// length 0 when they share none.
-fn longest_match<T: PartialEq>(a: &[T], b: &[T]) -> (usize, usize, usize) {
-    let (mut i, mut j, mut k) = (0, 0, 0);
-    // The length of the shared run ending at each element of b, after the previous element of a; shifted by one.
-    let mut ending = vec![0; b.len() + 1];
-    for (x, ax) in a.iter().enumerate() {
-        let mut next = vec![0; b.len() + 1];
-        for (y, _) in b.iter().enumerate().filter(|(_, by)| ax == *by) {
-            let n = ending[y] + 1;
-            next[y + 1] = n;
-            if n > k {
-                (i, j, k) = (x + 1 - n, y + 1 - n, n);
-            }
+/// The score of the best alignment, as [`changed_literals`] ranks them, of `was[i..]` with `now[j..]`, for every `i`
+/// and `j` up to both lengths: (assertions paired, of those the ones left whole).
+fn best_alignments(was: &[Assertion], now: &[Assertion]) -> Vec<Vec<(usize, usize)>> {
+    let mut best = vec![vec![(0, 0); now.len() + 1]; was.len() + 1];
+    for i in (0..was.len()).rev() {
+        for j in (0..now.len()).rev() {
+            let skipped = best[i + 1][j].max(best[i][j + 1]);
+            best[i][j] = paired_score(&was[i], &now[j], best[i + 1][j + 1]).map_or(skipped, |p| p.max(skipped));
         }
-        ending = next;
     }
-    (i, j, k)
+    best
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn matching_pairs_are_difflib_s_matching_blocks() {
-        // Each expected value is Python's difflib.SequenceMatcher(None, a, b, autojunk=False).get_matching_blocks()
-        // on the two strings' characters, as (i, j, n) blocks.
-        for (a, b, blocks) in [
-            ("", "", vec![]),
-            ("a", "", vec![]),
-            ("", "a", vec![]),
-            ("abc", "abc", vec![(0, 0, 3)]),
-            ("abxcd", "abcd", vec![(0, 0, 2), (3, 2, 2)]),
-            ("abab", "baba", vec![(0, 1, 3)]),
-            ("aaa", "aa", vec![(0, 0, 2)]),
-            ("abcab", "ab", vec![(0, 0, 2)]),
-            ("xabyab", "abzab", vec![(1, 0, 2), (4, 3, 2)]),
-            ("abcd", "dcba", vec![(0, 3, 1)]),
-            ("qabxcdq", "abycdq", vec![(1, 0, 2), (4, 3, 3)]),
-        ] {
-            let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
-            let expected: Vec<(usize, usize)> =
-                blocks.into_iter().flat_map(|(i, j, n)| (0..n).map(move |d| (i + d, j + d))).collect();
-            assert_eq!(matching_pairs(&a, &b), expected, "{a:?} {b:?}");
-        }
-    }
+/// The score, as [`best_alignments`] gives one, of an alignment that pairs `x` with `y` and then aligns what follows
+/// them as well as `after` scores; None when their shapes differ, so that they cannot be paired.
+fn paired_score(x: &Assertion, y: &Assertion, after: (usize, usize)) -> Option<(usize, usize)> {
+    let (paired, whole) = after;
+    (x.shape == y.shape).then_some((paired + 1, whole + usize::from(x.literals == y.literals)))
 }

@@ -112,10 +112,11 @@ fn a_function_whose_mutants_survive_is_found_and_one_whose_mutants_are_caught_is
 #[test]
 fn the_budget_running_out_is_a_finding() {
     let repo = repo(&[]);
-    // The unmutated tests pass at once, and each of checked's mutants makes them wait for cargo-mutants' 60-second
-    // timeout: of the 60 seconds, less the 15 the stop may take, the baseline, a build of the package, has 45 however
-    // loaded the machine is, and the first such mutant outlasts what is left. The numbers are mutants.rs's TEST_TIMEOUT
-    // and STOP_GRACE plus KILL_WAIT; a shorter TEST_TIMEOUT can let the mutants all finish inside the budget.
+    // The unmutated tests pass at once, and each of checked's mutants makes them wait for cargo-mutants' timeout, 60
+    // seconds for so quick a baseline: of the 60 seconds, less the 15 the stop may take, the baseline, a build of the
+    // package, has 45 however loaded the machine is, and the first such mutant outlasts what is left. The numbers are
+    // mutants.rs's MINIMUM_TEST_TIMEOUT and STOP_GRACE plus KILL_WAIT; a shorter MINIMUM_TEST_TIMEOUT can let the
+    // mutants all finish inside the budget.
     let wait = "while calc::checked(3) != 6 {\n        std::thread::sleep(std::time::Duration::from_secs(1));\n    }";
     add_functions(&repo, "", "calc", wait);
     let found = findings(&repo, Some(60), &[]);
@@ -198,8 +199,9 @@ fn cargo_mutants_runs_in_the_copy_uncoloured_on_the_edited_functions_and_is_stop
     // checked and unchecked, by their lines in the workspace's src/lib.rs.
     let expected = [
         "mutants", "--in-place", "--no-shuffle", "--dir", dir.to_str().unwrap(), "--re", r"^src/lib\.rs:(?:5|6|7):",
-        "--re", r"^src/lib\.rs:(?:9|10|11):", "--test-tool", "nextest", "--timeout", "60", "--output",
-        scratch.to_str().unwrap(), "--colors", "never", "color=never token=unset", "interrupted",
+        "--re", r"^src/lib\.rs:(?:9|10|11):", "--test-tool", "nextest", "--minimum-test-timeout", "60",
+        "--timeout-multiplier", "2", "--output", scratch.to_str().unwrap(), "--colors", "never",
+        "color=never token=unset", "interrupted",
     ];
     assert_eq!(argv, expected);
 }

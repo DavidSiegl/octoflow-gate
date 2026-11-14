@@ -2,9 +2,11 @@
 //! it is given makes, its tests included.
 //!
 //! Which linters it runs, and with what settings, is each module's own choice, the `.golangci.yml` (or `.yaml`,
-//! `.toml`, `.json`) golangci-lint finds from the module's directory up, as clippy's lints are a workspace's: the
-//! pyproject.toml the gate is given holds none of golangci-lint's. The gate asks for every finding, none held back as a
-//! repeat (`--max-issues-per-linter 0 --max-same-issues 0`), and keeps those on added lines. Code that does not
+//! `.toml`, `.json`) golangci-lint would find from the module's directory up, as clippy's lints are a workspace's: the
+//! pyproject.toml the gate is given holds none of golangci-lint's. The gate names that configuration itself, the
+//! nearest no higher than the tree's top, so that a file above the tree or in the home directory, which no change
+//! shows, does not change how a change is judged ([`config_flags`]). The gate asks for every finding, none held back
+//! as a repeat (`--max-issues-per-linter 0 --max-same-issues 0`), and keeps those on added lines. Code that does not
 //! compile is a failed condition, as clippy's is, naming the type checker's first error: a change that deletes a
 //! function an old line calls breaks the build on no line it added, and golangci-lint places such an error at the
 //! package clause rather than where it is.
@@ -65,7 +67,8 @@ fn linted_module(path: &OsStr) -> bool {
 /// condition, None when its code compiled and golangci-lint ran as it should.
 fn lint_module(name: &str, root: &Path, manifest: &Path, tracked: &Tracked) -> (Vec<Finding>, Option<String>) {
     let module = manifest.parent().unwrap_or(Path::new(""));
-    let argv = [
+    let config = config_flags(root, module);
+    let mut argv = [
         "golangci-lint",
         "run",
         "--allow-serial-runners",
@@ -80,9 +83,11 @@ fn lint_module(name: &str, root: &Path, manifest: &Path, tracked: &Tracked) -> (
         "1",
         "--path-mode",
         "abs",
-        "./...",
     ]
-    .map(OsStr::new);
+    .map(OsStr::new)
+    .to_vec();
+    argv.extend(config.iter().map(OsString::as_os_str));
+    argv.push(OsStr::new("./..."));
     let done = match tool_process(name, &argv, &root.join(module)) {
         Err(problem) => return (vec![], Some(problem)),
         Ok(done) => done,
@@ -122,6 +127,21 @@ fn lint_module(name: &str, root: &Path, manifest: &Path, tracked: &Tracked) -> (
     (lints, None)
 }
 
+/// golangci-lint's names for its configuration, in the order it prefers them within one directory, as
+/// `golangci-lint config path` shows of golangci-lint 2 (viper's `SupportedExts`).
+const CONFIG_NAMES: [&str; 4] = [".golangci.json", ".golangci.toml", ".golangci.yaml", ".golangci.yml"];
+
+/// The flags that give golangci-lint, run in `module`, a directory relative to `root`, the tree's top level, the
+/// configuration it would find itself from the module's directory up, but none from above the tree or the home
+/// directory, where no change shows it: `--config` with the nearest's path under `root`, or `--no-config`.
+fn config_flags(root: &Path, module: &Path) -> Vec<OsString> {
+    let nearest = module.ancestors().flat_map(|dir| CONFIG_NAMES.map(|n| root.join(dir).join(n))).find(|p| p.is_file());
+    match nearest {
+        Some(path) => vec!["--config".into(), path.into()],
+        None => vec!["--no-config".into()],
+    }
+}
+
 /// The finding `issue`, one of golangci-lint's JSON `Issues`, gives, an error with the linter's name as its rule, and
 /// whether it is the type checker's, which says the code does not compile; None when it names no tracked file, or is
 /// not of the shape golangci-lint 2 writes.
@@ -156,6 +176,28 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::scratch::ScratchDir;
+
+    #[test]
+    fn the_configuration_is_the_nearest_inside_the_tree_in_golangci_lint_s_order() {
+        let scratch = ScratchDir::new();
+        let root = scratch.join("top");
+        let module = Path::new("m/sub");
+        std::fs::create_dir_all(root.join(module)).unwrap();
+        let put = |path: &Path| std::fs::write(path, "version: \"2\"\n").unwrap();
+        let flags = || config_flags(&root, module);
+        put(&scratch.join(".golangci.yml"));
+        assert_eq!(flags(), ["--no-config"]);
+        put(&root.join(".golangci.yml"));
+        assert_eq!(flags(), [OsString::from("--config"), root.join(".golangci.yml").into()]);
+        put(&root.join("m/sub/.golangci.yml"));
+        put(&root.join("m/.golangci.json"));
+        assert_eq!(flags(), [OsString::from("--config"), root.join("m/sub/.golangci.yml").into()]);
+        for name in [".golangci.yaml", ".golangci.toml", ".golangci.json"] {
+            put(&root.join("m/sub").join(name));
+            assert_eq!(flags(), [OsString::from("--config"), root.join("m/sub").join(name).into()]);
+        }
+    }
 
     #[test]
     fn a_module_is_linted_where_the_go_tool_builds_it() {

@@ -508,7 +508,10 @@ fn ranged_literals(body: Node, text: Text) -> HashSet<usize> {
         pending.extend(named(node));
     }
     let literals = ranged.into_iter().flat_map(|r| match r.kind() {
-        "identifier" => bound.iter().filter(|(name, _)| *name == text.of(r)).map(|(_, value)| *value).collect(),
+        "identifier" => {
+            let of_name = bound.iter().filter(|(name, _)| *name == text.of(r));
+            of_name.map(|(_, initializer)| *initializer).collect()
+        }
         _ => vec![r],
     });
     literals.filter(|l| l.kind() == "composite_literal").map(|l| l.id()).collect()

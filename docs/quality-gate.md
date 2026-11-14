@@ -74,22 +74,20 @@ that outlives its timeout is killed with every process it started, such as cargo
 
 golangci-lint runs as `golangci-lint run --allow-serial-runners --output.json.path stdout --show-stats=false
 --max-issues-per-linter 0 --max-same-issues 0 --issues-exit-code 1 --path-mode abs ./...` in the directory of each
-go.mod among its files, its tests included, but for a module the go tool leaves out of `./...`, as one under
-`testdata` or `vendor` (`linted_module` in `crates/gate/src/golangci.rs`). Which linters it runs, and how, is the
-module's own choice, as clippy's lints are the workspace's: the gate passes `--config` with the configuration
-golangci-lint would find itself from the module's directory up, but no higher than the tree's top, or `--no-config`
-where there is none (`config_flags`), so that a `.golangci.yml` above the tree or in the home directory, which no change
-shows, cannot change the findings. Without one it runs its standard set (errcheck, govet, ineffassign, staticcheck,
-unused). The gate asks
-for every finding, none held back as a repeat of another, and for exit status 1 on findings, whatever the
-configuration says, and each is an `error` named by its linter, as `golangci-lint errcheck`. Code that does not
-compile is a failed condition naming the type checker's first error, as clippy's is, since golangci-lint places it at
-the package clause, on no line the change added. A module with no Go file of its own, its code all in modules nested
-in it, has nothing to lint (exit status 5). A run that exits with any other status but 0 or 1, or prints no JSON
-report, as for a configuration it cannot read, is a failed condition quoting what it said. Another golangci-lint
-running with the same `TMPDIR`, where golangci-lint keeps its lock, as another gate's on a CI agent whose executors
-share one, makes it wait for that one to finish, within its timeout, rather than fail with "parallel golangci-lint is
-running".
+go.mod among its files, its tests included, but for a module the go tool leaves out of `./...`, as one under `testdata`
+or `vendor` (`linted_module` in `crates/gate/src/golangci.rs`). Which linters it runs, and how, is the module's own
+choice, as clippy's lints are the workspace's: the gate passes `--config` with the configuration golangci-lint would
+find itself from the module's directory up, but no higher than the tree's top, or `--no-config` where there is none
+(`config_flags`), so that a `.golangci.yml` above the tree or in the home directory, which no change shows, cannot
+change the findings. Without one it runs its standard set (errcheck, govet, ineffassign, staticcheck, unused). The gate
+asks for every finding, none held back as a repeat of another, and for exit status 1 on findings, whatever the
+configuration says, and each is an `error` named by its linter, as `golangci-lint errcheck`. Code that does not compile
+is a failed condition naming the type checker's first error, as clippy's is, since golangci-lint places it at the
+package clause, on no line the change added. A module with no Go file of its own, its code all in modules nested in it,
+has nothing to lint (exit status 5). A run that exits with any other status but 0 or 1, or prints no JSON report, as for
+a configuration it cannot read, is a failed condition quoting what it said. Another golangci-lint running with the same
+`TMPDIR`, where golangci-lint keeps its lock, as another gate's on a CI agent whose executors share one, makes it wait
+for that one to finish, within its timeout, rather than fail with "parallel golangci-lint is running".
 
 The gate runs each linter as a process, found on `PATH`. In this repository ruff, mypy and pymarkdownlnt are in uv's
 `dev` group, and `scripts/gate` starts the gate with `uv run`, which puts them there; shellcheck, actionlint, cargo
@@ -593,20 +591,20 @@ to such a text alone makes no mutant. Flag names that start a line of their own 
 functions a change edits outside the tests with [cargo-mutants](https://mutants.rs/): a `fn` with a body, from its `fn`
 line to its closing brace, that the change adds a line to or removes lines from, as Python's are chosen, outside test
 code in a `.rs` file of a Cargo package that is not among the tests (as for test integrity). A file the gate cannot
-parse is a `not-run` finding, its functions not mutated. The languages share the one budget in turn, Python, Rust,
-then Go (below): each has an equal share of what those before it left, among itself and the languages after it that
-have something to mutate, so it also takes whatever an earlier one left unused. With Python and Rust to mutate, mutmut
-gets half the budget and cargo-mutants the rest; with Go as well, mutmut a third, cargo-mutants half of what is left and
+parse is a `not-run` finding, its functions not mutated. The languages share the one budget in turn, Python, Rust, then
+Go (below): each has an equal share of what those before it left, among itself and the languages after it that have
+something to mutate, so it also takes whatever an earlier one left unused. With Python and Rust to mutate, mutmut gets
+half the budget and cargo-mutants the rest; with Go as well, mutmut a third, cargo-mutants half of what is left and
 gremlins the rest; a change with no Python functions to mutate gives cargo-mutants all of it, or half with Go to mutate.
-A `budget-reached` finding names the seconds of the share its tool was stopped at.
-cargo-mutants mutates only those functions, given as one `--re` each that matches its mutants by their file and line
-(`^src/lib\.rs:(?:5|6|7):`), `--in-place` in the gate's copy of the files git tracks, once per Cargo workspace (that
-of the nearest `Cargo.toml` above the file, as `cargo locate-project` tells it), with `--test-tool nextest`,
-`--minimum-test-timeout 60` and `--timeout-multiplier 2`: each mutant's tests have twice as long as the unmutated
-baseline's took, and at least 60 seconds, while the baseline runs bounded only by the budget, so a workspace whose
-tests take longer than a minute still has its mutants tried. Its outcomes, from `mutants.out/outcomes.json`, count as mutmut's do: a missed
-mutant survived; a caught one, and a timeout, did not; an unviable one, which does not build, was not tried. A change
-outside functions, such as to a `use` or a `const`, gives nothing. The findings are mutmut's kinds:
+A `budget-reached` finding names the seconds of the share its tool was stopped at. cargo-mutants mutates only those
+functions, given as one `--re` each that matches its mutants by their file and line (`^src/lib\.rs:(?:5|6|7):`),
+`--in-place` in the gate's copy of the files git tracks, once per Cargo workspace (that of the nearest `Cargo.toml`
+above the file, as `cargo locate-project` tells it), with `--test-tool nextest`, `--minimum-test-timeout 60` and
+`--timeout-multiplier 2`: each mutant's tests have twice as long as the unmutated baseline's took, and at least 60
+seconds, while the baseline runs bounded only by the budget, so a workspace whose tests take longer than a minute still
+has its mutants tried. Its outcomes, from `mutants.out/outcomes.json`, count as mutmut's do: a missed mutant survived; a
+caught one, and a timeout, did not; an unviable one, which does not build, was not tried. A change outside functions,
+such as to a `use` or a `const`, gives nothing. The findings are mutmut's kinds:
 
 - `survived`: a function with missed mutants, at the line its `fn` starts, with how many of its tried mutants survived
   and the first three, each by its line and cargo-mutants' description, such as `replace > with == in unchecked`;

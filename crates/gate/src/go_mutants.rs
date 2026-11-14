@@ -252,7 +252,7 @@ fn run_module(run: &Run, module: &Path, functions: &[&Edited], budget: &Budget) 
     let mut goflags = std::env::var_os("GOFLAGS").unwrap_or_default();
     goflags.push(" -count=1");
     let env = [("PATH", path.as_os_str()), ("NO_COLOR", OsStr::new("1")), ("GOFLAGS", goflags.as_os_str())];
-    let extras = Extras { env: &env, soft_stop: Some(STOP_GRACE) };
+    let extras = Extras { env: &env, soft_stop: Some(STOP_GRACE), ..Extras::default() };
     match run_with(&argv, &run.tree.join(module), left, &extras) {
         Ok(done) => (run_findings(&done, module, functions, &place, budget.seconds), done.stopped),
         Err(e) => (vec![not_run(&format!("could not start gremlins: {e}"))], false),

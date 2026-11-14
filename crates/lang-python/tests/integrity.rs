@@ -169,6 +169,15 @@ fn added_skips_are_found_at_their_lines() {
 }
 
 #[test]
+fn a_type_parameter_named_as_a_skip_is_no_skip_but_its_bound_is_read() {
+    let generic = "def test_a[skip]():\n    assert 1\n\n\nclass TestB[xfail, *skipIf, **skipTest]:\n    pass\n\n\n\
+                   type Skipped[SkipTest] = list[SkipTest]\n\n\ndef test_c[T: skipif]():\n    assert 1\n";
+    let (place, _) = found(&[added(OTHER_PATH, generic)]);
+    // The alias's value reads SkipTest, its parameter; the bound skipif is read as ast reads it, a Name.
+    assert_eq!(place, [at(OTHER_PATH, 9, "skip"), at(OTHER_PATH, 12, "skip")]);
+}
+
+#[test]
 fn a_test_moved_with_the_decorators_it_had_adds_no_skip_but_one_added_on_the_way_is_found() {
     let base = "import pytest\n\n\n@pytest.mark.xfail\ndef test_b():\n    assert 1\n";
     let moved = "import pytest\n\n\n@pytest.mark.slow\n@pytest.mark.xfail\ndef test_bee():\n    assert 1\n";

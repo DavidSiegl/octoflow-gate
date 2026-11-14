@@ -260,7 +260,7 @@ pub fn run(
     let mut all_env = env.to_vec();
     let unbuffered = [("PYTHONUNBUFFERED", "1"), ("PYTHONIOENCODING", "utf-8:surrogateescape")];
     all_env.extend(unbuffered.map(|(name, set_to)| (name, OsStr::new(set_to))));
-    let extras = Extras { env: &all_env, soft_stop: None };
+    let extras = Extras { env: &all_env, ..Extras::default() };
     let finished = match run_with(&argv, &setup.top, timeout, &extras) {
         Ok(finished) => finished,
         Err(e) => {

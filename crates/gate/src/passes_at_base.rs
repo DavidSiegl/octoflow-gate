@@ -65,11 +65,11 @@ pub fn budget_reached(budget: &Budget, runner: &str, when: &str) -> Finding {
 /// The tests run in a copy of the base (copies::copy_base_with_tests) with the change's files that go with the
 /// tests ([`beside_tests`]) in place of the base's. A test in a file the change also edits outside its test code, its
 /// items marked `#[cfg(test)]`, cannot be separated from the code it tests: it is a `not-run` finding at its fn.
-/// Each Cargo target the tests are in ([`CrateLayout::targets`]) is built and run on its own, `cargo nextest run
-/// --locked` filtered to its tests, with a target directory of its own outside the copy; one whose tests do not
-/// compile there counts as failing, which is what the check expects of a test that needs the change, and gives
-/// nothing. A test the run did not report, as one a cfg leaves out at the base, gives nothing, and one built in several
-/// targets is reported only when it passed in each.
+/// Each Cargo target the tests are in ([`CrateLayout::targets`]) is built and run on its own, `cargo nextest run`
+/// filtered to its tests, `--locked` when the base tracks its workspace's Cargo.lock (the rule of crate::clippy), with
+/// a target directory of its own outside the copy; one whose tests do not compile there counts as failing, which is
+/// what the check expects of a test that needs the change, and gives nothing. A test the run did not report, as one a
+/// cfg leaves out at the base, gives nothing, and one built in several targets is reported only when it passed in each.
 ///
 /// The budget running out is a `budget-reached` finding, and each target after it a `not-run` one. A changed test
 /// file that does not parse, a test whose target cannot be placed, a copy that cannot be made, submodules the copy
@@ -320,6 +320,8 @@ struct Target {
     package: OsString,
     /// cargo's target selection, as `["--test", "cli"]` or `["--lib"]`.
     args: Vec<String>,
+    /// Whether cargo builds it `--locked`: its workspace's Cargo.lock is in the copy of the base.
+    locked: bool,
 }
 
 /// Why [`CrateLayout::targets`] cannot name the targets that build a file.
@@ -352,11 +354,20 @@ struct CrateLayout {
     tree: PathBuf,
     /// The places of each `.rs` file of the copy, by its path from the copy's top, as lang_rust::modules gives them.
     modules: HashMap<OsString, Vec<(OsString, Vec<String>)>>,
-    /// The targets `cargo metadata` lists, run in each directory of the copy it has been run in, by the directory's
-    /// path from the copy's top, each with its package's directory from there; or why that failed.
-    packages: HashMap<PathBuf, Result<Vec<(OsString, CargoTarget)>, Unplaced>>,
+    /// What `cargo metadata` read, run in each directory of the copy it has been run in, by the directory's path from
+    /// the copy's top; or why that failed.
+    packages: HashMap<PathBuf, Result<Workspace, Unplaced>>,
     /// When `cargo metadata` is stopped, as the budget of the runs at the base says.
     deadline: Instant,
+}
+
+/// The Cargo workspace one run of `cargo metadata --no-deps` reads.
+struct Workspace {
+    /// Its targets, each with its package's directory from the copy's top.
+    targets: Vec<(OsString, CargoTarget)>,
+    /// Whether the copy of the base holds its Cargo.lock, a link included: the copy holds the files git tracks at the
+    /// base, so this is crate::clippy's rule of building `--locked` when git tracks the lock file.
+    locked: bool,
 }
 
 /// A target of a package, as `cargo metadata` describes it
@@ -374,6 +385,8 @@ struct CargoTarget {
 #[derive(Deserialize)]
 struct CargoMetadata {
     packages: Vec<CargoPackage>,
+    /// The directory of the workspace's root manifest, an absolute path.
+    workspace_root: PathBuf,
 }
 
 /// A package of [`CargoMetadata`].
@@ -412,7 +425,7 @@ impl CrateLayout {
         let (mut out, mut whys, mut build_scripts) = (vec![], vec![], vec![]);
         for (root, module) in places {
             match self.target_of_root(&root) {
-                Ok(Some((package, args))) => out.push((Target { package, args }, module)),
+                Ok(Some(target)) => out.push((target, module)),
                 Ok(None) => build_scripts.push(root),
                 Err(Unplaced::Unbuilt(why)) => whys.push(why),
                 Err(stopped) => return Err(stopped),
@@ -430,10 +443,9 @@ impl CrateLayout {
         Ok(out)
     }
 
-    /// The package directory, from the copy's top, and cargo's target selection of the target whose crate root is
-    /// the file at `root`, a path from the copy's top; None when `cargo metadata` lists it as a build script's; or
-    /// why it has no target that can be told, as [`CrateLayout::targets`] says.
-    fn target_of_root(&mut self, root: &OsStr) -> Result<Option<(OsString, Vec<String>)>, Unplaced> {
+    /// The target whose crate root is the file at `root`, a path from the copy's top; None when `cargo metadata` lists
+    /// it as a build script's; or why it has no target that can be told, as [`CrateLayout::targets`] says.
+    fn target_of_root(&mut self, root: &OsStr) -> Result<Option<Target>, Unplaced> {
         let shown = text::path(root);
         let dir = project_dir(root, "Cargo.toml", |manifest| self.tree.join(manifest).is_file())
             .ok_or_else(|| Unplaced::Unbuilt(format!("no Cargo.toml lies above its crate root `{shown}` at the base")))?
@@ -441,7 +453,7 @@ impl CrateLayout {
         // A workspace's `cargo metadata` lists every member, so a run that read another member serves this one, ahead
         // of a run here that failed, as one in a member can where one at the workspace's root does not.
         let listed = self.packages.iter().find(|(_, read)| {
-            read.as_ref().is_ok_and(|targets| targets.iter().any(|(package, _)| Path::new(package) == dir))
+            read.as_ref().is_ok_and(|read| read.targets.iter().any(|(package, _)| Path::new(package) == dir))
         });
         let ran_in = match listed.map(|(ran_in, _)| ran_in) {
             Some(ran_in) => ran_in.clone(),
@@ -452,9 +464,9 @@ impl CrateLayout {
                 dir
             }
         };
-        let targets = self.packages[&ran_in].as_ref().map_err(Unplaced::clone)?;
+        let workspace = self.packages[&ran_in].as_ref().map_err(Unplaced::clone)?;
         let file = self.tree.join(root);
-        let (package, target) = targets.iter().find(|(_, t)| t.src_path == file).ok_or_else(|| {
+        let (package, target) = workspace.targets.iter().find(|(_, t)| t.src_path == file).ok_or_else(|| {
             Unplaced::Unbuilt(format!("no Cargo target at the base is built from its crate root `{shown}`"))
         })?;
         if target.kind.iter().any(|k| k == "custom-build") {
@@ -465,15 +477,15 @@ impl CrateLayout {
             Some(kind) => vec![format!("--{kind}"), target.name.clone()],
             None => vec!["--lib".to_string()],
         };
-        Ok(Some((package.clone(), args)))
+        Ok(Some(Target { package: package.clone(), args, locked: workspace.locked }))
     }
 
-    /// The targets `cargo metadata --no-deps`, run in `dir`, a directory from the copy's top, lists, each with its
-    /// package's directory from the copy's top. Errs with [`Unplaced::Stopped`] when it is stopped at the deadline,
-    /// and [`Unplaced::Unbuilt`] when it cannot start, fails, or prints what cannot be read so.
-    fn cargo_metadata(&self, dir: &Path) -> Result<Vec<(OsString, CargoTarget)>, Unplaced> {
+    /// The workspace `cargo metadata --no-deps`, run in `dir`, a directory from the copy's top, reads. Errs with
+    /// [`Unplaced::Stopped`] when it is stopped at the deadline, and [`Unplaced::Unbuilt`] when it cannot start, fails,
+    /// or prints what cannot be read so.
+    fn cargo_metadata(&self, dir: &Path) -> Result<Workspace, Unplaced> {
         let argv = ["cargo", "metadata", "--no-deps", "--format-version", "1"].map(OsStr::new);
-        let extras = Extras { env: &[("CARGO_TERM_COLOR", OsStr::new("never"))], soft_stop: None };
+        let extras = Extras { env: &[("CARGO_TERM_COLOR", OsStr::new("never"))], ..Extras::default() };
         let left = self.deadline.saturating_duration_since(Instant::now());
         let shown = if dir.as_os_str().is_empty() {
             "the top level".to_string()
@@ -499,7 +511,9 @@ impl CrateLayout {
             let Ok(from_top) = manifest_dir.strip_prefix(&self.tree) else { continue };
             out.extend(package.targets.into_iter().map(|t| (from_top.as_os_str().to_owned(), t)));
         }
-        Ok(out)
+        let lock = read.workspace_root.join("Cargo.lock");
+        let locked = lock.starts_with(&self.tree) && lock.symlink_metadata().is_ok();
+        Ok(Workspace { targets: out, locked })
     }
 }
 
@@ -555,14 +569,16 @@ fn run_target(run: &Run, target: &Target, named: &[&str], budget: &Budget) -> Ra
         _ => {}
     }
     let filter = filter.join(" | ");
-    let mut argv: Vec<&OsStr> = ["cargo", "nextest", "run", "--locked", "--no-fail-fast", "--no-tests=pass"]
-        .map(OsStr::new)
-        .to_vec();
+    let mut argv: Vec<&OsStr> =
+        ["cargo", "nextest", "run", "--no-fail-fast", "--no-tests=pass"].map(OsStr::new).to_vec();
+    if target.locked {
+        argv.push(OsStr::new("--locked"));
+    }
     argv.extend([OsStr::new("--target-dir"), run.target_dir.as_os_str(), OsStr::new("--config-file")]);
     argv.extend([run.config.as_os_str(), OsStr::new("--profile"), OsStr::new(NEXTEST_PROFILE)]);
     argv.extend(target.args.iter().map(OsStr::new));
     argv.extend([OsStr::new("-E"), OsStr::new(&filter)]);
-    let extras = Extras { env: &[("CARGO_TERM_COLOR", OsStr::new("never"))], soft_stop: None };
+    let extras = Extras { env: &[("CARGO_TERM_COLOR", OsStr::new("never"))], ..Extras::default() };
     let done = match run_with(&argv, &run.tree.join(&target.package), left, &extras) {
         Ok(done) => done,
         Err(e) => {
@@ -618,6 +634,7 @@ mod tests {
         let target = |package: &str, args: &[&str]| Target {
             package: package.into(),
             args: args.iter().map(|a| a.to_string()).collect(),
+            locked: false,
         };
         assert_eq!(target("", &["--test", "cli"]).label(), "`--test cli` of the package at the top level");
         assert_eq!(target("engine", &["--lib"]).label(), "`--lib` of the package at `engine`");
@@ -654,7 +671,7 @@ mod tests {
         let mut layout = CrateLayout::of(&tree, &budget).unwrap();
         let words = |w: &[&str]| w.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         let target = |package: &str, args: &[&str], module: &[&str]| {
-            (Target { package: package.into(), args: words(args) }, words(module))
+            (Target { package: package.into(), args: words(args), locked: false }, words(module))
         };
         for (path, expected) in [
             ("src/lib.rs", vec![target("", &["--lib"], &[])]),
@@ -737,7 +754,7 @@ mod tests {
         }
         let budget = Budget { seconds: 60, deadline: Instant::now() + std::time::Duration::from_secs(60) };
         let mut layout = CrateLayout::of(&tree, &budget).unwrap();
-        let lib = Target { package: "".into(), args: vec!["--lib".into()] };
+        let lib = Target { package: "".into(), args: vec!["--lib".into()], locked: false };
         assert_eq!(layout.targets(OsStr::new("src/shared.rs")), Ok(vec![(lib, vec!["shared".to_string()])]));
     }
 
@@ -780,7 +797,7 @@ mod tests {
         }
         let budget = Budget { seconds: 60, deadline: Instant::now() + std::time::Duration::from_secs(60) };
         let member = OsStr::new("m/src/lib.rs");
-        let lib = |package: &str| Target { package: package.into(), args: vec!["--lib".into()] };
+        let lib = |package: &str| Target { package: package.into(), args: vec!["--lib".into()], locked: false };
         // Each layout's map of runs is hashed afresh, so the runs are looked through in a new order each time.
         for _ in 0..8 {
             let mut layout = CrateLayout::of(&tree, &budget).unwrap();
@@ -806,7 +823,7 @@ mod tests {
         let tests = [test("src/a.rs", "one"), test("src/b.rs", "two")];
         let budget = Budget { seconds: 60, deadline: Instant::now() + std::time::Duration::from_secs(60) };
         let (found, groups) = group_by_target(CrateLayout::of(&tree, &budget).unwrap(), &tests, &budget);
-        let lib = Target { package: "".into(), args: vec!["--lib".into()] };
+        let lib = Target { package: "".into(), args: vec!["--lib".into()], locked: false };
         assert_eq!((found, groups), (vec![], vec![(lib, vec![(0, "a::one".into()), (1, "b::two".into())])]));
         let spent = Budget { seconds: 1, deadline: Instant::now() };
         let (found, groups) = group_by_target(CrateLayout::of(&tree, &spent).unwrap(), &tests, &spent);
@@ -820,7 +837,7 @@ mod tests {
         let dir = ScratchDir::new();
         let missing = dir.join("missing");
         let run = Run { tree: &missing, target_dir: &dir, config: &dir, store: &dir };
-        let target = Target { package: "".into(), args: vec!["--test".into(), "calc".into()] };
+        let target = Target { package: "".into(), args: vec!["--test".into(), "calc".into()], locked: false };
         let budget = Budget { seconds: 60, deadline: Instant::now() + std::time::Duration::from_secs(60) };
         let Ran::NotRun(found) = run_target(&run, &target, &["adds"], &budget) else { panic!("the run started") };
         assert!(found.message.starts_with("could not start cargo nextest to run the changed Rust tests of `--test \
@@ -831,7 +848,7 @@ mod tests {
     fn a_budget_spent_before_a_target_is_built_stops_the_runs() {
         let dir = ScratchDir::new();
         let run = Run { tree: &dir, target_dir: &dir, config: &dir, store: &dir };
-        let target = Target { package: "".into(), args: vec!["--test".into(), "calc".into()] };
+        let target = Target { package: "".into(), args: vec!["--test".into(), "calc".into()], locked: false };
         let budget = Budget { seconds: 1, deadline: Instant::now() };
         let Ran::Stopped(found) = run_target(&run, &target, &["adds"], &budget) else { panic!("the run went on") };
         assert_eq!(found, finding(None, None, "budget-reached", "cargo nextest was stopped at 1 seconds \

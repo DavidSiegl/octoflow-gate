@@ -219,6 +219,15 @@ fn a_test_whose_first_attribute_the_change_removes_is_run() {
 }
 
 #[test]
+fn a_workspace_that_commits_no_lock_file_is_judged() {
+    let repo = calc(&[]);
+    repo.git(&["rm", "-q", "Cargo.lock"]);
+    repo.git(&["commit", "-q", "-m", "no lock file"]);
+    repo.put("tests/calc.rs", ADDS.as_bytes());
+    assert_eq!(found(&repo), vec![at("tests/calc.rs", fn_line(&repo, "tests/calc.rs", "adds"), "passes-at-base")]);
+}
+
+#[test]
 fn a_cargo_error_other_than_a_compile_error_is_not_run() {
     let repo = calc(&[]);
     rebase(&repo, &[("Cargo.lock", "version = 4\n")], "a lock file that --locked refuses");
@@ -395,6 +404,69 @@ fn a_test_reading_from_a_submodule_is_judged_at_the_base() {
     add_submodules(&repo, &["vendor/lib"], &[]);
     let reads = "#[test]\nfn reads() {\n    assert_eq!(include_str!(\"../vendor/lib/notes.txt\"), \"notes\\n\");\n}\n";
     repo.put("tests/calc.rs", reads.as_bytes());
+    assert_eq!(found(&repo), vec![at("tests/calc.rs", 2, "passes-at-base")]);
+}
+
+#[test]
+fn a_change_that_moves_the_commit_of_a_submodule_beside_the_tests_is_judged() {
+    let repo = calc(&[]);
+    add_submodules(&repo, &["tests/fixture"], &[]);
+    let fixture = repo.repo.join("tests/fixture");
+    std::fs::write(fixture.join("notes.txt"), "new notes\n").unwrap();
+    let done = Command::new("git")
+        .current_dir(&fixture)
+        .args(["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit"])
+        .args(["--quiet", "-am", "new notes"])
+        .output()
+        .unwrap();
+    assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+    repo.put("tests/calc.rs", ADDS.as_bytes());
+    assert_eq!(found(&repo), vec![at("tests/calc.rs", fn_line(&repo, "tests/calc.rs", "adds"), "passes-at-base")]);
+}
+
+#[test]
+fn a_submodule_beside_the_tests_holds_the_commit_the_working_tree_records_whatever_the_base_s() {
+    let repo = calc(&[]);
+    add_submodules(&repo, &["tests/fixture"], &[]);
+    // The base records a commit the submodule's repository never had, and the working tree's checkout holds a named
+    // pipe git does not track: the copy takes neither.
+    repo.git(&["update-index", "--cacheinfo", &format!("160000,{},tests/fixture", "1".repeat(40))]);
+    repo.git(&["commit", "--quiet", "-m", "unknown submodule commit"]);
+    let made = Command::new("mkfifo").arg(repo.repo.join("tests/fixture/pipe")).status().unwrap();
+    assert!(made.success());
+    let reads = "#[test]\nfn reads() {\n    assert_eq!(include_str!(\"fixture/notes.txt\"), \"notes\\n\");\n    \
+                 assert!(!std::path::Path::new(\"tests/fixture/.git\").exists());\n}\n";
+    repo.put("tests/calc.rs", reads.as_bytes());
+    assert_eq!(found(&repo), vec![at("tests/calc.rs", 2, "passes-at-base")]);
+}
+
+#[test]
+fn a_submodule_beside_the_tests_not_initialised_in_the_working_tree_is_one_finding() {
+    let repo = calc(&[]);
+    add_submodules(&repo, &["tests/fixture"], &[]);
+    repo.git(&["submodule", "--quiet", "deinit", "--force", "tests/fixture"]);
+    // The change records another commit, which the working tree has no checkout of.
+    repo.git(&["update-index", "--cacheinfo", &format!("160000,{},tests/fixture", "2".repeat(40))]);
+    repo.put("tests/calc.rs", ADDS.as_bytes());
+    assert_eq!(findings(&repo, Gate::default())[0], (
+        None,
+        None,
+        "not-run".into(),
+        "the copy of the base leaves submodules empty, so a changed Rust test that needs one, if any does, was not \
+         judged: `tests/fixture`, which is not initialised in the working tree."
+            .into(),
+    ));
+}
+
+#[test]
+fn a_link_beside_the_tests_to_a_checkout_is_written_as_a_link() {
+    let repo = calc(&[]);
+    let reads = "#[test]\nfn reads() {\n    \
+                 assert!(std::fs::symlink_metadata(\"tests/root\").unwrap().file_type().is_symlink());\n}\n";
+    repo.put("tests/calc.rs", reads.as_bytes());
+    // The top of the repository, which holds `.git`.
+    std::os::unix::fs::symlink("..", repo.repo.join("tests/root")).unwrap();
+    repo.git(&["add", "tests/root"]);
     assert_eq!(found(&repo), vec![at("tests/calc.rs", 2, "passes-at-base")]);
 }
 

@@ -416,7 +416,7 @@ impl TreeCopy<'_> {
         let mut argv: Vec<&OsStr> = vec![self.python.as_os_str(), "-c".as_ref()];
         argv.push("from mutmut.__main__ import cli; cli()".as_ref());
         argv.extend(args.iter().map(OsStr::new));
-        let extras = Extras { env: &[("TMPDIR", tmp.as_os_str())], soft_stop: Some(STOP_GRACE) };
+        let extras = Extras { env: &[("TMPDIR", tmp.as_os_str())], soft_stop: Some(STOP_GRACE), ..Extras::default() };
         run_with(&argv, self.tree, timeout, &extras)
     }
 

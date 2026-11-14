@@ -17,7 +17,8 @@
 //! missing; `cargo locate-project` for each Cargo.toml among the files it is given; and `cargo clippy` in each
 //! workspace, which builds what it needs to (target/ in the workspace) and may fetch the crates it uses. That last
 //! runs with `--locked` when git tracks the workspace's Cargo.lock, so that it judges the versions the change commits
-//! and never rewrites the file; without one, cargo writes an untracked Cargo.lock beside the manifest.
+//! and never rewrites the file; without one, cargo writes an untracked Cargo.lock beside the manifest (a workspace that
+//! commits no lock file has cargo resolve one afresh, which `--locked` refuses). passes-at-base follows the same rule.
 
 use std::collections::{BTreeSet, HashSet};
 use std::ffi::{OsStr, OsString};
@@ -92,7 +93,8 @@ fn lint_workspace(name: &str, root: &Path, manifest: &Path, tracked: &Tracked) -
     let workspace = manifest.parent().unwrap_or(Path::new(""));
     let mut argv =
         ["cargo", "clippy", "--workspace", "--all-targets", "--message-format=json"].map(OsStr::new).to_vec();
-    if tracked.listed.contains(&workspace.join("Cargo.lock").into_os_string()) {
+    let lock = workspace.join("Cargo.lock");
+    if tracked.listed.iter().any(|p| p == lock.as_os_str()) {
         argv.push(OsStr::new("--locked"));
     }
     argv.extend(["--", "--cap-lints", "warn"].map(OsStr::new));

@@ -68,6 +68,8 @@ pub fn read(source: &[u8], path: &Path, among_tests: bool) -> Result<SourceFile,
 pub const FIRST_LINE_BYTES: usize = 256;
 
 /// Whether the file at `path` holds Python source: its name ends in `.py`, or its first line is a `#!` naming python.
+/// A `#!` followed, after any ASCII whitespace, by `[` is no `#!` line but a Rust inner attribute, as
+/// `#![cfg(feature = "python")]`.
 /// `head` gives the file's first bytes, [`FIRST_LINE_BYTES`] or more of them when it has as many, and none for a file
 /// that cannot be read; it is called only when the name does not decide.
 pub fn is_python(path: &[u8], head: impl FnOnce() -> Vec<u8>) -> bool {
@@ -76,7 +78,9 @@ pub fn is_python(path: &[u8], head: impl FnOnce() -> Vec<u8>) -> bool {
     }
     let head = head();
     let first = head[..head.len().min(FIRST_LINE_BYTES)].split(|&b| b == b'\n').next().unwrap_or_default();
-    first.starts_with(b"#!") && first.windows(b"python".len()).any(|w| w == b"python")
+    let Some(rest) = first.strip_prefix(b"#!") else { return false };
+    let attribute = rest.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'[');
+    !attribute && rest.windows(b"python".len()).any(|w| w == b"python")
 }
 
 /// The line, from 1, and the text of each comment of the Python source `source`, in the order they are written; None
@@ -257,6 +261,9 @@ mod tests {
     fn python_is_a_py_name_or_a_first_line_that_names_python() {
         assert!(is_python(b"a/b.py", || panic!("the name decides")));
         assert!(is_python(b"bin/tool", || b"#!/usr/bin/env python3\nprint(1)\n".to_vec()));
+        assert!(!is_python(b"src/python.rs", || b"#![cfg(feature = \"python\")]\n".to_vec()));
+        assert!(!is_python(b"src/python.rs", || b"#! \t[cfg(feature = \"python\")]\n".to_vec()));
+        assert!(is_python(b"bin/tool", || b"#! /usr/bin/python\n".to_vec()));
         for head in [&b"#!/bin/sh\n# python\n"[..], b"# python\n", b"", b"import python\n"] {
             assert!(!is_python(b"bin/tool", || head.to_vec()), "{head:?}");
         }

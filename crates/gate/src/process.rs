@@ -3,7 +3,7 @@
 //! Ctrl-C.
 
 use std::ffi::{OsStr, OsString};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -98,16 +98,20 @@ pub struct Extras<'a> {
     /// command a Jenkins `sh` step runs does, so that the signal reaches it. For a tool that writes what it has done
     /// so far when interrupted, as cargo-mutants does.
     pub soft_stop: Option<Duration>,
+    /// What the process reads on its standard input, which ends after it; empty for none.
+    pub input: &'a [u8],
 }
 
-/// `argv` run in `cwd` with [`tool_env`] and `extras.env` as its whole environment and no input, in a process group
-/// of its own, stopped after `timeout`, as `extras.soft_stop` says; everything it printed, and how it ended.
+/// `argv` run in `cwd` with [`tool_env`] and `extras.env` as its whole environment and `extras.input` as its input,
+/// in a process group of its own, stopped after `timeout`, as `extras.soft_stop` says; everything it printed, and how
+/// it ended.
 ///
-/// Once it has exited, or been killed, every process left in its group, such as a server it started, is killed too,
-/// and what was printed is read until no process holds the output open, for at most [`KILL_WAIT`] more: only one
-/// that left the group can still hold it, and what that prints later is lost. So the call returns within `timeout`,
-/// the soft stop's grace and [`KILL_WAIT`]. When Ctrl-C reaches the gate meanwhile, the group is killed and the gate
-/// exits through [`exit_interrupted`]. Errs when `argv` cannot be started.
+/// Once it has exited, or been killed, every process left in its group, such as a server it started, is killed too, and
+/// what was printed is read until no process holds the output open, and the input written until none holds it open, for
+/// at most [`KILL_WAIT`] more: only one that left the group can still hold them, and what that prints later is lost. So
+/// the call returns within `timeout`, the soft stop's grace and [`KILL_WAIT`]. When Ctrl-C reaches the gate meanwhile,
+/// the group is killed and the gate exits through [`exit_interrupted`]. Errs when `argv` cannot be started, and when
+/// its input cannot be written for a reason other than the process ending before it read it all.
 ///
 /// The process starts a session of its own, so it has no controlling terminal: the terminal's Ctrl-C is the gate's
 /// to pass on, and a tool that would read the terminal, or write to it under `stty tostop`, fails rather than
@@ -116,6 +120,13 @@ pub fn run_with(argv: &[&OsStr], cwd: &Path, timeout: Duration, extras: &Extras)
     let (mut child, group) = start(argv, cwd, Stdio::piped(), Stdio::piped(), extras)?;
     let stdout = Printed::read(child.stdout.take());
     let stderr = Printed::read(child.stderr.take());
+    // Written on a thread of its own, so that a process that prints before it has read all its input never blocks
+    // on a full pipe. One that exits or is killed before reading it all fails the write with a broken pipe, which
+    // ends the thread; how the process ended says what went wrong.
+    let writer = child.stdin.take().map(|mut stdin| {
+        let input = extras.input.to_vec();
+        std::thread::spawn(move || stdin.write_all(&input))
+    });
     // Read on their threads while the process runs, so that a full pipe never blocks it.
     let mut status = wait(&mut child, &group, Some(Instant::now() + timeout))?;
     let stopped = status.is_none();
@@ -130,7 +141,8 @@ pub fn run_with(argv: &[&OsStr], cwd: &Path, timeout: Duration, extras: &Extras)
     }
     group.kill();
     let end = Instant::now() + KILL_WAIT;
-    while !(stdout.ended() && stderr.ended()) && Instant::now() < end {
+    let written = || writer.as_ref().is_none_or(std::thread::JoinHandle::is_finished);
+    while !(stdout.ended() && stderr.ended() && written()) && Instant::now() < end {
         std::thread::sleep(POLL);
     }
     // Killed a moment ago, the process may not have been reaped yet; what is left of the wait is its to exit in.
@@ -139,6 +151,11 @@ pub fn run_with(argv: &[&OsStr], cwd: &Path, timeout: Duration, extras: &Extras)
         if status.is_none() {
             std::thread::sleep(POLL);
         }
+    }
+    // A writer still running is writing to a process that left the group; it is left to end with the gate.
+    if let Some(writer) = writer.filter(std::thread::JoinHandle::is_finished) {
+        let written = writer.join().map_err(|_| std::io::Error::other("the thread writing the input panicked"))?;
+        written.or_else(|e| if e.kind() == std::io::ErrorKind::BrokenPipe { Ok(()) } else { Err(e) })?;
     }
     Ok(Finished { status: status_code(status), stdout: stdout.take(), stderr: stderr.take(), stopped })
 }
@@ -154,9 +171,9 @@ pub fn run_to_stderr(argv: &[&OsStr], cwd: &Path) -> std::io::Result<i32> {
     Ok(status_code(status))
 }
 
-/// `argv` started in `cwd` with [`tool_env`] and `extras.env` as its whole environment, no input and the given output,
-/// in a session, and so a process group, of its own, which the second value kills when dropped; with SIGINT's default
-/// disposition when `extras` has a soft stop.
+/// `argv` started in `cwd` with [`tool_env`] and `extras.env` as its whole environment, a pipe for its input when
+/// `extras.input` holds any and none otherwise, and the given output, in a session, and so a process group, of its
+/// own, which the second value kills when dropped; with SIGINT's default disposition when `extras` has a soft stop.
 fn start(argv: &[&OsStr], cwd: &Path, stdout: Stdio, stderr: Stdio, extras: &Extras) -> std::io::Result<(Child, Group)> {
     use std::os::unix::process::CommandExt;
     let (program, args) = argv.split_first().ok_or_else(|| std::io::Error::other("no program to run"))?;
@@ -167,7 +184,7 @@ fn start(argv: &[&OsStr], cwd: &Path, stdout: Stdio, stderr: Stdio, extras: &Ext
         .env_clear()
         .envs(tool_env())
         .envs(extras.env.iter().copied())
-        .stdin(Stdio::null())
+        .stdin(if extras.input.is_empty() { Stdio::null() } else { Stdio::piped() })
         .stdout(stdout)
         .stderr(stderr);
     let default_sigint = extras.soft_stop.is_some();
@@ -323,6 +340,27 @@ mod tests {
     }
 
     #[test]
+    fn the_input_is_read_whole_however_long_and_none_is_an_empty_one() {
+        let argv: Vec<&OsStr> = ["sh", "-c", "cat; echo end"].into_iter().map(OsStr::new).collect();
+        // More than a pipe holds, which cat prints back before it has read the rest.
+        let input: Vec<u8> = (0..1 << 20).map(|n: u32| n.to_le_bytes()[0]).collect();
+        let extras = Extras { input: &input, ..Extras::default() };
+        let done = run_with(&argv, Path::new("."), Duration::from_secs(10), &extras).unwrap();
+        assert_eq!((done.status, done.stdout.len()), (0, input.len() + 4));
+        assert!(done.stdout.starts_with(&input));
+        assert_eq!(sh("cat; echo end", Duration::from_secs(10)).stdout, b"end\n");
+    }
+
+    #[test]
+    fn a_process_that_ends_before_reading_its_input_is_judged_by_how_it_ended() {
+        let argv: Vec<&OsStr> = ["sh", "-c", "exit 4"].into_iter().map(OsStr::new).collect();
+        let input = vec![b'x'; 1 << 20];
+        let extras = Extras { input: &input, ..Extras::default() };
+        let done = run_with(&argv, Path::new("."), Duration::from_secs(10), &extras).unwrap();
+        assert_eq!(done.status, 4);
+    }
+
+    #[test]
     fn it_keeps_both_streams_and_the_status() {
         let done = sh("printf 'a\\377'; printf e >&2; exit 3", Duration::from_secs(10));
         assert_eq!((done.status, done.stdout, done.stderr, done.stopped), (3, b"a\xff".to_vec(), b"e".to_vec(), false));
@@ -353,7 +391,8 @@ mod tests {
             .into_iter()
             .map(OsStr::new)
             .collect();
-        let extras = Extras { env: &[("GATE_TEST_EXTRA", OsStr::new("set"))], soft_stop: Some(Duration::from_secs(5)) };
+        let env = [("GATE_TEST_EXTRA", OsStr::new("set"))];
+        let extras = Extras { env: &env, soft_stop: Some(Duration::from_secs(5)), ..Extras::default() };
         let done = run_with(&argv, Path::new("."), Duration::from_millis(300), &extras).unwrap();
         assert_eq!((done.status, done.stopped), (7, true));
         assert_eq!(done.stdout, b"set\ninterrupted\n");

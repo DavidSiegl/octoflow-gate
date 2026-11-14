@@ -3,7 +3,7 @@
 //! under test; the Python half, which runs mutmut, is python_mutants.rs, and the Go half, which runs gremlins,
 //! go_mutants.rs.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::Path;
@@ -145,7 +145,7 @@ fn rust_mutants(rust: &RustChange, functions: &[Edited], budget: &Budget) -> Vec
 }
 
 /// The findings on `functions`, [`edited_rust`]'s, of cargo-mutants run on each Cargo workspace that holds one of
-/// them ([`cargo_root`]), in path order of the workspaces, in a copy of the files git tracks made in `dir`, an empty
+/// them ([`cargo_roots`]), in path order of the workspaces, in a copy of the files git tracks made in `dir`, an empty
 /// directory, beside each run's output. cargo-mutants mutates only `functions` ([`run_workspace`]), and its tests run
 /// with `--test-tool nextest`, each mutant's within [`TEST_TIMEOUT`].
 ///
@@ -162,8 +162,9 @@ fn on_copy(rust: &RustChange, dir: &Path, functions: &[Edited], budget: &Budget)
         by_path.entry(&f.path).or_default().push(f);
     }
     let mut roots: BTreeMap<OsString, Vec<&Edited>> = BTreeMap::new();
+    let mut root_of = cargo_roots(&tree, by_path.keys().copied());
     for (path, mine) in by_path {
-        let why = match cargo_root(&tree, path) {
+        let why = match root_of.remove(path).expect("cargo_roots answers each path it is given") {
             Ok(root) if Path::new(path).starts_with(&root) => {
                 roots.entry(root).or_default().extend(mine);
                 continue;
@@ -191,14 +192,30 @@ fn on_copy(rust: &RustChange, dir: &Path, functions: &[Edited], budget: &Budget)
     out
 }
 
-/// The directory, from `tree`'s top, empty for the top itself, that cargo-mutants runs in to mutate the Rust file at
-/// `path`, a repository path: that of the root manifest of the workspace, as cargo tells it (clippy::workspaces), of
-/// the package whose Cargo.toml is nearest above it. Errs with why, a clause, when no Cargo.toml lies above it, or
-/// cargo cannot tell its workspace.
-fn cargo_root(tree: &Path, path: &OsStr) -> Result<OsString, String> {
-    let nearest = project_dir(path, "Cargo.toml", |manifest| tree.join(manifest).is_file())
-        .map(|dir| dir.join("Cargo.toml"))
-        .ok_or_else(|| "no Cargo.toml lies above it".to_string())?;
+/// For each of `paths`, Rust files by their repository paths, the directory, from `tree`'s top, empty for the top
+/// itself, that cargo-mutants runs in to mutate it: that of the root manifest of the workspace, as cargo tells it
+/// (clippy::workspaces), of the package whose Cargo.toml is nearest above it; or why it has none, a clause, when no
+/// Cargo.toml lies above it, or cargo cannot tell its workspace. Cargo is asked once a package.
+fn cargo_roots<'p>(
+    tree: &Path,
+    paths: impl Iterator<Item = &'p OsStr>,
+) -> HashMap<&'p OsStr, Result<OsString, String>> {
+    let mut by_package: HashMap<&Path, Result<OsString, String>> = HashMap::new();
+    let mut out = HashMap::new();
+    for path in paths {
+        let root = match project_dir(path, "Cargo.toml", |manifest| tree.join(manifest).is_file()) {
+            Some(package) => by_package.entry(package).or_insert_with(|| package_root(tree, package)).clone(),
+            None => Err("no Cargo.toml lies above it".to_string()),
+        };
+        out.insert(path, root);
+    }
+    out
+}
+
+/// The directory, from `tree`'s top, of the root manifest of the workspace of the package in `package`, a directory
+/// from `tree`'s top, as cargo tells it. Errs with why, a clause, when cargo cannot tell it.
+fn package_root(tree: &Path, package: &Path) -> Result<OsString, String> {
+    let nearest = package.join("Cargo.toml");
     let (manifests, problems) = workspaces("cargo-mutants", tree, &[nearest.clone().into_os_string()]);
     match (manifests.first(), problems.first()) {
         (Some(manifest), _) => Ok(manifest.parent().unwrap_or(Path::new("")).as_os_str().to_os_string()),
@@ -263,7 +280,8 @@ fn run_workspace(run: &Run, root: &OsStr, functions: &[&Edited], budget: &Budget
     argv.extend(wanted.iter().flat_map(|re| [OsStr::new("--re"), re.as_os_str()]));
     argv.extend(["--test-tool", "nextest", "--timeout", &timeout, "--output"].map(OsStr::new));
     argv.extend([run.scratch.as_os_str(), OsStr::new("--colors"), OsStr::new("never")]);
-    let extras = Extras { env: &[("CARGO_TERM_COLOR", OsStr::new("never"))], soft_stop: Some(STOP_GRACE) };
+    let env = [("CARGO_TERM_COLOR", OsStr::new("never"))];
+    let extras = Extras { env: &env, soft_stop: Some(STOP_GRACE), ..Extras::default() };
     match run_with(&argv, run.tree, left, &extras) {
         Ok(done) => (run_findings(&done, &run.scratch.join("mutants.out"), root, budget.seconds), done.stopped),
         Err(e) => (vec![not_run(&format!("could not start cargo-mutants: {e}"))], false),
@@ -584,7 +602,7 @@ mod tests {
             std::fs::create_dir_all(dir.join(path).parent().unwrap()).unwrap();
             std::fs::write(dir.join(path), text).unwrap();
         }
-        let root = |path: &str| cargo_root(&dir, OsStr::new(path));
+        let root = |path: &str| cargo_roots(&dir, [OsStr::new(path)].into_iter()).remove(OsStr::new(path)).unwrap();
         assert_eq!(root("engine/src/lib.rs"), Ok("".into()));
         std::fs::remove_file(dir.join("Cargo.toml")).unwrap();
         assert_eq!(root("engine/src/lib.rs"), Ok("engine".into()));

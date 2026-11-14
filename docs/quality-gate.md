@@ -278,10 +278,11 @@ edits with gremlins (**Go's mutants**, below). The flaky-tests and passes-at-bas
 
 **Cognitive complexity** scores the functions the change edits, so that a change cannot pile branches into the function
 it is editing rather than split it. A function counts when the change adds a line to it, decorators included, in a
-Python file, a `.py` file or a script whose `#!` line names python, outside the files the settings exempt, by default
-`tests/`: any function that no other function holds, a method of a nested class and a function under a module-level `if`
-or `try` included. A function nested in another is part of that one. Files are decoded by their byte order mark or
-coding cookie, as [reading the source](#reading-the-source) says. Its score is G. Ann Campbell's [cognitive
+Python file, a `.py` file or a script whose `#!` line names python (a first line `#![`, spaces allowed before the `[`,
+is a Rust inner attribute, no `#!` line), outside the files the settings exempt, by default `tests/`: any function that
+no other function holds, a method of a nested class and a function under a module-level `if` or `try` included. A
+function nested in another is part of that one. Files are decoded by their byte order mark or coding cookie, as
+[reading the source](#reading-the-source) says. Its score is G. Ann Campbell's [cognitive
 complexity](https://www.sonarsource.com/docs/CognitiveComplexity.pdf), which SonarQube's rule S3776 measured: a point
 for each `if`, `elif`, `else`, ternary, loop, `except`, `match`, sequence of like boolean operators and recursion, and
 one more for each level of nesting on those that nest. Recursion is a function that calls itself, or one on a cycle of
@@ -869,8 +870,9 @@ other program and need no Python. Each front end reads a file into the model of 
 `crates/checks` judge whatever the language; another language is another front end.
 
 **Which files.** The gate reads, once per run, each file of the change that holds Rust, by a `.rs` name, Python, by a
-`.py` name or a first line that is a `#!` naming python, or Go, by a `.go` name in a directory that holds a `go.mod`, or
-below one, a go.mod the change deletes included, outside what the go tool leaves out of a package (a directory named
+`.py` name or a first line that is a `#!` naming python, not followed by `[` (a Rust inner attribute), or Go, by a
+`.go` name in a directory that holds a `go.mod`, or below one, a go.mod the change deletes included, outside what the
+go tool leaves out of a package (a directory named
 `testdata`, a name or directory that starts with `.` or `_`) and of `./...` (a directory named `vendor`, which holds the
 module's dependencies), and not generated: a Go file with the header [Go's convention](https://go.dev/s/generatedcode)
 fixes, a line `// Code generated ... DO NOT EDIT.` before its `package` clause, is the generator's output, not code

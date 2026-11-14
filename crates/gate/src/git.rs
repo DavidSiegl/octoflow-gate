@@ -9,24 +9,25 @@ use crate::process::{self, Extras, Finished};
 use crate::text;
 use crate::Unjudged;
 
-/// Seconds a git command may take before the gate gives up judging the change.
+/// Seconds a git command may take before the gate gives up judging the change; a command that reads several objects
+/// may take this long for each.
 const TIMEOUT: u64 = 60;
 
 /// `git -C cwd args`, run as [`process::run`] runs a program, for a command whose failure the caller interprets: its
 /// exit status and what it printed, as git printed it. Errs when git cannot be started or runs longer than a minute.
 pub fn run<S: AsRef<OsStr>>(cwd: &Path, args: &[S]) -> Result<Finished, Unjudged> {
-    run_fed(cwd, args, &[])
+    run_fed(cwd, args, &[], TIMEOUT)
 }
 
-/// [`run`] with `input` on git's standard input.
-fn run_fed<S: AsRef<OsStr>>(cwd: &Path, args: &[S], input: &[u8]) -> Result<Finished, Unjudged> {
+/// [`run`] with `input` on git's standard input, and `seconds` in place of its minute.
+fn run_fed<S: AsRef<OsStr>>(cwd: &Path, args: &[S], input: &[u8], seconds: u64) -> Result<Finished, Unjudged> {
     let mut argv: Vec<&OsStr> = vec![OsStr::new("git"), OsStr::new("-C"), cwd.as_os_str()];
     argv.extend(args.iter().map(AsRef::as_ref));
     let extras = Extras { input, ..Extras::default() };
-    match process::run_with(&argv, Path::new("."), Duration::from_secs(TIMEOUT), &extras) {
+    match process::run_with(&argv, Path::new("."), Duration::from_secs(seconds), &extras) {
         Err(e) => Err(Unjudged(format!("{}: {e}", command(cwd, args)))),
         Ok(done) if done.stopped => {
-            Err(Unjudged(format!("{}: did not finish within {TIMEOUT} seconds", command(cwd, args))))
+            Err(Unjudged(format!("{}: did not finish within {seconds} seconds", command(cwd, args))))
         }
         Ok(done) => Ok(done),
     }
@@ -35,12 +36,12 @@ fn run_fed<S: AsRef<OsStr>>(cwd: &Path, args: &[S], input: &[u8]) -> Result<Fini
 /// The standard output of `git -C cwd args`, as git printed it. Errs as [`run`] does, and when git exits with a
 /// status other than 0.
 pub fn output<S: AsRef<OsStr>>(cwd: &Path, args: &[S]) -> Result<Vec<u8>, Unjudged> {
-    output_fed(cwd, args, &[])
+    output_fed(cwd, args, &[], TIMEOUT)
 }
 
-/// [`output`] with `input` on git's standard input.
-fn output_fed<S: AsRef<OsStr>>(cwd: &Path, args: &[S], input: &[u8]) -> Result<Vec<u8>, Unjudged> {
-    let done = run_fed(cwd, args, input)?;
+/// [`output`] with `input` on git's standard input, and `seconds` in place of its minute.
+fn output_fed<S: AsRef<OsStr>>(cwd: &Path, args: &[S], input: &[u8], seconds: u64) -> Result<Vec<u8>, Unjudged> {
+    let done = run_fed(cwd, args, input, seconds)?;
     if done.status != 0 {
         let said = text::lossless(&done.stderr);
         return Err(Unjudged(format!("{} failed: {}", command(cwd, args), text::py_strip(&said))));
@@ -49,15 +50,17 @@ fn output_fed<S: AsRef<OsStr>>(cwd: &Path, args: &[S], input: &[u8]) -> Result<V
 }
 
 /// The contents of the objects of the repository at `cwd` that `ids`, their full object ids in hex, name, in the
-/// order given, all read by one `git cat-file --batch`. Errs as [`output`] does, and when the repository has no object
-/// of one of the ids.
+/// order given, all read by one `git cat-file --batch`, which may take a minute for each object, as long as a git
+/// command per object would have: a partial clone fetches each missing object from its remote in turn. Errs as
+/// [`output`] does, and when the repository has no object of one of the ids.
 pub fn objects(cwd: &Path, ids: &[&[u8]]) -> Result<Vec<Vec<u8>>, Unjudged> {
     if ids.is_empty() {
         return Ok(vec![]);
     }
     let args = ["cat-file", "--batch"];
     let input: Vec<u8> = ids.iter().flat_map(|id| [*id, b"\n"]).flatten().copied().collect();
-    let printed = output_fed(cwd, &args, &input)?;
+    let seconds = TIMEOUT.saturating_mul(ids.len() as u64);
+    let printed = output_fed(cwd, &args, &input, seconds)?;
     let failed = |why: String| Unjudged(format!("{}: {why}", command(cwd, &args)));
     let mut rest = printed.as_slice();
     let mut out = Vec::with_capacity(ids.len());

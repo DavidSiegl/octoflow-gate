@@ -107,10 +107,12 @@ pub struct Extras<'a> {
 /// it ended.
 ///
 /// Once it has exited, or been killed, every process left in its group, such as a server it started, is killed too,
-/// and what was printed is read until no process holds the output open, for at most [`KILL_WAIT`] more: only one
-/// that left the group can still hold it, and what that prints later is lost. So the call returns within `timeout`,
+/// and what was printed is read until no process holds the output open, and the input written until none holds it
+/// open, for at most [`KILL_WAIT`] more: only one that left the group can still hold them, and what that prints later
+/// is lost. So the call returns within `timeout`,
 /// the soft stop's grace and [`KILL_WAIT`]. When Ctrl-C reaches the gate meanwhile, the group is killed and the gate
-/// exits through [`exit_interrupted`]. Errs when `argv` cannot be started.
+/// exits through [`exit_interrupted`]. Errs when `argv` cannot be started, and when its input cannot be written for a
+/// reason other than the process ending before it read it all.
 ///
 /// The process starts a session of its own, so it has no controlling terminal: the terminal's Ctrl-C is the gate's
 /// to pass on, and a tool that would read the terminal, or write to it under `stty tostop`, fails rather than
@@ -120,12 +122,12 @@ pub fn run_with(argv: &[&OsStr], cwd: &Path, timeout: Duration, extras: &Extras)
     let stdout = Printed::read(child.stdout.take());
     let stderr = Printed::read(child.stderr.take());
     // Written on a thread of its own, so that a process that prints before it has read all its input never blocks
-    // on a full pipe. One that exits or is killed before reading it all fails the write, which ends the thread; how
-    // the process ended says what went wrong.
-    if let Some(mut stdin) = child.stdin.take() {
+    // on a full pipe. One that exits or is killed before reading it all fails the write with a broken pipe, which
+    // ends the thread; how the process ended says what went wrong.
+    let writer = child.stdin.take().map(|mut stdin| {
         let input = extras.input.to_vec();
-        std::thread::spawn(move || stdin.write_all(&input));
-    }
+        std::thread::spawn(move || stdin.write_all(&input))
+    });
     // Read on their threads while the process runs, so that a full pipe never blocks it.
     let mut status = wait(&mut child, &group, Some(Instant::now() + timeout))?;
     let stopped = status.is_none();
@@ -140,7 +142,8 @@ pub fn run_with(argv: &[&OsStr], cwd: &Path, timeout: Duration, extras: &Extras)
     }
     group.kill();
     let end = Instant::now() + KILL_WAIT;
-    while !(stdout.ended() && stderr.ended()) && Instant::now() < end {
+    let written = || writer.as_ref().is_none_or(std::thread::JoinHandle::is_finished);
+    while !(stdout.ended() && stderr.ended() && written()) && Instant::now() < end {
         std::thread::sleep(POLL);
     }
     // Killed a moment ago, the process may not have been reaped yet; what is left of the wait is its to exit in.
@@ -149,6 +152,11 @@ pub fn run_with(argv: &[&OsStr], cwd: &Path, timeout: Duration, extras: &Extras)
         if status.is_none() {
             std::thread::sleep(POLL);
         }
+    }
+    // A writer still running is writing to a process that left the group; it is left to end with the gate.
+    if let Some(writer) = writer.filter(std::thread::JoinHandle::is_finished) {
+        let written = writer.join().map_err(|_| std::io::Error::other("the thread writing the input panicked"))?;
+        written.or_else(|e| if e.kind() == std::io::ErrorKind::BrokenPipe { Ok(()) } else { Err(e) })?;
     }
     Ok(Finished { status: status_code(status), stdout: stdout.take(), stderr: stderr.take(), stopped })
 }
@@ -342,6 +350,15 @@ mod tests {
         assert_eq!((done.status, done.stdout.len()), (0, input.len() + 4));
         assert!(done.stdout.starts_with(&input));
         assert_eq!(sh("cat; echo end", Duration::from_secs(10)).stdout, b"end\n");
+    }
+
+    #[test]
+    fn a_process_that_ends_before_reading_its_input_is_judged_by_how_it_ended() {
+        let argv: Vec<&OsStr> = ["sh", "-c", "exit 4"].into_iter().map(OsStr::new).collect();
+        let input = vec![b'x'; 1 << 20];
+        let extras = Extras { input: &input, ..Extras::default() };
+        let done = run_with(&argv, Path::new("."), Duration::from_secs(10), &extras).unwrap();
+        assert_eq!(done.status, 4);
     }
 
     #[test]

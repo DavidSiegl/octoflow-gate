@@ -66,11 +66,11 @@ pub fn budget_reached(budget: &Budget, runner: &str, when: &str) -> Finding {
 /// The tests run in a copy of the base (copies::copy_base_with_tests) with the change's files that go with the
 /// tests ([`beside_tests`]) in place of the base's. A test in a file the change also edits outside its test code, its
 /// items marked `#[cfg(test)]`, cannot be separated from the code it tests: it is a `not-run` finding at its fn.
-/// Each Cargo target the tests are in ([`CrateLayout::targets`]) is built and run on its own, `cargo nextest run
-/// --locked` filtered to its tests, with a target directory of its own outside the copy; one whose tests do not
-/// compile there counts as failing, which is what the check expects of a test that needs the change, and gives
-/// nothing. A test the run did not report, as one a cfg leaves out at the base, gives nothing, and one built in several
-/// targets is reported only when it passed in each.
+/// Each Cargo target the tests are in ([`CrateLayout::targets`]) is built and run on its own, `cargo nextest run`
+/// filtered to its tests, `--locked` when the base tracks its workspace's Cargo.lock (clippy::locked), with a target
+/// directory of its own outside the copy; one whose tests do not compile there counts as failing, which is what the
+/// check expects of a test that needs the change, and gives nothing. A test the run did not report, as one a cfg
+/// leaves out at the base, gives nothing, and one built in several targets is reported only when it passed in each.
 ///
 /// The budget running out is a `budget-reached` finding, and each target after it a `not-run` one. A changed test
 /// file that does not parse, a test whose target cannot be placed, a copy that cannot be made, submodules the copy
@@ -445,8 +445,8 @@ impl CrateLayout {
         Ok(out)
     }
 
-    /// The target whose crate root is the file at `root`, a path from the copy's top; None when `cargo metadata` lists it as a build script's; or
-    /// why it has no target that can be told, as [`CrateLayout::targets`] says.
+    /// The target whose crate root is the file at `root`, a path from the copy's top; None when `cargo metadata` lists
+    /// it as a build script's; or why it has no target that can be told, as [`CrateLayout::targets`] says.
     fn target_of_root(&mut self, root: &OsStr) -> Result<Option<Target>, Unplaced> {
         let shown = text::path(root);
         let dir = project_dir(root, "Cargo.toml", |manifest| self.tree.join(manifest).is_file())
@@ -482,8 +482,9 @@ impl CrateLayout {
         Ok(Some(Target { package: package.clone(), args, locked: workspace.locked }))
     }
 
-    /// The workspace `cargo metadata --no-deps`, run in `dir`, a directory from the copy's top, reads. Errs with [`Unplaced::Stopped`] when it is stopped at the deadline,
-    /// and [`Unplaced::Unbuilt`] when it cannot start, fails, or prints what cannot be read so.
+    /// The workspace `cargo metadata --no-deps`, run in `dir`, a directory from the copy's top, reads. Errs with
+    /// [`Unplaced::Stopped`] when it is stopped at the deadline, and [`Unplaced::Unbuilt`] when it cannot start, fails,
+    /// or prints what cannot be read so.
     fn cargo_metadata(&self, dir: &Path) -> Result<Workspace, Unplaced> {
         let argv = ["cargo", "metadata", "--no-deps", "--format-version", "1"].map(OsStr::new);
         let extras = Extras { env: &[("CARGO_TERM_COLOR", OsStr::new("never"))], ..Extras::default() };
@@ -513,7 +514,7 @@ impl CrateLayout {
             out.extend(package.targets.into_iter().map(|t| (from_top.as_os_str().to_owned(), t)));
         }
         let locked = read.workspace_root.strip_prefix(&self.tree).is_ok_and(|workspace| {
-            locked(workspace, |lock| self.tree.join(lock).symlink_metadata().is_ok_and(|m| m.is_file()))
+            locked(workspace, |lock| self.tree.join(lock).symlink_metadata().is_ok())
         });
         Ok(Workspace { targets: out, locked })
     }
@@ -571,7 +572,8 @@ fn run_target(run: &Run, target: &Target, named: &[&str], budget: &Budget) -> Ra
         _ => {}
     }
     let filter = filter.join(" | ");
-    let mut argv: Vec<&OsStr> = ["cargo", "nextest", "run", "--no-fail-fast", "--no-tests=pass"].map(OsStr::new).to_vec();
+    let mut argv: Vec<&OsStr> =
+        ["cargo", "nextest", "run", "--no-fail-fast", "--no-tests=pass"].map(OsStr::new).to_vec();
     if target.locked {
         argv.push(OsStr::new("--locked"));
     }

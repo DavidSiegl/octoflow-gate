@@ -648,4 +648,3 @@ fn a_format_spec_is_part_of_an_f_string_s_text_also_one_that_starts_with_an_equa
     let source = lang_python::read(spec.as_bytes(), std::path::Path::new(path), true).unwrap();
     assert_eq!(source.tests[0].assertions[0].reads, ["name", "n"]);
 }
-

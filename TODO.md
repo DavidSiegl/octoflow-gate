@@ -8,6 +8,14 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
 
 ## Open issues
 
+- **Go's and Python's readers repeat work that nothing needs repeated.** As cross-review 36 put it (F9,
+  2026-11-14): "`Walk::function` (`testing.rs:154`) recomputes `binds::bindings` for every top-level function,
+  helpers whose assertions are dropped included, although `lang_go::read` already computes the file's bindings.
+  `testing::constants` runs for every Go file (`crates/lang-go/src/lib.rs:78`), and only a test file's are used.
+  `mark_for_mutmut` (`crates/gate/src/python_mutants.rs:681-690`) stats every file of the copy, then
+  `outside_mutmut` rebuilds the source_paths and pattern vectors for each one. Nothing here gives a wrong result."
+  Closes with each computed once per file or copy: the function's bindings taken from the file's, the constants
+  only where a test may name them, and mutmut's patterns built once.
 - **surviving-mutants reads each base Go file with a git process of its own.** As cross-review 35 put it (F7,
   2026-11-14): "`crates/gate/src/go_mutants.rs:104` still starts one `git cat-file blob` per base Go file", where
   todo/19 had the parser checks' base files read by one `git::objects` (`crates/gate/src/git.rs`).

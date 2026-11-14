@@ -845,11 +845,12 @@ as one list, issues first, at most 50 in all, then a count:
 The Rust tests run with [cargo-nextest](https://nexte.st/), under
 [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov), which builds them with rustc's `-C instrument-coverage`
 and turns what they ran into a Cobertura report with the toolchain's own `llvm-profdata` and `llvm-cov`, from rustup's
-`llvm-tools-preview` component. This repository's `gate.toml` runs them in its one Cargo workspace, but for `xtask`,
-the workspace's own tasks, as a `[[test]]` command:
+`llvm-tools-preview` component. This repository's `gate.toml` runs them in its one Cargo workspace, `xtask`'s
+included, whose test holds each golden report under `tests/golden/` to `schema/quality-v1.json`, as a `[[test]]`
+command:
 
 ```bash
-cargo llvm-cov nextest --locked --workspace --exclude xtask --ignore-run-fail --profile ci \
+cargo llvm-cov nextest --locked --workspace --ignore-run-fail --profile ci \
     --config-file ci/nextest.toml --cobertura --output-path coverage-gate.xml
 ```
 

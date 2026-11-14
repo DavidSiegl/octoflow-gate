@@ -2,12 +2,12 @@
 # for the command that runs its tests. scripts/gate judges a change by main's copy of this file, so an edit here
 # takes effect once it is on main.
 
-# The workspace's tests, with line coverage; xtask, the workspace's own tasks, is no part of the gate and has no
-# tests. --ignore-run-fail writes the coverage report whatever tests fail and exits 0 for them; ci/nextest.toml's ci
+# The workspace's tests, with line coverage, xtask's among them, which hold the golden reports to the schema.
+# --ignore-run-fail writes the coverage report whatever tests fail and exits 0 for them; ci/nextest.toml's ci
 # profile writes the JUnit report, to target/nextest/ci/junit.xml.
 [[test]]
 name = "cargo-nextest"
-command = ["cargo", "llvm-cov", "nextest", "--locked", "--workspace", "--exclude", "xtask", "--ignore-run-fail",
+command = ["cargo", "llvm-cov", "nextest", "--locked", "--workspace", "--ignore-run-fail",
            "--profile", "ci", "--config-file", "ci/nextest.toml", "--cobertura", "--output-path", "coverage-gate.xml"]
 junit = ["target/nextest/ci/junit.xml"]
 coverage = ["coverage-gate.xml"]

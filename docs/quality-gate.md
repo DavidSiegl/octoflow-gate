@@ -263,16 +263,18 @@ removing one or changing its output is not seen (#73). The findings are Python's
   those names makes the line a `skip`, as does an expression that holds nowhere, as `cgo && !cgo` or `!go1.21`. A
   test file's name constrains it as such a line does, so a `_GOOS`, `_GOARCH` or `_GOOS_GOARCH` suffix the change
   gives it, as `calc_test.go` renamed to `calc_windows_test.go`, is a `platform-only` finding about the whole file;
-- `fewer-assertions`: a kept test with fewer assertions than at the base. An assertion is a call, in the test's own
-  body or a `func` literal in it, of testify's `assert` or `require` packages (`assert.Equal(t, 3, got)`, under the
-  names the file imports them by; `assert.New` is none, and a package imported with `.` is not followed, so its
-  unqualified `Equal(t, ...)` is none), or of `Error`, `Errorf`, `Fatal`, `Fatalf`, `Fail` or `FailNow` on a testing
-  parameter as above. Such a call that is a statement of an `if`'s block makes that `if` one assertion, however many
-  it holds, since the `if` holds the expected value: `if got := Add(1, 2); got != 3 { t.Errorf(...) }` is one. A
-  helper's calls are not followed into the tests that call it: `check(t, Add(1, 2), 3)`, where `check` holds the
-  `t.Errorf`, is no assertion of the test, so a test that asserts only through helpers has none to lose (#72). Each
-  case of a table of cases in the test's body is an assertion too (`expected-value-changed` below), so a case removed
-  is one fewer;
+- `fewer-assertions`: a kept test with fewer assertions than at the base. An assertion is a call, in the test's own body
+  or a `func` literal in it, of testify's `assert` or `require` packages (`assert.Equal(t, 3, got)`, under the names the
+  file imports them by; `assert.New` is none, and a package imported with `.` is not followed, so its unqualified
+  `Equal(t, ...)` is none), or of a method of a name the test's function binds to their `New` by `:=` or `var` (`a :=
+  assert.New(t)`, then `a.Equal(3, got)`), or of `Error`, `Errorf`, `Fatal`, `Fatalf`, `Fail` or `FailNow` on a testing
+  parameter as above. A parser knows no types, so a name such a value is copied to, and a testify suite's methods
+  (`s.Equal(3, got)`), are not followed. Such a call that is a statement of an `if`'s block makes that `if` one
+  assertion, however many it holds, since the `if` holds the expected value: `if got := Add(1, 2); got != 3 {
+  t.Errorf(...) }` is one. A helper's calls are not followed into the tests that call it: `check(t, Add(1, 2), 3)`,
+  where `check` holds the `t.Errorf`, is no assertion of the test, so a test that asserts only through helpers has none
+  to lose (#72). Each case of a table of cases in the test's body is an assertion too (`expected-value-changed` below),
+  so a case removed is one fewer;
 - `swallowed-error`: on an added line anywhere in the file, `_ = err`, or an `if err != nil {}` whose block holds no
   statement, its lines those from the `if` to the block's `{`, `err` being a name Go gives an error by habit: `err`,
   `err` then a capital or a digit, or a name ending in `Err`. A parser knows no types, so an error thrown away under

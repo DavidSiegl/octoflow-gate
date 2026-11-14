@@ -27,7 +27,9 @@ const TESTIFY: &[&str] = &["github.com/stretchr/testify/assert", "github.com/str
 ///   literal written `_`. A `t.Run` named by any other expression, as a table-driven test's, is part of the test
 ///   holding it.
 /// - Its assertions are those in its body but its subtests', in the order written: a call of testify's `assert` or
-///   `require` (`assert.Equal(t, 3, got)`, by the names the file imports them under, `assert.New` not one); and a
+///   `require` (`assert.Equal(t, 3, got)`, by the names the file imports them under, `assert.New` not one), or of a
+///   method of a name that a `:=` or a `var` in the same top-level function binds to such a `New` (`a :=
+///   assert.New(t)`, then `a.Equal(3, got)`), whatever the scope, a name it is copied to not followed; and a
 ///   call of `Error`, `Errorf`, `Fatal`, `Fatalf`, `Fail` or `FailNow` on a variable that a parameter of type
 ///   `*testing.T`, `*testing.B`, `*testing.F` or `testing.TB` names, of a function or a `func` literal. Such a call
 ///   that is a statement of an `if`'s block is that `if`'s assertion, the `if` counting once whatever number of them
@@ -60,6 +62,7 @@ pub fn read(root: Node, text: Text) -> (Vec<Test>, Vec<Weakening>) {
         function: String::new(),
         own: HashSet::new(),
         tables: HashSet::new(),
+        assertors: HashSet::new(),
     };
     let header: Vec<(&str, u32)> = named(root)
         .into_iter()
@@ -148,6 +151,9 @@ struct Walk<'t> {
     own: HashSet<String>,
     /// The tables of cases ([`read`]) of the top-level function the walk is in, by their nodes' ids.
     tables: HashSet<usize>,
+    /// The names the top-level function the walk is in binds to testify's `New`, whose methods are assertions
+    /// ([`read`]).
+    assertors: HashSet<&'t str>,
 }
 
 impl<'t> Walk<'t> {
@@ -156,7 +162,9 @@ impl<'t> Walk<'t> {
         let Some(body) = node.child_by_field_name("body") else { return };
         self.function = function_name(node, self.text);
         self.own = binds::bindings(node, self.text).into_iter().map(|b| b.name).collect();
-        self.tables = ranged_literals(body, self.text);
+        let bound = named_initializers(body, self.text);
+        self.tables = ranged_literals(body, &bound, self.text);
+        self.assertors = bound.iter().filter(|(_, value)| self.testify_new(*value)).map(|(name, _)| *name).collect();
         let params = self.testing_params(node);
         self.owner = None;
         if node.kind() == "function_declaration" && self.is_test(node) {
@@ -262,14 +270,26 @@ impl<'t> Walk<'t> {
     }
 
     /// Whether the call `node` is a testify assertion: a function of a package the file imports testify's `assert`
-    /// or `require` under, but `New`.
+    /// or `require` under, but `New`, or a method of one of [`Walk::assertors`].
     fn testify(&self, node: Node) -> bool {
-        let Some(callee) = node.child_by_field_name("function").filter(|f| f.kind() == "selector_expression") else {
-            return false;
-        };
-        let operand = callee.child_by_field_name("operand").filter(|o| o.kind() == "identifier");
-        let field = callee.child_by_field_name("field").map(|f| self.text.of(f));
-        operand.is_some_and(|o| self.imports.testify.iter().any(|n| n == self.text.of(o))) && field != Some("New")
+        let Some((operand, field)) = self.selector_call(node) else { return false };
+        (self.imports.testify.iter().any(|n| n == operand) && field != "New") || self.assertors.contains(operand)
+    }
+
+    /// Whether `node` is a call of testify's `New`, under a name the file imports `assert` or `require` by.
+    fn testify_new(&self, node: Node) -> bool {
+        let new = |(operand, field): (&str, &str)| field == "New" && self.imports.testify.iter().any(|n| n == operand);
+        self.selector_call(node).is_some_and(new)
+    }
+
+    /// The name and the selected field of a call, `node`, of `name.field`; None for any other node.
+    fn selector_call(&self, node: Node) -> Option<(&'t str, &'t str)> {
+        if node.kind() != "call_expression" {
+            return None;
+        }
+        let callee = node.child_by_field_name("function").filter(|f| f.kind() == "selector_expression")?;
+        let operand = callee.child_by_field_name("operand").filter(|o| o.kind() == "identifier")?;
+        Some((self.text.of(operand), self.text.of(callee.child_by_field_name("field")?)))
     }
 
     /// A subtest, when the call `node` starts one, `t.Run("name", func...)` in a test: records it and walks its
@@ -490,22 +510,34 @@ fn is_case(element: Node) -> bool {
     written.and_then(|w| w.named_child(0)).is_some_and(|v| v.kind() == "literal_value")
 }
 
-/// The composite literals that a `for … range` in `body`, a function's, ranges over, written in the `range` or bound
-/// to the name it ranges over by a `:=` or a `var` anywhere in `body`, whatever the scope: its tables of cases, by
-/// their nodes' ids.
-fn ranged_literals(body: Node, text: Text) -> HashSet<usize> {
-    let mut ranged = vec![];
-    let mut bound: Vec<(&str, Node)> = vec![];
+/// Each name a `:=` or a `var` anywhere in `body`, a function's, binds to an expression, whatever the scope, with
+/// that expression ([`initializers`]); a name declared with no value, or given one by `=`, is not one.
+fn named_initializers<'t>(body: Node<'t>, text: Text<'t>) -> Vec<(&'t str, Node<'t>)> {
+    let mut out = vec![];
     let mut pending = vec![body];
     while let Some(node) = pending.pop() {
         match node.kind() {
-            "range_clause" => ranged.extend(node.child_by_field_name("right")),
             "short_var_declaration" => {
                 let names = node.child_by_field_name("left").map(named).unwrap_or_default();
-                bound.extend(names.into_iter().map(|n| text.of(n)).zip(initializers(node)));
+                out.extend(names.into_iter().map(|n| text.of(n)).zip(initializers(node)));
             }
-            "var_spec" => bound.extend(fields(node, "name").into_iter().map(|n| text.of(n)).zip(initializers(node))),
+            "var_spec" => out.extend(fields(node, "name").into_iter().map(|n| text.of(n)).zip(initializers(node))),
             _ => {}
+        }
+        pending.extend(named(node));
+    }
+    out
+}
+
+/// The composite literals that a `for … range` in `body`, a function's, ranges over, written in the `range` or bound
+/// to the name it ranges over as `bound`, `body`'s [`named_initializers`], says: its tables of cases, by their nodes'
+/// ids.
+fn ranged_literals(body: Node, bound: &[(&str, Node)], text: Text) -> HashSet<usize> {
+    let mut ranged = vec![];
+    let mut pending = vec![body];
+    while let Some(node) = pending.pop() {
+        if node.kind() == "range_clause" {
+            ranged.extend(node.child_by_field_name("right"));
         }
         pending.extend(named(node));
     }

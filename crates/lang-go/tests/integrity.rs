@@ -157,6 +157,35 @@ func TestAdd(t *testing.T) {
 }
 
 #[test]
+fn the_methods_of_a_name_bound_to_testify_s_new_are_assertions() {
+    let source = r#"package calc
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	must "github.com/stretchr/testify/require"
+)
+
+func TestAdd(t *testing.T) {
+	a := assert.New(t)
+	var r = must.New(t)
+	a.Equal(3, Add(1, 2))
+	t.Run("negative", func(t *testing.T) {
+		r.Equal(-2, Add(-1, -1))
+	})
+	b := a
+	b.Equal(4, Add(2, 2))
+}
+"#;
+    let file = lang_go::read(source.as_bytes(), true).unwrap();
+    let texts: Vec<&str> = file.tests.iter().flat_map(|t| &t.assertions).map(|a| a.text.as_str()).collect();
+    assert_eq!(texts, ["a.Equal(3, Add(1, 2))", "r.Equal(-2, Add(-1, -1))"]);
+    let fewer = edit(source, "\ta.Equal(3, Add(1, 2))\n", "");
+    assert_eq!(wheres(&check(&[edited(TEST_PATH, source, &fewer)])), [at(10, "fewer-assertions")]);
+}
+
+#[test]
 fn an_edit_beside_the_tests_has_no_findings() {
     let files = [edited(CALC_PATH, CALC, &edit(CALC, "a + b", "b + a"))];
     assert!(code_changed(&files));

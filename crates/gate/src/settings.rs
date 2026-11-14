@@ -398,16 +398,14 @@ impl<'de, V: Deserialize<'de>> Deserialize<'de> for InOrder<V> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scratch::ScratchDir;
 
     /// The settings of a gate.toml holding `source`, or why the gate refuses it.
     fn read(source: &str) -> Result<Settings, String> {
-        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-        let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let path = std::env::temp_dir().join(format!("gate-settings-{}-{n}.toml", std::process::id()));
+        let dir = ScratchDir::new();
+        let path = dir.join("gate.toml");
         std::fs::write(&path, source).unwrap();
-        let read = Settings::read(&path).map_err(|Unjudged(why)| why.replace(&path.display().to_string(), "<path>"));
-        std::fs::remove_file(&path).unwrap();
-        read
+        Settings::read(&path).map_err(|Unjudged(why)| why.replace(&path.display().to_string(), "<path>"))
     }
 
     #[test]

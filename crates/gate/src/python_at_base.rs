@@ -478,14 +478,8 @@ mod tests {
 
     use super::*;
     use crate::diff::ChangedFile;
+    use crate::scratch::ScratchDir;
     use crate::settings::Settings;
-
-    /// A new empty directory for the test `name`, by its resolved path.
-    fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("gate-python-at-base-{}-{name}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        real_path(&dir)
-    }
 
     /// Writes `contents` to `path`, with the directories above it.
     fn write(path: &Path, contents: &str) {
@@ -529,7 +523,7 @@ mod tests {
 
     #[test]
     fn where_the_run_at_the_base_imported_from_is_read_from_its_reports() {
-        let dir = scratch("imports");
+        let dir = ScratchDir::new();
         let tree = dir.join("copy");
         write(&tree.join("lib/calc.py"), "");
         let change = Change {
@@ -568,12 +562,11 @@ mod tests {
         std::fs::remove_file(&report).unwrap();
         let why = imported_from_working_tree(&base_copy, &report).unwrap_err();
         assert!(why.starts_with(&format!("{}: ", report.display())), "{why}");
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn a_conftest_that_failed_is_read_from_what_pytest_printed() {
-        let top = scratch("conftest");
+        let top = ScratchDir::new();
         write(&top.join("tests/conftest.py"), "");
         let through = |failed: &FailedConftest| -> Vec<String> {
             failed.through.iter().map(|path| path.to_str().unwrap().to_string()).collect()
@@ -595,6 +588,5 @@ mod tests {
         assert_eq!(failed.error, "ImportError while loading conftest 'conftest.py'.");
         assert_eq!(through(&failed), ["conftest.py"]);
         assert!(failing_conftest(&printed("ERROR: usage: no such option\n"), &top).is_none());
-        std::fs::remove_dir_all(top).unwrap();
     }
 }

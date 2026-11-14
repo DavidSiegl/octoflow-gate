@@ -336,13 +336,7 @@ pub fn listed_tests(collected: &Finished, doing: &str, tests: &Tests) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A new empty directory for the test `name`.
-    fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("gate-pytest-{}-{name}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
+    use crate::scratch::ScratchDir;
 
     /// Writes `contents` to `path` under `dir`, with the directories above it.
     fn write(dir: &Path, path: &str, contents: &str) {
@@ -371,7 +365,7 @@ mod tests {
 
     #[test]
     fn the_configuration_is_the_first_file_pytest_would_take() {
-        let dir = scratch("inifile");
+        let dir = ScratchDir::new();
         assert_eq!(inifile(&dir), None);
         write(&dir, "setup.cfg", "[metadata]\nname = x\n");
         write(&dir, "tox.ini", "[tox]\n");
@@ -390,7 +384,6 @@ mod tests {
         assert_eq!(inifile(&dir), Some(dir.join("pyproject.toml")));
         write(&dir, ".pytest.ini", "");
         assert_eq!(inifile(&dir), Some(dir.join(".pytest.ini")));
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -409,13 +402,12 @@ mod tests {
             (&[(".pytest.ini", ""), ("pytest.toml", "")], Some("pytest.toml")),
             (&[("pyproject.toml", "not toml [")], Some("pyproject.toml")),
         ];
-        for (n, (files, expected)) in cases.into_iter().enumerate() {
-            let dir = scratch(&format!("inifile-case-{n}"));
+        for (files, expected) in cases {
+            let dir = ScratchDir::new();
             for (name, contents) in files {
                 write(&dir, name, contents);
             }
             assert_eq!(inifile(&dir), expected.map(|name| dir.join(name)), "{files:?}");
-            std::fs::remove_dir_all(&dir).unwrap();
         }
     }
 
@@ -434,13 +426,14 @@ mod tests {
     #[test]
     fn a_run_that_tells_nothing_is_a_problem_that_says_why() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = scratch("run");
+        let dir = ScratchDir::new();
         // A Python that is a shell script, running `script` whatever it is asked.
         let run_script = |script: &str, timeout: u64| {
             let python = dir.join("python");
             std::fs::write(&python, format!("#!/bin/sh\n{script}\n")).unwrap();
             std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755)).unwrap();
-            let setup = Setup { python, root: dir.clone(), inifile: dir.join("pytest.ini"), top: dir.clone() };
+            let (root, inifile, top) = (dir.to_path_buf(), dir.join("pytest.ini"), dir.to_path_buf());
+            let setup = Setup { python, root, inifile, top };
             run(&setup, "collecting", &[], Duration::from_secs(timeout), &[0, 5], &[])
         };
         assert_eq!(run_script("echo listed; exit 5", 10).unwrap().stdout, b"listed\n");
@@ -451,18 +444,17 @@ mod tests {
         assert_eq!(late.clause, "pytest, collecting, did not finish within 1 seconds");
         assert_eq!(late.stopped.unwrap().stdout, b"started\n");
         let python = dir.join("none");
-        let setup = Setup { python, root: dir.clone(), inifile: dir.join("pytest.ini"), top: dir.clone() };
+        let setup = Setup { python, root: dir.to_path_buf(), inifile: dir.join("pytest.ini"), top: dir.to_path_buf() };
         let missing = run(&setup, "collecting", &[], Duration::from_secs(10), &[0], &[]).unwrap_err();
         let named = format!("could not start pytest with the Python `{}`, collecting: ", dir.join("none").display());
         assert_eq!(missing.clause, format!("{named}No such file or directory (os error 2)"));
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn an_empty_configuration_that_cannot_be_written_is_an_error() {
         // Only the error is held here: the checks make a finding of it, but no run of the gate can be made to fail
         // writing into the directory it has made.
-        let dir = scratch("empty-ini");
+        let dir = ScratchDir::new();
         let (tree, tmp) = (dir.join("tree"), dir.join("tmp"));
         write(&tree, "test_top.py", "");
         let paths: BTreeSet<OsString> = [OsString::from("test_top.py")].into();
@@ -475,12 +467,11 @@ mod tests {
         write(&tree, "pytest.ini", "");
         let found = groups(Path::new("py"), &tree, &tmp, &paths).unwrap();
         assert_eq!(found.iter().map(|g| g.setup.inifile.clone()).collect::<Vec<_>>(), [tree.join("pytest.ini")]);
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn test_files_are_grouped_by_the_nearest_configuration_above_them() {
-        let dir = scratch("groups");
+        let dir = ScratchDir::new();
         let (tree, tmp) = (dir.join("tree"), dir.join("tmp"));
         std::fs::create_dir_all(&tmp).unwrap();
         write(&tree, "a/pytest.ini", "");
@@ -523,12 +514,11 @@ mod tests {
         assert_eq!(found[1].in_tree(finding(None)), finding(None));
         // The empty configuration is written once: a second grouping beside the same copy cannot.
         assert!(groups(Path::new("py"), &tree, &tmp, &paths).is_err());
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn a_directory_takes_the_configuration_found_from_itself_up() {
-        let dir = scratch("groups-dirs");
+        let dir = ScratchDir::new();
         let (tree, tmp) = (dir.join("tree"), dir.join("tmp"));
         std::fs::create_dir_all(&tmp).unwrap();
         write(&tree, "tox.ini", "[pytest]\n");
@@ -542,7 +532,6 @@ mod tests {
         assert_eq!(inifiles(&["tests/unit", "tests/unit/test_u.py"]), [tree.join("tests/pytest.ini")]);
         assert_eq!(inifiles(&[""]), [tree.join("tox.ini")]);
         assert_eq!(inifiles(&["", "tests"]), [tree.join("tox.ini"), tree.join("tests/pytest.ini")]);
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

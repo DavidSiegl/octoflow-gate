@@ -268,6 +268,7 @@ fn unlinked_path(dest: &Path, path: &OsStr) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scratch::ScratchDir;
 
     #[test]
     fn a_share_of_a_budget_names_its_own_seconds() {
@@ -297,27 +298,21 @@ mod tests {
     #[test]
     fn a_scratch_directory_passes_over_those_an_earlier_gate_of_the_process_id_left() {
         // nextest runs each test in a process of its own, so this one's scratch directories are numbered from 0.
-        let parent = std::env::temp_dir().join(format!("gate-left-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&parent);
+        let parent = ScratchDir::new();
         let left: Vec<PathBuf> = (0..8).map(|n| parent.join(format!("gate-{}-{n}", std::process::id()))).collect();
         for dir in &left {
             std::fs::create_dir_all(dir).unwrap();
         }
-        let made = scratch_directory(&parent);
-        std::fs::remove_dir_all(&parent).unwrap();
-        let made = made.unwrap();
+        let made = scratch_directory(&parent).unwrap();
         assert!(made.starts_with(&parent) && !left.contains(&made), "{}", made.display());
     }
 
     #[test]
     fn a_named_pipe_is_not_copied_but_refused() {
-        let dir = std::env::temp_dir().join(format!("gate-copy-pipe-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = ScratchDir::new();
         let made = std::process::Command::new("mkfifo").arg(dir.join("pipe")).status().unwrap();
         assert!(made.success());
         let copied = copy(&dir.join("pipe"), &dir.join("copy"));
-        std::fs::remove_dir_all(&dir).unwrap();
         let expected = format!("cannot copy {}: it is no regular file, link or directory", text::path(
             dir.join("pipe").as_os_str()
         ));
@@ -326,12 +321,10 @@ mod tests {
 
     #[test]
     fn a_copy_that_cannot_make_its_directory_says_which_and_why() {
-        let dir = std::env::temp_dir().join(format!("gate-copy-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = ScratchDir::new();
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::create_dir_all(dir.join("dst")).unwrap();
         let copied = copy(&dir.join("src"), &dir.join("dst"));
-        std::fs::remove_dir_all(&dir).unwrap();
         let why = copied.unwrap_err();
         let expected = format!("cannot make {}: ", text::path(dir.join("dst").as_os_str()));
         assert!(why.starts_with(&expected) && why.contains("exists"), "{why}");
@@ -339,8 +332,7 @@ mod tests {
 
     #[test]
     fn an_unlinked_path_replaces_links_above_it_with_directories() {
-        let dir = std::env::temp_dir().join(format!("gate-unlinked-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = ScratchDir::new();
         std::fs::create_dir_all(dir.join("outside")).unwrap();
         std::fs::create_dir_all(dir.join("dest")).unwrap();
         std::os::unix::fs::symlink(dir.join("outside"), dir.join("dest/a")).unwrap();
@@ -348,6 +340,5 @@ mod tests {
         assert_eq!(at, dir.join("dest/a/b/c.rs"));
         assert!(!dir.join("dest/a").symlink_metadata().unwrap().file_type().is_symlink());
         assert!(dir.join("dest/a/b").is_dir());
-        std::fs::remove_dir_all(dir).unwrap();
     }
 }

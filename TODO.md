@@ -8,6 +8,12 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
 
 ## Open issues
 
+- **passes-at-base reads every Rust file of the base's copy before it looks at the deadline.** As cross-review 34 put
+  it (F9, 2026-11-14): "`CrateLayout::of` (:366-372) reads and parses every `.rs` of the copy before any deadline
+  check." In a large tree that spends `--base-run-budget` with no `budget-reached` to show for it, and the work is
+  done even when every changed test's target could be told from its package alone. `CrateLayout::of` is in
+  `crates/gate/src/passes_at_base.rs`. Closes by checking the deadline while the files are read, or by parsing only
+  the packages that hold a changed test.
 - **surviving-mutants takes an option's value given apart from it for a path of the test selection.** As
   cross-review 33 put it (F3, 2026-11-13): "an option's value counts as a path:
   `pytest_add_cli_args_test_selection = ["tests/", "--ignore", "tests/legacy"]` with `tests/legacy/pytest.ini` gives

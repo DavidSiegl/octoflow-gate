@@ -192,12 +192,11 @@ fn files_with_added_lines<'a>(
 mod tests {
     use super::*;
     use crate::linters::LINTERS;
+    use crate::scratch::ScratchDir;
 
-    fn tree(files: &[(&str, &[u8])]) -> std::path::PathBuf {
-        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-        let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let root = std::env::temp_dir().join(format!("gate-suppressions-{}-{n}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+    /// A new directory holding `files`, each a path under it and its content.
+    fn tree(files: &[(&str, &[u8])]) -> ScratchDir {
+        let root = ScratchDir::new();
         for (path, content) in files {
             std::fs::create_dir_all(root.join(path).parent().unwrap()).unwrap();
             std::fs::write(root.join(path), content).unwrap();
@@ -224,7 +223,6 @@ mod tests {
                 ("b.md".into(), 1, "<!-- pyml disable-next-line md013-->".into())
             ]
         );
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -246,7 +244,6 @@ mod tests {
                 ("run.sh".into(), 3, "x = 1  # type: ignore".into()),
             ]
         );
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -259,7 +256,6 @@ mod tests {
                 ("f.py".into(), 2, "s = \"\"\"unterminated # noqa".into())
             ]
         );
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -322,6 +318,5 @@ mod tests {
         assert_eq!(found, [(".github/workflows/w.yml".into(), 2, '\u{2028}')]);
         assert!(stray_line_end_condition(OsStr::new("w"), 2, '\u{2028}').starts_with("`w:2` holds `\\u2028`, "));
         assert!(stray_line_end_condition(OsStr::new("w"), 2, '\r').starts_with("`w:2` holds `\\r`, "));
-        std::fs::remove_dir_all(root).unwrap();
     }
 }

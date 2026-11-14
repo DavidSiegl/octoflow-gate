@@ -1,20 +1,23 @@
 //! The surviving-mutants check: a function the change touches whose mutants its tests do not notice is a finding.
-//! Here is the check and its Rust half, in which cargo-mutants mutates what the change adds to Rust code under test;
-//! the Python half, which runs mutmut, is python_mutants.rs, and the Go half, which runs gremlins, go_mutants.rs.
+//! Here is the check and its Rust half, in which cargo-mutants mutates the functions the change edits in Rust code
+//! under test; the Python half, which runs mutmut, is python_mutants.rs, and the Go half, which runs gremlins,
+//! go_mutants.rs.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use checks::Finding;
+use model::Function;
 use serde_json::Value;
 
 use crate::clippy::workspaces;
 use crate::copies::{copy_tracked, finding, in_scratch_directory, sort_by_place, Budget};
+use crate::diff::removal_points;
 use crate::go_mutants::{edited_functions, go_mutants};
-use crate::parser_checks::{RustChange, Sources};
+use crate::parser_checks::{project_dir, RustChange, Sources};
 use crate::process::{run_with, Extras, Finished};
 use crate::python_mutants::{python_mutants, Mutmut};
 use crate::text;
@@ -43,15 +46,16 @@ pub(crate) const SURVIVOR_EXAMPLES: usize = 3;
 /// rule is the check's own, without its name, and each severity "warning".
 ///
 /// Mutation-tests the Python functions the change touches with mutmut, set up as `mutmut` says
-/// (python_mutants::python_mutants), then the Rust the change adds lines to with cargo-mutants ([`rust_mutants`]),
+/// (python_mutants::python_mutants), then the Rust functions it edits with cargo-mutants ([`rust_mutants`]),
 /// then the Go functions it edits with gremlins (go_mutants::go_mutants), all within `budget` seconds. Each language
 /// in turn has an equal share of what the ones before it left, among itself and the languages after it that have
 /// something to mutate: with all three, mutmut has a third of the budget, cargo-mutants half of what is left, and
 /// gremlins the rest. Each one's findings name its share as the seconds it was stopped at.
 pub fn surviving_mutants(sources: &Sources, mutmut: &Mutmut, budget: u64) -> Vec<Finding> {
     let budget = Budget::starting_now(budget);
-    let rust = changed_code(&sources.rust);
-    let (go, mut out) = edited_functions(&sources.go);
+    let (rust, mut out) = edited_rust(&sources.rust);
+    let (go, unread) = edited_functions(&sources.go);
+    out.extend(unread);
     let share = |later: &[bool]| budget.share(1 + later.iter().map(|&has| u32::from(has)).sum::<u32>());
     let python = share(&[!rust.is_empty(), !go.is_empty()]);
     out.extend(python_mutants(&sources.python, mutmut, python.seconds as f64));
@@ -61,60 +65,117 @@ pub fn surviving_mutants(sources: &Sources, mutmut: &Mutmut, budget: u64) -> Vec
     out
 }
 
-/// Rust's findings of the surviving-mutants check on `paths`, [`changed_code`]'s of `rust`, in no order.
+/// A function the change edits, which the mutation tool of its language mutates.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Edited {
+    /// Its file, from the tree's top.
+    pub(crate) path: OsString,
+    /// Its name, as model::Function's, a Go method's as `Stack.Push`.
+    pub(crate) name: String,
+    /// The lines from its `fn` or `func` to its closing brace, its doc comment and attributes left out.
+    pub(crate) line: u32,
+    pub(crate) last: u32,
+}
+
+impl Edited {
+    /// `f`, of the file at `path`, from the tree's top, as an edited function.
+    pub(crate) fn of(path: &OsStr, f: &Function) -> Edited {
+        Edited { path: path.to_os_string(), name: f.name.clone(), line: f.line, last: f.lines.last }
+    }
+}
+
+/// Whether a change edits the function `f`: it adds one of `added`, the lines it adds to `f`'s file, from `f`'s `fn` or
+/// `func` line to its closing brace, or removes lines from between two of those, at one of `removed`, as
+/// diff::removal_points gives them. A deleted guard clause needs a test as much as an added one.
+pub(crate) fn edits(f: &Function, added: &BTreeSet<u32>, removed: &BTreeSet<u32>) -> bool {
+    added.range(f.line..=f.lines.last).next().is_some() || removed.iter().any(|&n| f.line <= n && n < f.lines.last)
+}
+
+/// The Rust functions the change that `rust` reads edits, as [`edits`] says, in the change's order of their files and
+/// then by line, and a `not-run` finding for each file whose functions cannot be told, as one that does not parse.
 ///
-/// Runs cargo-mutants, until `budget` runs out, on each Cargo workspace that holds one of `paths`, in a copy of the
-/// files git tracks, as [`on_copy`] says. Each function with mutants that survived is a `survived` finding at the
+/// A function counts when it is a `fn` with a body, outside test code (model::Function's `exempt`), of a `.rs` file
+/// that is Rust code under test ([`RustChange::is_code`]) and a regular file of the working tree: not a symlink, a
+/// submodule or a special file, whose reading could block or never end.
+fn edited_rust(rust: &RustChange) -> (Vec<Edited>, Vec<Finding>) {
+    let removals = removal_points(&rust.change.diff);
+    let none = BTreeSet::new();
+    let regular =
+        |p: &OsStr| std::fs::symlink_metadata(rust.change.root.join(p)).is_ok_and(|m| m.file_type().is_file());
+    let (mut edited, mut unread) = (vec![], vec![]);
+    for file in &rust.files {
+        let Some(after) = &file.after else { continue };
+        let path = after.path.as_os_str();
+        let removed = removals.get(path).unwrap_or(&none);
+        let rs = path.as_bytes().ends_with(b".rs");
+        if (file.added.is_empty() && removed.is_empty()) || !rs || !rust.is_code(path) || !regular(path) {
+            continue;
+        }
+        match &after.source {
+            Ok(source) => edited.extend(
+                (source.functions.iter())
+                    .filter(|f| !f.exempt && edits(f, &file.added, removed))
+                    .map(|f| Edited::of(path, f)),
+            ),
+            Err(unreadable) => {
+                let message = format!("{}, so its functions were not mutation-tested.", unreadable.why);
+                unread.push(finding(Some(path), unreadable.line, "not-run", message));
+            }
+        }
+    }
+    (edited, unread)
+}
+
+/// Rust's findings of the surviving-mutants check on `functions`, [`edited_rust`]'s of `rust`, in no order.
+///
+/// Runs cargo-mutants, until `budget` runs out, on each Cargo workspace that holds one of `functions`, in a copy of
+/// the files git tracks, as [`on_copy`] says. Each function with mutants that survived is a `survived` finding at the
 /// line its fn starts, with how many of the mutants tried of it they were and the first [`SURVIVOR_EXAMPLES`] of
-/// them. A change whose added lines hold nothing to mutate, such as a use or a const, gives nothing. The budget
-/// running out is a `budget-reached` finding; a file in no workspace cargo can tell is a `not-mutated` one on it; a
-/// run that cannot be made or read is a `not-run` finding saying why, and a copy that cannot be removed afterwards a
+/// them. A function with nothing to mutate gives nothing. The budget running out is a `budget-reached` finding; a
+/// file in no workspace cargo can tell, or whose workspace's directory is not above it, is a `not-mutated` one on it;
+/// a run that cannot be made or read is a `not-run` finding saying why, and a copy that cannot be removed afterwards a
 /// `not-removed` one.
-fn rust_mutants(rust: &RustChange, paths: &[OsString], budget: &Budget) -> Vec<Finding> {
-    if paths.is_empty() {
+fn rust_mutants(rust: &RustChange, functions: &[Edited], budget: &Budget) -> Vec<Finding> {
+    if functions.is_empty() {
         return vec![];
     }
     in_scratch_directory("not-run", "to run cargo-mutants on a copy of the tree in", |dir| {
-        on_copy(rust, dir, paths, budget)
+        on_copy(rust, dir, functions, budget)
     })
 }
 
-/// The Rust files, in path order, that the change adds lines to and that are Rust code under test
-/// ([`RustChange::is_code`]): regular files of the working tree named *.rs; not a symlink, a submodule or a special
-/// file, whose reading could block or never end.
-fn changed_code(rust: &RustChange) -> Vec<OsString> {
-    let link_or_special = |p: &OsStr| {
-        std::fs::symlink_metadata(rust.change.root.join(p)).is_ok_and(|m| !m.file_type().is_file())
-    };
-    let changed = rust.change.changed.iter().filter(|(_, added)| !added.is_empty());
-    let rs = changed.map(|(p, _)| p).filter(|p| p.as_bytes().ends_with(b".rs"));
-    rs.filter(|p| !link_or_special(p) && rust.is_code(p)).cloned().collect()
-}
-
-/// The findings on `paths`, [`changed_code`]'s, of cargo-mutants run on each Cargo workspace that holds one of them
-/// ([`cargo_root`]), in path order of the workspaces, in a copy of the files git tracks made in `dir`, an empty
-/// directory, beside each run's diff and output. cargo-mutants picks what to mutate itself: `--in-diff` with the
-/// change's diff of the workspace's files ([`diff_under`]) mutates only what the added lines hold, and its tests run
+/// The findings on `functions`, [`edited_rust`]'s, of cargo-mutants run on each Cargo workspace that holds one of
+/// them ([`cargo_root`]), in path order of the workspaces, in a copy of the files git tracks made in `dir`, an empty
+/// directory, beside each run's output. cargo-mutants mutates only `functions` ([`run_workspace`]), and its tests run
 /// with `--test-tool nextest`, each mutant's within [`TEST_TIMEOUT`].
 ///
 /// A run the deadline stops is a `budget-reached` finding beside what the mutants it had tried showed, and each
 /// workspace after it a `not-run` one; a copy that cannot be made is the one `not-run` finding.
-fn on_copy(rust: &RustChange, dir: &Path, paths: &[OsString], budget: &Budget) -> Vec<Finding> {
+fn on_copy(rust: &RustChange, dir: &Path, functions: &[Edited], budget: &Budget) -> Vec<Finding> {
     let tree = dir.join("tree");
     if let Err(e) = copy_tracked(&rust.change.root, &tree) {
         return vec![not_run(&format!("could not copy the tree for cargo-mutants: {e}"))];
     }
     let mut out = vec![];
-    let mut roots: BTreeMap<OsString, Vec<OsString>> = BTreeMap::new();
-    for path in paths {
-        match cargo_root(&tree, path) {
-            Ok(root) => roots.entry(root).or_default().push(path.clone()),
-            Err(why) => out.push(finding(Some(path), None, "not-mutated", format!("was not mutation-tested: {why}."))),
-        }
+    let mut by_path: BTreeMap<&OsStr, Vec<&Edited>> = BTreeMap::new();
+    for f in functions {
+        by_path.entry(&f.path).or_default().push(f);
+    }
+    let mut roots: BTreeMap<OsString, Vec<&Edited>> = BTreeMap::new();
+    for (path, mine) in by_path {
+        let why = match cargo_root(&tree, path) {
+            Ok(root) if Path::new(path).starts_with(&root) => {
+                roots.entry(root).or_default().extend(mine);
+                continue;
+            }
+            Ok(root) => format!("its workspace at `{}` is not above it", dir_name(&root)),
+            Err(why) => why,
+        };
+        out.push(finding(Some(path), None, "not-mutated", format!("was not mutation-tested: {why}.")));
     }
     let roots: Vec<_> = roots.into_iter().collect();
     for (n, (root, mine)) in roots.iter().enumerate() {
-        let run = Run { diff: &rust.change.diff, tree: &tree, scratch: &dir.join(format!("run-{n}")) };
+        let run = Run { tree: &tree, scratch: &dir.join(format!("run-{n}")) };
         let (found, stopped) = run_workspace(&run, root, mine, budget);
         out.extend(found);
         if stopped {
@@ -135,12 +196,8 @@ fn on_copy(rust: &RustChange, dir: &Path, paths: &[OsString], budget: &Budget) -
 /// the package whose Cargo.toml is nearest above it. Errs with why, a clause, when no Cargo.toml lies above it, or
 /// cargo cannot tell its workspace.
 fn cargo_root(tree: &Path, path: &OsStr) -> Result<OsString, String> {
-    let dirs: Vec<&[u8]> = path.as_bytes().split(|&b| b == b'/').collect();
-    let dirs = &dirs[..dirs.len() - 1];
-    let nearest = (0..=dirs.len())
-        .rev()
-        .map(|k| dirs[..k].iter().map(|d| OsStr::from_bytes(d)).collect::<PathBuf>().join("Cargo.toml"))
-        .find(|manifest| tree.join(manifest).is_file())
+    let nearest = project_dir(path, "Cargo.toml", |manifest| tree.join(manifest).is_file())
+        .map(|dir| dir.join("Cargo.toml"))
         .ok_or_else(|| "no Cargo.toml lies above it".to_string())?;
     let (manifests, problems) = workspaces("cargo-mutants", tree, &[nearest.clone().into_os_string()]);
     match (manifests.first(), problems.first()) {
@@ -160,65 +217,29 @@ pub(crate) fn dir_name(dir: &OsStr) -> String {
     }
 }
 
-/// The sections of `diff`, the change's `git diff`, of the files at `paths`, each under `root`, a directory from the
-/// repository's top, empty for the top, with their paths made relative to `root`, as cargo-mutants' `--in-diff` reads
-/// them from the directory it runs in.
-fn diff_under(diff: &[u8], root: &OsStr, paths: &[OsString]) -> Vec<u8> {
-    let prefix = if root.is_empty() { vec![] } else { [root.as_bytes(), b"/"].concat() };
-    let wanted: Vec<Vec<u8>> = paths.iter().map(|p| [b" b/", p.as_bytes()].concat()).collect();
-    let starts = (0..diff.len()).filter(|&k| (k == 0 || diff[k - 1] == b'\n') && diff[k..].starts_with(b"diff --git "));
-    let starts: Vec<usize> = starts.chain([diff.len()]).collect();
-    let mut out = vec![];
-    for pair in starts.windows(2) {
-        let section = &diff[pair[0]..pair[1]];
-        let first = section.split(|&b| b == b'\n').next().unwrap_or_default();
-        if !wanted.iter().any(|w| first.ends_with(w)) {
-            continue;
-        }
-        // Only the header, before the first hunk, names the paths; a hunk's lines are the file's, kept as they are.
-        let body = (0..section.len())
-            .find(|&k| (k == 0 || section[k - 1] == b'\n') && section[k..].starts_with(b"@@"))
-            .unwrap_or(section.len());
-        let head = replace(&section[..body], &[b"a/", &prefix[..]].concat(), b"a/");
-        out.extend(replace(&head, &[b"b/", &prefix[..]].concat(), b"b/"));
-        out.extend(&section[body..]);
-    }
-    out
+/// cargo-mutants' `--re` for the mutants of `f`, a function in the workspace at `root`, a directory from the tree's
+/// top, empty for the top, that `f`'s path lies under: each mutant's name, as `--list` shows it, opens with its file's
+/// path from the workspace's directory, its line and its column, as `src/lib.rs:2:5: replace add -> u32 with 0`, and
+/// the lines of `f` hold every mutant of it.
+fn mutants_of(root: &OsStr, f: &Edited) -> String {
+    let path = f.path.as_bytes();
+    let path = if root.is_empty() { path } else { &path[root.len() + 1..] };
+    let lines: Vec<String> = (f.line..=f.last).map(|n| n.to_string()).collect();
+    format!("^{}:(?:{}):", regex::escape(&String::from_utf8_lossy(path)), lines.join("|"))
 }
 
-/// `bytes` with each occurrence of `from`, left to right and not overlapping, replaced with `to`.
-fn replace(bytes: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
-    let mut out = vec![];
-    let mut k = 0;
-    while k < bytes.len() {
-        if bytes[k..].starts_with(from) {
-            out.extend(to);
-            k += from.len();
-        } else {
-            out.push(bytes[k]);
-            k += 1;
-        }
-    }
-    out
-}
-
-/// What a run of cargo-mutants on one workspace reads and where it writes.
+/// Where a run of cargo-mutants on one workspace mutates and writes.
 struct Run<'a> {
-    /// The change's diff, of which the run's [`diff_under`] takes the workspace's part.
-    diff: &'a [u8],
     /// The copy of the tracked files, which `--in-place` mutates.
     tree: &'a Path,
-    /// A directory the run makes for the diff it reads and its mutants.out, outside the copy.
+    /// A directory the run makes for its mutants.out, outside the copy.
     scratch: &'a Path,
 }
 
-/// The findings of one run of cargo-mutants in the workspace at `root` on what the change adds to `paths`, as `run`
-/// says, within `budget`; and whether the deadline stopped it, or was too near to start it.
-fn run_workspace(run: &Run, root: &OsStr, paths: &[OsString], budget: &Budget) -> (Vec<Finding>, bool) {
-    let diff = diff_under(run.diff, root, paths);
-    if diff.is_empty() {
-        return (vec![], false);
-    }
+/// The findings of one run of cargo-mutants in the workspace at `root`, a directory from the tree's top, on the
+/// mutants of `functions` alone ([`mutants_of`]), as `run` says, within `budget`; and whether the deadline stopped it,
+/// or was too near to start it.
+fn run_workspace(run: &Run, root: &OsStr, functions: &[&Edited], budget: &Budget) -> (Vec<Finding>, bool) {
     let left = budget.deadline.checked_duration_since(Instant::now() + STOP_GRACE + KILL_WAIT);
     let Some(left) = left.filter(|left| !left.is_zero()) else {
         let message = format!(
@@ -229,16 +250,17 @@ fn run_workspace(run: &Run, root: &OsStr, paths: &[OsString], budget: &Budget) -
         );
         return (vec![finding(None, None, "budget-reached", message)], true);
     };
-    let diff_file = run.scratch.join("change.diff");
-    if let Err(e) = std::fs::create_dir_all(run.scratch).and_then(|()| std::fs::write(&diff_file, &diff)) {
-        return (vec![not_run(&format!("could not write the change's diff for cargo-mutants: {e}"))], false);
+    if let Err(e) = std::fs::create_dir_all(run.scratch) {
+        return (vec![not_run(&format!("could not make the directory for cargo-mutants' output: {e}"))], false);
     }
     // --in-place mutates the copy itself, which cargo-mutants would otherwise copy once more; mutants.out goes to
     // scratch, outside it.
     let dir = run.tree.join(root);
     let timeout = TEST_TIMEOUT.to_string();
     let mut argv: Vec<&OsStr> = ["cargo", "mutants", "--in-place", "--no-shuffle", "--dir"].map(OsStr::new).to_vec();
-    argv.extend([dir.as_os_str(), OsStr::new("--in-diff"), diff_file.as_os_str()]);
+    argv.push(dir.as_os_str());
+    let wanted: Vec<OsString> = functions.iter().map(|f| mutants_of(root, f).into()).collect();
+    argv.extend(wanted.iter().flat_map(|re| [OsStr::new("--re"), re.as_os_str()]));
     argv.extend(["--test-tool", "nextest", "--timeout", &timeout, "--output"].map(OsStr::new));
     argv.extend([run.scratch.as_os_str(), OsStr::new("--colors"), OsStr::new("never")]);
     let extras = Extras { env: &[("CARGO_TERM_COLOR", OsStr::new("never"))], soft_stop: Some(STOP_GRACE) };
@@ -254,7 +276,7 @@ fn run_workspace(run: &Run, root: &OsStr, paths: &[OsString], budget: &Budget) -
 /// to mutate. A `not-run` finding alone when its outcomes cannot be read, as they may not be when it was stopped, or
 /// its unmutated baseline failed.
 fn run_findings(done: &Finished, output: &Path, root: &OsStr, budget: u64) -> Vec<Finding> {
-    // cargo-mutants writes no outcomes when it finds nothing to mutate in the diff, and exits 0.
+    // cargo-mutants writes no outcomes when no mutant matches the `--re` filters, and exits 0.
     if done.status == 0 && !done.stopped && output.join("outcomes.json").symlink_metadata().is_err() {
         return vec![];
     }
@@ -426,18 +448,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-
-    /// A directory under the system's temporary one, empty, named for `name` and the process.
-    fn empty_dir(name: &str) -> PathBuf {
-        // cargo test runs a binary's tests on threads of one process, so the process id alone would not tell apart
-        // two tests' directories.
-        static MADE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-        let n = MADE.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("gate-mutants-{name}-{}-{n}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
+    use crate::scratch::ScratchDir;
 
     /// One outcome as cargo-mutants 27 writes it to outcomes.json, of a mutant at `line` of src/lib.rs of `function`,
     /// whose fn starts at `fn_line`, named `name` after its place.
@@ -464,11 +475,9 @@ mod tests {
 
     /// `values` as [`outcomes`] reads them.
     fn read(values: &[Value]) -> Vec<Outcome> {
-        let dir = empty_dir("read");
+        let dir = ScratchDir::new();
         write_outcomes(&dir, values);
-        let read = outcomes(&dir).unwrap();
-        std::fs::remove_dir_all(dir).unwrap();
-        read
+        outcomes(&dir).unwrap()
     }
 
     fn write_outcomes(dir: &Path, values: &[Value]) {
@@ -526,7 +535,7 @@ mod tests {
 
     #[test]
     fn unreadable_outcomes_are_a_problem() {
-        let dir = empty_dir("unreadable");
+        let dir = ScratchDir::new();
         assert!(outcomes(&dir).unwrap_err().contains("outcomes.json: No such file"));
         write_outcomes(&dir, &[json!({"scenario": "Baseline"})]);
         let problem = outcomes(&dir).unwrap_err();
@@ -535,43 +544,35 @@ mod tests {
         assert!(outcomes(&dir).unwrap_err().ends_with("outcomes.json holds no list of outcomes"));
         write_outcomes(&dir, &[baseline("Success")]);
         assert_eq!(outcomes(&dir), Ok(vec![Outcome { scenario: json!("Baseline"), summary: json!("Success") }]));
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
-    const DIFF: &str = "diff --git a/engine/src/a.rs b/engine/src/a.rs\n--- a/engine/src/a.rs\n\
-                        +++ b/engine/src/a.rs\n@@ -1 +1 @@\n-x\n+y\n";
-
-    fn diff_under_str(diff: &str, root: &str, paths: &[&str]) -> String {
-        let paths: Vec<OsString> = paths.iter().map(OsString::from).collect();
-        String::from_utf8(diff_under(diff.as_bytes(), OsStr::new(root), &paths)).unwrap()
+    /// A function of `path` from the line of its `fn` to `last`.
+    fn edited(path: &str, line: u32, last: u32) -> Edited {
+        Edited { path: path.into(), name: "f".into(), line, last }
     }
 
     #[test]
-    fn the_diff_cargo_mutants_reads_is_the_workspace_s_files_from_its_directory() {
-        let diff = "diff --git a/ui/src/a.rs b/ui/src/a.rs\n--- a/ui/src/a.rs\n+++ b/ui/src/a.rs\n@@ -1 +1 @@\n-x\n+y\n\
-                    diff --git a/gate.py b/gate.py\n--- a/gate.py\n+++ b/gate.py\n@@ -1 +1 @@\n-x\n+y\n";
-        assert_eq!(diff_under_str(diff, "ui", &["ui/src/a.rs"]),
-                   "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1 +1 @@\n-x\n+y\n");
-        let py = diff.find("diff --git a/gate.py").unwrap();
-        assert_eq!(diff_under_str(diff, "", &["gate.py"]), &diff[py..]);
-        // A line of the file that reads like a path under the workspace is the file's, and stays.
-        let code = diff.replacen("+y\n", "+let p = \"a/ui/b/ui/\";\n", 1);
-        assert!(diff_under_str(&code, "ui", &["ui/src/a.rs"]).contains("+let p = \"a/ui/b/ui/\";\n"));
-        // So does a line before the first section, which no file's.
-        assert_eq!(diff_under_str(&format!("noise\n{DIFF}"), "engine", &["engine/src/a.rs"]),
-                   DIFF.replace("/engine/", "/"));
-    }
-
-    #[test]
-    fn the_diff_of_several_files_keeps_each_section() {
-        let diff = format!("{DIFF}{}", DIFF.replace("a.rs", "b.rs"));
-        assert_eq!(diff_under_str(&diff, "engine", &["engine/src/a.rs", "engine/src/b.rs"]),
-                   diff.replace("/engine/", "/"));
+    fn cargo_mutants_selects_a_function_s_mutants_by_its_file_from_the_workspace_and_its_lines() {
+        let re = mutants_of(OsStr::new("engine"), &edited("engine/src/a+b.rs", 9, 11));
+        assert_eq!(re, r"^src/a\+b\.rs:(?:9|10|11):");
+        let re = regex::Regex::new(&re).unwrap();
+        for (name, selected) in [
+            ("src/a+b.rs:10:5: replace f -> u32 with 0", true),
+            ("src/a+b.rs:1:5: replace g -> u32 with 0", false),
+            ("src/a+b.rs:110:5: replace h -> u32 with 0", false),
+            ("src/x/a+b.rs:10:5: replace f -> u32 with 0", false),
+        ] {
+            assert_eq!(re.is_match(name), selected, "{name}");
+        }
+        assert_eq!(mutants_of(OsStr::new(""), &edited("src/lib.rs", 2, 2)), r"^src/lib\.rs:(?:2):");
+        // Only the path's start is the workspace's directory, which may recur below it.
+        let nested = edited("core/lib/core/src/x.rs", 4, 4);
+        assert_eq!(mutants_of(OsStr::new("core"), &nested), r"^lib/core/src/x\.rs:(?:4):");
     }
 
     #[test]
     fn the_workspace_is_the_one_cargo_tells() {
-        let dir = empty_dir("workspaces");
+        let dir = ScratchDir::new();
         let package = "\nversion = '0.1.0'\nedition = '2021'\n";
         for (path, text) in [
             ("Cargo.toml", "[workspace]\nmembers = ['engine']\nexclude = ['tools/x']\n".to_string()),
@@ -589,7 +590,6 @@ mod tests {
         assert_eq!(root("engine/src/lib.rs"), Ok("engine".into()));
         assert_eq!(root("tools/x/src/main.rs"), Ok("tools/x".into()));
         assert_eq!(root("src/lib.rs"), Err("no Cargo.toml lies above it".into()));
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// A run that exited with `exit_code`, stopped by the deadline or not, having said "it said so".
@@ -600,12 +600,11 @@ mod tests {
     /// [`run_findings`] of `done` in the workspace at engine, under a budget of 30 seconds, having written
     /// `outcomes`, when given, to its mutants.out.
     fn engine_findings(done: &Finished, outcomes: Option<&[Value]>) -> Vec<Finding> {
-        let dir = empty_dir("run");
+        let dir = ScratchDir::new();
         if let Some(outcomes) = outcomes {
             write_outcomes(&dir, outcomes);
         }
         let found = run_findings(done, &dir, OsStr::new("engine"), 30);
-        std::fs::remove_dir_all(dir).unwrap();
         found
     }
 
@@ -672,22 +671,20 @@ mod tests {
         )]);
     }
 
-    /// [`run_workspace`] in the copy `tree`, writing under `scratch`, on `paths` of the workspace at `root` of
-    /// [`DIFF`], or of its version at the top when `root` is empty, with `seconds` left of a budget of 30.
-    fn workspace_run(tree: &Path, scratch: &Path, root: &str, paths: &[&str], seconds: u64) -> (Vec<Finding>, bool) {
-        let diff = if root.is_empty() { DIFF.replace("engine/", "") } else { DIFF.to_string() };
-        let run = Run { diff: diff.as_bytes(), tree, scratch };
-        let paths: Vec<OsString> = paths.iter().map(OsString::from).collect();
+    /// [`run_workspace`] in the copy `tree`, writing under `scratch`, on a function of `path` in the workspace at
+    /// `root`, with `seconds` left of a budget of 30.
+    fn workspace_run(tree: &Path, scratch: &Path, root: &str, path: &str, seconds: u64) -> (Vec<Finding>, bool) {
+        let run = Run { tree, scratch };
+        let f = edited(path, 1, 3);
         let budget = Budget { seconds: 30, deadline: Instant::now() + Duration::from_secs(seconds) };
-        run_workspace(&run, OsStr::new(root), &paths, &budget)
+        run_workspace(&run, OsStr::new(root), &[&f], &budget)
     }
 
     #[test]
-    fn a_run_past_its_deadline_or_with_no_diff_starts_nothing() {
+    fn a_run_past_its_deadline_starts_nothing() {
         // The tree is missing, so a cargo-mutants started there would be a could-not-start finding.
-        let dir = empty_dir("unstarted");
+        let dir = ScratchDir::new();
         let (tree, scratch) = (dir.join("missing"), dir.join("run"));
-        assert_eq!(workspace_run(&tree, &scratch, "engine", &["engine/src/b.rs"], 600), (vec![], false));
         let reached = |at: &str| {
             let message = format!("budget reached before cargo-mutants started on the workspace at `{at}`: the 30 \
                                    seconds of `--mutation-budget` left too little to run and stop it, so its mutants \
@@ -695,25 +692,23 @@ mod tests {
             (vec![finding(None, None, "budget-reached", message)], true)
         };
         // 15 seconds are the stop's grace and the wait for what a killed run printed.
-        assert_eq!(workspace_run(&tree, &scratch, "engine", &["engine/src/a.rs"], 15), reached("engine"));
-        assert_eq!(workspace_run(&tree, &scratch, "", &["src/a.rs"], 0), reached("."));
+        assert_eq!(workspace_run(&tree, &scratch, "engine", "engine/src/a.rs", 15), reached("engine"));
+        assert_eq!(workspace_run(&tree, &scratch, "", "src/a.rs", 0), reached("."));
         assert!(!scratch.exists());
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
-    fn a_diff_that_cannot_be_written_or_a_cargo_mutants_that_cannot_start_is_not_run() {
-        let dir = empty_dir("unwritten");
+    fn an_output_directory_that_cannot_be_made_or_a_cargo_mutants_that_cannot_start_is_not_run() {
+        let dir = ScratchDir::new();
         std::fs::write(dir.join("a-file"), "").unwrap();
-        let (found, stopped) = workspace_run(&dir, &dir.join("a-file/run"), "engine", &["engine/src/a.rs"], 600);
+        let (found, stopped) = workspace_run(&dir, &dir.join("a-file/run"), "engine", "engine/src/a.rs", 600);
         assert!(!stopped);
-        assert_eq!(found, vec![not_run("could not write the change's diff for cargo-mutants: Not a directory (os \
+        assert_eq!(found, vec![not_run("could not make the directory for cargo-mutants' output: Not a directory (os \
                                         error 20)")]);
-        let found = workspace_run(&dir.join("missing"), &dir.join("run"), "engine", &["engine/src/a.rs"], 600);
+        let found = workspace_run(&dir.join("missing"), &dir.join("run"), "engine", "engine/src/a.rs", 600);
         assert_eq!(found, (vec![not_run("could not start cargo-mutants: No such file or directory (os error 2)")],
                            false));
         assert_eq!(not_run("it failed"), finding(None, None, "not-run",
                                                  "it failed; the change's Rust was not mutation-tested.".into()));
-        std::fs::remove_dir_all(dir).unwrap();
     }
 }

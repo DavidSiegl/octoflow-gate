@@ -16,7 +16,7 @@ use crate::copies::{copy_tracked, finding, in_scratch_directory, Budget};
 use crate::diff::removal_points;
 use crate::git::{self, shell_quote_bytes};
 use crate::judge::Change;
-use crate::mutants::{dir_name, KILL_WAIT, STOP_GRACE, SURVIVOR_EXAMPLES};
+use crate::mutants::{dir_name, edits, Edited, KILL_WAIT, STOP_GRACE, SURVIVOR_EXAMPLES};
 use crate::parser_checks::{project_dir, GoChange, GO_MANIFEST};
 use crate::paths::rel_path;
 use crate::process::{run_with, Extras, Finished};
@@ -35,28 +35,14 @@ const NOT_COVERED: &str = "NOT COVERED";
 /// also builds its package anew, which the first run took from the build cache, so 3 left too little on a small module.
 const TIMEOUT_COEFFICIENT: u32 = 10;
 
-/// A Go function the change edits, which gremlins mutates.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Edited {
-    /// Its file, from the tree's top.
-    path: OsString,
-    /// Its name, a method's as `Stack.Push` (lang_go::read).
-    name: String,
-    /// The lines from its `func` to its closing brace, its doc comment left out.
-    line: u32,
-    last: u32,
-}
-
 /// The Go functions the change that `go` reads edits, in path and line order, and a `not-run` finding for each file
 /// whose functions cannot be told, as one that does not parse.
 ///
-/// A function counts when the change adds a line to it, from its `func` line to its closing brace, or removes lines
-/// from between two of those, as a deleted guard clause needs a test as much as an added one: a function or method,
-/// with a body, of a Go file that is code under test (GoChange::is_code) and read in the working tree, so not
-/// generated, vendored or a symlink. One whose file's base has a function of its name with the same declaration, its
-/// receiver, parameters, results and body, whatever its comments and layout ([`unchanged_declarations`]), does not
-/// count: an edit to its comments or layout alone changes nothing gremlins mutates, while one to its signature alone
-/// can change what its body does.
+/// A function counts when the change edits it (mutants::edits): a function or method, with a body, of a Go file that
+/// is code under test (GoChange::is_code) and read in the working tree, so not generated, vendored or a symlink. One
+/// whose file's base has a function of its name with the same declaration, its receiver, parameters, results and body,
+/// whatever its comments and layout ([`unchanged_declarations`]), does not count: an edit to its comments or layout
+/// alone changes nothing gremlins mutates, while one to its signature alone can change what its body does.
 pub(crate) fn edited_functions(go: &GoChange) -> (Vec<Edited>, Vec<Finding>) {
     let removals = removal_points(&go.change.diff);
     let (mut edited, mut unread) = (vec![], vec![]);
@@ -91,10 +77,7 @@ fn edited_in(
         finding(Some(&after.path), unreadable.line, "not-run", message)
     })?;
     let touched: Vec<(usize, &model::Function)> = (source.functions.iter().enumerate())
-        .filter(|(_, f)| {
-            let added = file.added.range(f.line..=f.lines.last).next().is_some();
-            added || removed.iter().any(|&n| f.line <= n && n < f.lines.last)
-        })
+        .filter(|(_, f)| edits(f, &file.added, removed))
         .collect();
     // A body unchanged is the rare case, and only it needs the declarations, which are read anew.
     let base = file.before.as_ref().and_then(|side| side.source.as_ref().ok());
@@ -105,7 +88,7 @@ fn edited_in(
         if touched.iter().any(|(_, f)| same_body(f)) { unchanged_declarations(change, file) } else { vec![] };
     let edited = touched.into_iter().filter(|(k, _)| !unchanged.get(*k).copied().unwrap_or(false));
     Ok(edited
-        .map(|(_, f)| Edited { path: after.path.clone(), name: f.name.clone(), line: f.line, last: f.lines.last })
+        .map(|(_, f)| Edited::of(&after.path, f))
         .collect())
 }
 

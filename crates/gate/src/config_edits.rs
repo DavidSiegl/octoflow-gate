@@ -123,6 +123,7 @@ pub fn touched_paths(diff: &[u8], changed: &ChangedLines) -> BTreeSet<OsString> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scratch::ScratchDir;
 
     const DIFF: &[u8] = b"diff --git a/uv.lock b/uv.lock\ndeleted file mode 100644\n--- a/uv.lock\n+++ /dev/null\n\
         diff --git a/.cargo/config.toml b/x\nrename from .cargo/config.toml\nrename to x\n\
@@ -159,7 +160,7 @@ mod tests {
 
     #[test]
     fn a_file_under_a_go_module_s_vendor_directory_is_go_s_configuration() {
-        let root = std::env::temp_dir().join(format!("gate-go-vendor-{}", std::process::id()));
+        let root = ScratchDir::new();
         std::fs::create_dir_all(root.join("svc")).unwrap();
         std::fs::write(root.join("svc/go.mod"), "module example.com/svc\n").unwrap();
         // The top-level go.mod is one the change deletes; web/ is no Go module.
@@ -173,12 +174,11 @@ mod tests {
             "svc/vendor/modules.txt",
             "vendor/example.com/old/y.s"
         ]);
-        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
     fn cargo_home_is_found_relative_to_the_tree_or_not_at_all() {
-        let root = std::env::temp_dir().join(format!("gate-cargo-home-{}", std::process::id()));
+        let root = ScratchDir::new();
         std::fs::create_dir_all(root.join("h")).unwrap();
         let env = |home: &str| [("PATH".into(), "/bin".into()), ("CARGO_HOME".into(), OsString::from(home))];
         assert_eq!(cargo_home_in(&root, &env("h")), Some("h".into()));
@@ -187,6 +187,5 @@ mod tests {
         assert_eq!(cargo_home_in(&root, &env("..")), None);
         assert_eq!(cargo_home_in(&root, &env("")), None);
         assert_eq!(cargo_home_in(&root, &[]), None);
-        std::fs::remove_dir_all(&root).unwrap();
     }
 }

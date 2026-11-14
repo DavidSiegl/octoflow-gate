@@ -1135,6 +1135,7 @@ fn said_by_mutmut(run: &Finished) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scratch::ScratchDir;
 
     /// The units of the Python `source`, as lang_python reads them.
     fn units(source: &str) -> Vec<Unit> {
@@ -1151,8 +1152,7 @@ mod tests {
         // The Python ignores SIGINT, so it is killed STOP_GRACE after its time is up; given all the time to the
         // deadline, it would end that long past it.
         use std::os::unix::fs::PermissionsExt;
-        let tree = std::env::temp_dir().join(format!("gate-python-mutants-{}-listing", std::process::id()));
-        std::fs::create_dir_all(&tree).unwrap();
+        let tree = ScratchDir::new();
         let python = tree.join("python");
         std::fs::write(&python, "#!/bin/sh\ntrap '' INT\nexec sleep 60\n").unwrap();
         std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -1166,7 +1166,6 @@ mod tests {
         // error of its own.
         let copy = TreeCopy { python: &tree.join("no-python"), tree: &tree };
         assert_eq!(mutant_statuses(&copy, Instant::now() + STOP_GRACE + KILL_WAIT), listed);
-        std::fs::remove_dir_all(&tree).unwrap();
     }
 
     /// The `[tool.mutmut]` whose settings `settings` holds, as TOML.
@@ -1185,7 +1184,7 @@ mod tests {
 
     #[test]
     fn pytest_starts_from_the_paths_the_selection_names_in_the_copy_else_from_the_top() {
-        let tree = std::env::temp_dir().join(format!("gate-test-places-{}", std::process::id()));
+        let tree = ScratchDir::new();
         std::fs::create_dir_all(tree.join("tests/unit")).unwrap();
         std::fs::write(tree.join("tests/unit/test_u.py"), "").unwrap();
         let places = |selection: &str, recorded: Option<&[&str]>| -> Vec<String> {
@@ -1206,7 +1205,6 @@ mod tests {
         let recorded = ["tests/unit/test_u.py::test_x", "tests/integration/test_i.py::test_y"];
         assert_eq!(places(selection, Some(&recorded)), ["tests/unit/test_u.py"]);
         assert_eq!(places(selection, Some(&recorded[1..])), [""]);
-        std::fs::remove_dir_all(&tree).unwrap();
     }
 
     #[test]

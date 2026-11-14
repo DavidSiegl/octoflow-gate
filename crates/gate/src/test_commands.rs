@@ -122,6 +122,7 @@ fn strerror(e: &std::io::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scratch::ScratchDir;
 
     fn command(name: &str, script: &str, junit: &[&str], coverage: &[&str]) -> TestCommand {
         TestCommand {
@@ -134,9 +135,7 @@ mod tests {
 
     #[test]
     fn each_command_is_judged_by_what_it_leaves() {
-        let root = std::env::temp_dir().join(format!("gate-test-commands-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
+        let root = ScratchDir::new();
         // A report an earlier run left, which the run must not read.
         std::fs::write(root.join("stale.xml"), "<testsuite/>").unwrap();
         let failing = r#"<testsuite><testcase classname="t" name="x"><failure message="m"/></testcase></testsuite>"#;
@@ -163,6 +162,5 @@ mod tests {
                 "The test command `missing` could not start: No such file or directory, so its tests were not judged.",
             ]
         );
-        std::fs::remove_dir_all(root).unwrap();
     }
 }

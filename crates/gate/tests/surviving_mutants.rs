@@ -147,6 +147,20 @@ fn a_workspace_below_the_top_is_mutated_in_its_own_directory() {
 }
 
 #[test]
+fn a_function_the_change_only_removes_lines_from_is_mutated() {
+    let guarded = "pub fn add(a: u32, b: u32) -> u32 {\n    if a == 0 {\n        return b;\n    }\n    a + b\n}\n";
+    let repo = repo(&[]);
+    let calls = "#[test]\nfn calls() {\n    calc::add(1, 2);\n}\n";
+    repo.commit(&[("src/lib.rs", guarded.as_bytes()), ("tests/calc.rs", calls.as_bytes())], "a guard clause");
+    repo.put("src/lib.rs", LIB.as_bytes());
+    let found = findings(&repo, None, &[]);
+    assert_eq!(found.len(), 1, "{found:?}");
+    let (path, line, rule, message) = &found[0];
+    assert_eq!((path.as_deref(), *line, rule.as_str()), (Some("src/lib.rs"), Some(1), "survived"), "{message}");
+    assert!(message.contains(" mutants of `add` survived its tests: "), "{message}");
+}
+
+#[test]
 fn added_lines_with_nothing_to_mutate_give_nothing() {
     let repo = repo(&[]);
     repo.put("src/lib.rs", format!("{LIB}\npub const LIMIT: u32 = 4;\n").as_bytes());
@@ -154,14 +168,14 @@ fn added_lines_with_nothing_to_mutate_give_nothing() {
 }
 
 #[test]
-fn cargo_mutants_runs_in_the_copy_uncoloured_on_the_workspace_s_diff_and_is_stopped_with_sigint() {
+fn cargo_mutants_runs_in_the_copy_uncoloured_on_the_edited_functions_and_is_stopped_with_sigint() {
     let repo = repo(&[("engine/", "engine")]);
     repo.put("engine/src/lib.rs", format!("{LIB}{ADDED}").as_bytes());
     let record = repo.outside.join("record");
-    // The diff is the argument after --in-diff; a SIGINT is recorded, and ends the stub.
+    // A SIGINT is recorded, and ends the stub.
     let script = format!(
         "{{ pwd; printf '%s\\n' \"$@\"; echo \"color=$CARGO_TERM_COLOR token=${{JENKINS_TOKEN-unset}}\"; \
-         shift 6; cat \"$1\"; }} > '{0}'\ntrap 'echo interrupted >> \"{0}\"; exit 3' INT\nsleep 30 & wait",
+         }} > '{0}'\ntrap 'echo interrupted >> \"{0}\"; exit 3' INT\nsleep 30 & wait",
         record.display()
     );
     let env = [
@@ -177,21 +191,17 @@ fn cargo_mutants_runs_in_the_copy_uncoloured_on_the_workspace_s_diff_and_is_stop
     )]);
     let recorded = std::fs::read_to_string(&record).unwrap();
     let lines: Vec<&str> = recorded.lines().collect();
-    let (cwd, argv) = (Path::new(lines[0]), &lines[1..17]);
+    let (cwd, argv) = (Path::new(lines[0]), &lines[1..]);
     assert_eq!(cwd.file_name().unwrap(), "tree");
     let scratch = cwd.parent().unwrap().join("run-0");
-    let (dir, diff_file) = (cwd.join("engine"), scratch.join("change.diff"));
+    let dir = cwd.join("engine");
+    // checked and unchecked, by their lines in the workspace's src/lib.rs.
     let expected = [
-        "mutants", "--in-place", "--no-shuffle", "--dir", dir.to_str().unwrap(), "--in-diff",
-        diff_file.to_str().unwrap(), "--test-tool", "nextest", "--timeout", "60", "--output",
-        scratch.to_str().unwrap(), "--colors", "never",
+        "mutants", "--in-place", "--no-shuffle", "--dir", dir.to_str().unwrap(), "--re", r"^src/lib\.rs:(?:5|6|7):",
+        "--re", r"^src/lib\.rs:(?:9|10|11):", "--test-tool", "nextest", "--timeout", "60", "--output",
+        scratch.to_str().unwrap(), "--colors", "never", "color=never token=unset", "interrupted",
     ];
-    assert_eq!(argv[..15], expected);
-    assert_eq!(argv[15], "color=never token=unset");
-    let diff = &lines[17..lines.len() - 1];
-    assert_eq!(diff[0], "diff --git a/src/lib.rs b/src/lib.rs");
-    assert!(diff.contains(&"+++ b/src/lib.rs"), "{diff:?}");
-    assert_eq!(lines.last(), Some(&"interrupted"));
+    assert_eq!(argv, expected);
 }
 
 #[test]
@@ -238,6 +248,33 @@ fn a_workspace_cargo_cannot_tell_is_not_mutated() {
         None,
         "not-mutated".into(),
         "was not mutation-tested: `cargo-mutants` could not find the workspace of `Cargo.toml`: error: nope.".into(),
+    )]);
+}
+
+#[test]
+fn a_file_whose_workspace_is_not_above_it_is_not_mutated() {
+    let repo = repo(&[]);
+    repo.put("src/lib.rs", format!("{LIB}{ADDED}").as_bytes());
+    // cargo takes a workspace root that a member's `package.workspace` names anywhere, as `tools/ws` with the member
+    // `../..`.
+    let path = cargo_stub(&repo, "locate-project", "echo tools/ws/Cargo.toml");
+    assert_eq!(findings(&repo, None, &[("PATH", path)]), vec![(
+        Some("src/lib.rs".into()),
+        None,
+        "not-mutated".into(),
+        "was not mutation-tested: its workspace at `tools/ws` is not above it.".into(),
+    )]);
+}
+
+#[test]
+fn a_file_that_does_not_parse_is_not_run() {
+    let repo = repo(&[]);
+    repo.put("src/lib.rs", format!("{LIB}\npub fn broken(a: u32 {{\n").as_bytes());
+    assert_eq!(findings(&repo, None, &[]), vec![(
+        Some("src/lib.rs".into()),
+        Some(5),
+        "not-run".into(),
+        "does not parse as Rust (unexpected `pub`), so its functions were not mutation-tested.".into(),
     )]);
 }
 

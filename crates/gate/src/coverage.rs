@@ -518,14 +518,14 @@ fn unmeasured_files(changed: &BTreeMap<OsString, BTreeSet<u32>>) -> Vec<OsString
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scratch::ScratchDir;
 
     fn changed(entries: &[(&str, &[u32])]) -> BTreeMap<OsString, BTreeSet<u32>> {
         entries.iter().map(|(p, lines)| (OsString::from(p), lines.iter().copied().collect())).collect()
     }
 
-    fn scratch(name: &str, text: impl AsRef<[u8]>) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("gate-coverage-{}-{name}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+    /// Writes `text` to the report `name` in `dir`, and returns its path.
+    fn write_report(dir: &Path, name: &str, text: impl AsRef<[u8]>) -> PathBuf {
         let path = dir.join(name);
         std::fs::write(&path, text).unwrap();
         path
@@ -533,9 +533,10 @@ mod tests {
 
     #[test]
     fn merges_cobertura_and_lcov_by_path_and_line() {
-        let root = std::env::temp_dir().join(format!("gate-coverage-root-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
-        let cobertura = scratch(
+        let reports = ScratchDir::new();
+        let root = ScratchDir::new();
+        let cobertura = write_report(
+            &reports,
             "c.xml",
             format!(
                 "<coverage><sources><source>{}</source></sources><packages><package><classes>\
@@ -545,7 +546,8 @@ mod tests {
                 root.display()
             ),
         );
-        let lcov = scratch(
+        let lcov = write_report(
+            &reports,
             "l.info",
             format!(
                 "SF:{}\nDA:1,3\nDA:2,1\nBRDA:2,0,0,1\nBRDA:2,0,1,1\nBRDA:2,0,2,-\nend_of_record\n",
@@ -561,9 +563,10 @@ mod tests {
 
     #[test]
     fn cobertura_counts_hits_and_the_branches_of_lines_it_marks_as_branches() {
-        let root = std::env::temp_dir().join(format!("gate-coverage-cobertura-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
-        let report = scratch(
+        let reports = ScratchDir::new();
+        let root = ScratchDir::new();
+        let report = write_report(
+            &reports,
             "cobertura.xml",
             format!(
                 "<coverage><sources><source> </source><source>{}</source></sources><packages><package><classes>\
@@ -583,9 +586,10 @@ mod tests {
 
     #[test]
     fn a_cobertura_report_may_start_with_a_byte_order_mark() {
-        let root = std::env::temp_dir().join(format!("gate-coverage-bom-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
-        let report = scratch(
+        let reports = ScratchDir::new();
+        let root = ScratchDir::new();
+        let report = write_report(
+            &reports,
             "bom.xml",
             format!(
                 "\u{feff}<?xml version='1.0'?><coverage><sources><source>{}</source></sources><packages><package>\
@@ -603,14 +607,14 @@ mod tests {
         let little: Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
         let big: Vec<u8> = text.encode_utf16().flat_map(u16::to_be_bytes).collect();
         for (name, utf16) in [("le.xml", little), ("be.xml", big)] {
-            let got = new_coverage(&[scratch(name, utf16)], &root, &a).unwrap();
+            let got = new_coverage(&[write_report(&reports, name, utf16)], &root, &a).unwrap();
             assert_eq!((got.lines, got.covered_lines), (1, 1), "{name}");
         }
-        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
     fn a_report_that_is_neither_cobertura_nor_whole_lcov_is_an_error() {
+        let reports = ScratchDir::new();
         let root = std::env::temp_dir();
         let a = changed(&[("a.py", &[1])]);
         for (name, text) in [
@@ -621,24 +625,26 @@ mod tests {
             ("unended", "SF:a.py\nDA:1,1\nSF:b.py\nend_of_record\n"),
             ("stray-end", "end_of_record\n"),
         ] {
-            let report = scratch(name, text);
+            let report = write_report(&reports, name, text);
             assert!(new_coverage(&[report], &root, &a).is_err(), "{name}");
         }
-        let report = scratch("tn-only-record", "TN:\nSF:x.py\nDA:1,1\nend_of_record\n");
+        let report = write_report(&reports, "tn-only-record", "TN:\nSF:x.py\nDA:1,1\nend_of_record\n");
         assert_eq!(new_coverage(&[report], &root, &a).unwrap().lines, 0);
     }
 
     #[test]
     fn only_the_changed_lines_of_changed_files_are_read() {
-        let root = std::env::temp_dir().join(format!("gate-coverage-only-changed-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
-        let cobertura = scratch(
+        let reports = ScratchDir::new();
+        let root = ScratchDir::new();
+        let cobertura = write_report(
+            &reports,
             "only-changed.xml",
             "<coverage><class filename='other.py'><lines><line number='x' hits='y'/></lines></class>\
              <class filename='a.py'><lines><line number='1' hits='5000000000'/><line number='2' hits='y'/>\
              </lines></class></coverage>",
         );
-        let lcov = scratch(
+        let lcov = write_report(
+            &reports,
             "only-changed.info",
             format!(
                 "SF:{}\nDA:x,y\nBRDA:x\nend_of_record\nSF:{}\nDA:2,y\nDA:3,9000000000\nend_of_record\n",
@@ -653,7 +659,8 @@ mod tests {
 
     #[test]
     fn a_go_profile_names_files_by_their_module_and_covers_the_lines_of_its_blocks() {
-        let root = std::env::temp_dir().join(format!("gate-coverage-go-{}", std::process::id()));
+        let reports = ScratchDir::new();
+        let root = ScratchDir::new();
         std::fs::create_dir_all(root.join("tools/sub")).unwrap();
         std::fs::write(root.join("go.mod"), "// The calculator.\nmodule example.com/calc // a comment\n\ngo 1.22\n")
             .unwrap();
@@ -668,28 +675,28 @@ mod tests {
                        example.com/calc/other.go:1.1,9.2 1 0\n\
                        mode: count\n\
                        example.com/tools/sub/s.go:2.2,3.10 1 0\n";
-        let report = scratch("go.out", profile);
+        let report = write_report(&reports, "go.out", profile);
         let changed = changed(&[("t.go", &[4, 5, 6, 7, 10, 15]), ("tools/sub/s.go", &[3])]);
         let got = new_coverage(&[report], &root, &changed).unwrap();
         assert_eq!(
             got,
             NewCoverage { lines: 4, covered_lines: 2, conditions: 0, covered_conditions: 0, unmeasured: vec![] }
         );
-        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
     fn a_go_profile_names_a_file_outside_a_module_by_its_path() {
-        let root = std::env::temp_dir().join(format!("gate-coverage-go-path-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
+        let reports = ScratchDir::new();
+        let root = ScratchDir::new();
         let profile = format!("mode: set\n{}:1.1,2.5 1 1\n", root.join("a b.go").display());
-        let got = new_coverage(&[scratch("go-path.out", profile)], &root, &changed(&[("a b.go", &[2])])).unwrap();
+        let report = write_report(&reports, "go-path.out", profile);
+        let got = new_coverage(&[report], &root, &changed(&[("a b.go", &[2])])).unwrap();
         assert_eq!((got.lines, got.covered_lines), (1, 1));
-        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
     fn a_go_profile_with_a_line_that_is_no_block_is_an_error() {
+        let reports = ScratchDir::new();
         let root = std::env::temp_dir();
         let a = changed(&[("a.go", &[1])]);
         for (name, text) in [
@@ -697,7 +704,7 @@ mod tests {
             ("go-words.out", "mode: set\nexample.com/a/a.go:1.1,2.1 one 1\n"),
             ("go-place.out", "mode: set\na.go 1 1\n"),
         ] {
-            let problem = new_coverage(&[scratch(name, text)], &root, &a).unwrap_err().0;
+            let problem = new_coverage(&[write_report(&reports, name, text)], &root, &a).unwrap_err().0;
             assert!(problem.contains("its line 2 is not a block of a Go coverage profile"), "{name}: {problem}");
         }
     }
@@ -726,26 +733,26 @@ mod tests {
 
     #[test]
     fn lcov_entries_of_unchanged_lines_are_not_read_past_their_number() {
-        let root = std::env::temp_dir().join(format!("gate-coverage-unchanged-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
+        let reports = ScratchDir::new();
+        let root = ScratchDir::new();
         let file = root.join("a.py");
         let a = changed(&[("a.py", &[1])]);
         let text = format!("SF:{}\nDA:7\nBRDA:7,0,a,b,1\nDA:1,1\nend_of_record\n", file.display());
-        let got = new_coverage(&[scratch("unchanged.info", &text)], &root, &a).unwrap();
+        let got = new_coverage(&[write_report(&reports, "unchanged.info", &text)], &root, &a).unwrap();
         assert_eq!((got.lines, got.covered_lines), (1, 1));
         let text = format!("SF:{}\nDA:1\nend_of_record\n", file.display());
-        assert!(new_coverage(&[scratch("changed.info", &text)], &root, &a).is_err());
+        assert!(new_coverage(&[write_report(&reports, "changed.info", &text)], &root, &a).is_err());
         let mut text = format!("\u{feff}SF:{}\nDA:7,1,", file.display()).into_bytes();
         text.extend(b"\xff\nBRDA:7,0,\xff,1\nDA:1,1\nend_of_record\n");
-        let got = new_coverage(&[scratch("not-utf8.info", text)], &root, &a).unwrap();
+        let got = new_coverage(&[write_report(&reports, "not-utf8.info", text)], &root, &a).unwrap();
         assert_eq!((got.lines, got.covered_lines), (1, 1));
-        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
     fn an_unreadable_line_is_an_error() {
-        let report =
-            scratch("bad.xml", "<coverage><class filename='a.py'><lines><line number='x'/></lines></class></coverage>");
+        let reports = ScratchDir::new();
+        let xml = "<coverage><class filename='a.py'><lines><line number='x'/></lines></class></coverage>";
+        let report = write_report(&reports, "bad.xml", xml);
         let root = std::env::temp_dir();
         assert!(new_coverage(&[report], &root, &changed(&[("a.py", &[1])])).is_err());
     }

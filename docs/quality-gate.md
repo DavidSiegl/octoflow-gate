@@ -482,18 +482,20 @@ A change to a helper or fixture outside the tests' `def`s reruns nothing. The ch
 installed in the project's Python, so every pytest run there shuffles the tests too, printing the seed it used;
 `-p no:randomly` turns it off, and `--randomly-seed=N` repeats an order.
 
-Go's changed tests are rerun the same way, with go's own shuffling. A test counts when the change adds or removes a
-line of it in a `_test.go` file, from the line above its `func` to the line before its closing brace: a top-level
-`TestX`, `FuzzX` or `ExampleX`, which `go test -run` selects, its subtests running with it. In the same temporary
-copy of the tracked files, each package's changed tests run five times, alone and together, from the package's
-directory, as `go test -json -count=1 -shuffle=N -run '^(TestA|TestB)$' .` with N from 1 to 5, each run within 30
-seconds; `-count=1` keeps go's test cache from answering in place of a run. A test that failed under some seeds and
-passed under others is `mixed-results`, one that failed under every seed that judged it `failed-every-run`, and one
-that fewer than two runs passed or failed `not-rerun`, as above; go reports no xfail. A run that cannot start, takes
-longer than 30 seconds, exits with a status other than 0 or 1, fails without a test failing (a `TestMain` that exits
-does), or finds that the package's tests do not build in the copy, ends that package's reruns with a `not-rerun`
-finding saying which earlier runs were judged; the other packages' tests are rerun still. The Go reruns add at most
-five runs of 30 seconds for each package the changed tests are in.
+Go's changed tests are rerun the same way, with go's own shuffling. A test counts when the change adds or removes a line
+of it in a `_test.go` file, from the line above its `func` to the line before its closing brace: a top-level `TestX`,
+`FuzzX` or `ExampleX`, which `go test -run` selects, its subtests running with it. In the same temporary copy of the
+tracked files, each package's tests are first built, as `go test -c`, within five minutes, so that a run's time goes to
+the tests; then its changed tests run five times, alone and together, from the package's directory, as `go test -json
+-count=1 -shuffle=N -run '^(TestA|TestB)$' .` with N from 1 to 5, each run within 30 seconds; `-count=1` keeps go's test
+cache from answering in place of a run. A test that failed under some seeds and passed under others is `mixed-results`,
+one that failed under every seed that judged it `failed-every-run`, and one that fewer than two runs passed or failed
+`not-rerun`, as above; go reports no xfail. A run that cannot start, takes longer than 30 seconds, exits with a status
+other than 0 or 1, fails without a test failing (a `TestMain` that exits does), or finds that the package's tests do not
+build in the copy, ends that package's reruns with a `not-rerun` finding saying which earlier runs were judged; the
+other packages' tests are rerun still. A build that takes longer than five minutes is a `not-rerun` finding on the
+package's tests. The Go reruns add at most a build of five minutes and five runs of 30 seconds for each package the
+changed tests are in.
 
 **Surviving mutants** mutation-tests the functions the change edits, so that code its tests run without checking what
 it does is found; coverage counts such code as tested. A function counts when the change adds lines to it or removes

@@ -87,6 +87,23 @@ impl Event {
     }
 }
 
+/// Builds the tests of the Go package in `dir` into `binary`, a path that does not exist yet, as `go test -c -o
+/// <binary> .`, for at most `timeout`, as process::run_with runs a tool: the [`run`]s in `dir` after it then find the
+/// package and what it imports in go's build cache, so that their own timeouts go to the tests alone. A build that
+/// fails is left for those runs to tell ([`Ran::Unbuilt`]). Errs with a [`Problem`], its clause naming `doing`, as
+/// "building the package's tests", when go could not start or took longer than `timeout`.
+pub fn build(dir: &Path, binary: &Path, timeout: Duration, doing: &str) -> Result<(), Problem> {
+    let argv = ["go", "test", "-c", "-o"].map(OsStr::new).into_iter().chain([binary.as_os_str(), OsStr::new(".")]);
+    let argv: Vec<&OsStr> = argv.collect();
+    let done = run_with(&argv, dir, timeout, &Extras::default())
+        .map_err(|e| Problem { clause: format!("could not start go test, {doing}: {e}"), overran: false })?;
+    if done.stopped {
+        let clause = format!("go test, {doing}, did not finish within {} seconds", timeout.as_secs_f64());
+        return Err(Problem { clause, overran: true });
+    }
+    Ok(())
+}
+
 /// Runs the tests `names` of the Go package in `dir`, once, as `go test -json -count=1 <flags> -run '^(names)$' .`,
 /// for at most `timeout`, as process::run_with runs a tool, killed at once at the timeout; `flags` are go test's,
 /// such as `-shuffle=3`. Gives what it told ([`Ran`]); a [`Problem`], its clause naming `doing`, as "running the

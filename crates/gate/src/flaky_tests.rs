@@ -23,6 +23,10 @@ const SEEDS: [u32; 5] = [1, 2, 3, 4, 5];
 /// How long one pytest or go test run of the check may take: pytest's collection, and each rerun.
 const RUN_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// How long building a Go package's tests before their reruns may take (gotest::build), which [`RUN_TIMEOUT`] then
+/// leaves out.
+const BUILD_TIMEOUT: Duration = Duration::from_secs(300);
+
 /// The flaky-tests check's findings on the Python and Go tests of `sources`, by path and line, a finding on no path or
 /// line first; each rule is the check's own, without its name, and each severity "warning". Python's are as
 /// [`python_findings`] says, Go's as [`go_findings`] does.
@@ -130,13 +134,7 @@ fn group_rerun_findings(group: &Group, tests: &Tests, reports: &Path, label: Opt
         }
     }
     if let Some(problem) = problem.or(reruns.stopped.as_ref().map(|(_, problem)| problem.clone())) {
-        let judged = if reruns.seeds.is_empty() {
-            format!("{} were not rerun.", label.unwrap_or("the changed tests"))
-        } else {
-            let of = label.map(|label| format!(" of {label}")).unwrap_or_default();
-            format!("only the reruns{of} under {} were judged.", seeds(&reruns.seeds))
-        };
-        out.push(finding(None, None, "not-rerun", format!("{problem}; {judged}")));
+        out.push(stopped_not_rerun(&problem, label, &reruns.seeds));
     }
     out
 }
@@ -202,11 +200,13 @@ fn rerun<'a>(
 /// (`failed-every-run`), and one that fewer than two runs passed or failed (`not-rerun`), as [`python_findings`] does
 /// and for the same reasons. The other tests of the package are not run, so only the changed tests' order varies.
 ///
-/// The tests run in a copy of the files git tracks, as Python's do. A go test run that cannot start, takes longer
-/// than [`RUN_TIMEOUT`] or tells nothing (gotest::run), or finds that the package's tests do not build in the copy,
-/// ends the reruns of that package's tests with a `not-rerun` finding saying so, after what the runs before it showed;
-/// the other packages' tests are rerun still. A changed test file that cannot be read or parsed, and a copy that
-/// cannot be made, are `not-rerun` findings too, and a copy that cannot be removed afterwards a `not-removed` one.
+/// The tests run in a copy of the files git tracks, as Python's do, each package's once its tests are built
+/// (gotest::build). A build that cannot start or takes longer than [`BUILD_TIMEOUT`] is a `not-rerun` finding on the
+/// package's tests. A go test run that cannot start, takes longer than [`RUN_TIMEOUT`] or tells nothing (gotest::run),
+/// or finds that the package's tests do not build in the copy, ends the reruns of that package's tests with a
+/// `not-rerun` finding saying so, after what the runs before it showed; the other packages' tests are rerun still. A
+/// changed test file that cannot be read or parsed, and a copy that cannot be made, are `not-rerun` findings too, and a
+/// copy that cannot be removed afterwards a `not-removed` one.
 fn go_findings(go: &GoChange) -> Vec<Finding> {
     let (packages, unreadable) = gotest::changed_tests(go);
     let not_rerun = |(path, unreadable): (&OsStr, &model::Unreadable)| {
@@ -216,16 +216,17 @@ fn go_findings(go: &GoChange) -> Vec<Finding> {
     let mut out: Vec<Finding> = unreadable.into_iter().map(not_rerun).collect();
     if !packages.is_empty() {
         out.extend(in_scratch_directory("not-rerun", "to rerun the changed Go tests in", |tmp| {
-            go_rerun_findings(go, &tmp.join("tree"), &packages)
+            go_rerun_findings(go, tmp, &packages)
         }));
     }
     out
 }
 
 /// [`go_findings`]' findings on `packages`, the changed tests by their package's directory, rerun in a copy of the
-/// tracked files of `go`'s tree that it makes at `tree`, a path that does not exist yet.
-fn go_rerun_findings(go: &GoChange, tree: &Path, packages: &Packages) -> Vec<Finding> {
-    if let Err(e) = copy_tracked(&go.change.root, tree) {
+/// tracked files of `go`'s tree that it makes in `tmp`, an empty directory, beside the tests it builds.
+fn go_rerun_findings(go: &GoChange, tmp: &Path, packages: &Packages) -> Vec<Finding> {
+    let tree = tmp.join("tree");
+    if let Err(e) = copy_tracked(&go.change.root, &tree) {
         let message = format!(
             "could not copy the tracked files to rerun the changed Go tests in: {e}; the changed Go tests were not \
              rerun."
@@ -233,9 +234,15 @@ fn go_rerun_findings(go: &GoChange, tree: &Path, packages: &Packages) -> Vec<Fin
         return vec![finding(None, None, "not-rerun", message)];
     }
     let mut out = vec![];
-    for (package, tests) in packages {
+    for (n, (package, tests)) in packages.iter().enumerate() {
         let names: Vec<&str> = tests.iter().map(|t| t.name.as_str()).collect();
         let dir = tree.join(package);
+        let which = format!("the changed tests of {}", gotest::label(package));
+        let binary = tmp.join(format!("tests-{n}.test"));
+        if let Err(problem) = gotest::build(&dir, &binary, BUILD_TIMEOUT, "building the package's tests") {
+            out.push(stopped_not_rerun(&problem.clause, Some(&which), &[]));
+            continue;
+        }
         let reruns = Reruns::run(|seed| {
             let doing = format!("rerunning them under seed {seed}");
             match gotest::run(&dir, &names, &[&format!("-shuffle={seed}")], RUN_TIMEOUT, &doing) {
@@ -251,15 +258,22 @@ fn go_rerun_findings(go: &GoChange, tree: &Path, packages: &Packages) -> Vec<Fin
             }
         }
         if let Some((_, problem)) = &reruns.stopped {
-            let which = format!("the changed tests of {}", gotest::label(package));
-            let judged = match reruns.seeds.as_slice() {
-                [] => format!("{which} were not rerun."),
-                ran => format!("only the reruns of {which} under {} were judged.", seeds(ran)),
-            };
-            out.push(finding(None, None, "not-rerun", format!("{problem}; {judged}")));
+            out.push(stopped_not_rerun(problem, Some(&which), &reruns.seeds));
         }
     }
     out
+}
+
+/// The `not-rerun` finding that `problem`, a clause, stopped the reruns of `which`, the tests as findings name them
+/// (pytest::labels; "the changed tests" when None), after `ran`, the seeds of the reruns that told something.
+fn stopped_not_rerun(problem: &str, which: Option<&str>, ran: &[u32]) -> Finding {
+    let judged = if ran.is_empty() {
+        format!("{} were not rerun.", which.unwrap_or("the changed tests"))
+    } else {
+        let of = which.map(|which| format!(" of {which}")).unwrap_or_default();
+        format!("only the reruns{of} under {} were judged.", seeds(ran))
+    };
+    finding(None, None, "not-rerun", format!("{problem}; {judged}"))
 }
 
 /// What the reruns of a set of tests, one under each of [`SEEDS`] in turn, told of each test, a test known by a key

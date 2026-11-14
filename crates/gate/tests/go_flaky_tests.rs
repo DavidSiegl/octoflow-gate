@@ -66,6 +66,35 @@ fn a_go_test_that_passes_in_every_order_is_not_reported() {
     assert_eq!(findings(&repo), []);
 }
 
+/// A stub go ahead of the real one makes a run with `-json` take longer than a rerun may, unless a `-c` build came
+/// first: a package whose build alone outlasts a rerun's time.
+#[test]
+fn the_reruns_time_leaves_out_building_the_package() {
+    let repo = repo();
+    let stable = "package calc\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n\tif Add(1, 2) != 3 {\n\
+                  \t\tt.Fatal(\"1 + 2 is not 3\")\n\t}\n}\n";
+    repo.put("sub/calc_test.go", stable.as_bytes());
+    let which = std::process::Command::new("sh").args(["-c", "command -v go"]).output().unwrap();
+    let real = String::from_utf8(which.stdout).unwrap();
+    let built = repo.outside.join("built");
+    let script = format!(
+        "case \" $* \" in\n*\" -c \"*) : > '{0}' ;;\n*\" -json \"*) [ -f '{0}' ] || sleep 35 ;;\nesac\n\
+         exec '{1}' \"$@\"",
+        built.display(),
+        real.trim()
+    );
+    let bin = repo.stub("go", &script);
+    repo.git(&["add", "-A"]);
+    let json = repo.outside.join("quality.json");
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    let done = repo.gate_command("HEAD").env("PATH", path).arg("--json").arg(&json).output().unwrap();
+    assert!(matches!(done.status.code(), Some(0 | 1)), "{}", String::from_utf8_lossy(&done.stderr));
+    let report: serde_json::Value = serde_json::from_slice(&std::fs::read(&json).unwrap()).unwrap();
+    let found: Vec<&serde_json::Value> = report["findings"].as_array().unwrap().iter()
+        .filter(|f| f["rule"].as_str().unwrap().starts_with("flaky-tests ")).collect();
+    assert_eq!(found, Vec::<&serde_json::Value>::new());
+}
+
 #[test]
 fn go_tests_that_do_not_build_are_said_not_to_be_rerun() {
     let repo = repo();

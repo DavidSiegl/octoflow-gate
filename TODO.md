@@ -8,6 +8,13 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
 
 ## Open issues
 
+- **A Python function a removed mutmut pragma frees is mutated only when the diff touches its lines.** As
+  cross-review 38 put it (round 3, 2026-11-14): "a pragma change only selects functions whose lines the diff
+  touches. Deleting a `start`/`end` pair around f2, f3, f4 puts removal points next to f2 and f4 but none in f3. f3
+  becomes mutable and is never tried. The same goes for a block pragma removed with a blank line between it and the
+  def, or an `end` moved up." Selection is the `touched` closure of `python_mutants` in
+  `crates/gate/src/python_mutants.rs`; it behaved so before todo/33 too. Closes with a function counted as touched
+  when the span of a pragma the change adds, removes or moves covers it.
 - **A Go test helper is followed only in the calling test's file.** As cross-review 37 put it (F5, 2026-11-14):
   "`Walk` is per file, and `keep_helper_calls` drops a test's call of a function not among this file's helpers.
   Base: calc_test.go holds `check` (with `t.Errorf`) and `TestAdd` calling `check(t, Add(1, 2), 3)`. The change moves

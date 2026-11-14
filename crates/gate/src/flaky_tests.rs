@@ -251,7 +251,7 @@ fn go_rerun_findings(go: &GoChange, tree: &Path, packages: &Packages) -> Vec<Fin
             }
         }
         if let Some((_, problem)) = &reruns.stopped {
-            let which = format!("the changed tests of the package at `{}`", package.display());
+            let which = format!("the changed tests of {}", gotest::label(package));
             let judged = match reruns.seeds.as_slice() {
                 [] => format!("{which} were not rerun."),
                 ran => format!("only the reruns of {which} under {} were judged.", seeds(ran)),

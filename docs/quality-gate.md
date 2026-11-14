@@ -307,10 +307,10 @@ of Go:
   `map[string]int{keyA: 1}`, is read as any other name;
 - `unparsable`: as Rust's.
 
-Go's tests run through a `[[test]]` command, as [Go tests and coverage](#go-tests-and-coverage) says,
-golangci-lint lints Go as the table above says, and the surviving-mutants check mutation-tests the functions a change
-edits with gremlins (**Go's mutants**, below). The flaky-tests check reruns the Go tests a change adds or edits
-(**Flaky tests**, below); the passes-at-base check does not judge Go (#81).
+Go's tests run through a `[[test]]` command, as [Go tests and coverage](#go-tests-and-coverage) says, golangci-lint
+lints Go as the table above says, and the surviving-mutants check mutation-tests the functions a change edits with
+gremlins (**Go's mutants**, below). The flaky-tests check reruns the Go tests a change adds or edits, and passes-at-base
+runs them at the base (**Flaky tests** and **Passes at base**, below).
 
 **Cognitive complexity** scores the functions the change edits, so that a change cannot pile branches into the function
 it is editing rather than split it. A function counts when the change adds a line to it, decorators included, in a
@@ -736,6 +736,19 @@ function and a test file calling it is judged as one whose tests fail at the bas
 passes when every case nextest reports under its name passed, and a test it did not report, as one a `cfg` leaves out at
 the base, gives nothing. A test edited by removing its first attribute, as an `#[ignore]`, counts as edited. The target
 directory is new for every run, so each run compiles the package's dependencies anew, within the budget (see `TODO.md`).
+
+Go's tests are judged after Rust's, with what is left of the same `--base-run-budget`, when the change edits Go code
+outside the tests: a `.go` file of a Go module that is not a `_test.go` file and lies in no `testdata` directory. The
+changed tests are those flaky-tests reruns: a top-level `TestX`, `FuzzX` or `ExampleX` of a `_test.go` file whose
+lines the change adds to or removes from. They run in a copy of the base made as above, with the change's `_test.go`
+files, the files under a `testdata` directory and the files that go with the tests taken from the working tree; Go has
+no test code inside a file of code, so no Go test is inseparable from what it tests. Each package's changed tests run
+together, once, from the package's directory, as `go test -json -count=1 -run '^(TestA|TestB)$' .`, killed when the
+budget runs out. A package whose tests do not build at the base counts as failing them, which is what the check
+expects of a test that needs the change, so a change that adds a function and a test calling it gives no finding; a
+test that fails or is skipped there, or that the run does not report, gives none either. The findings are those
+above, `go test` in place of pytest: a stop at the budget is `budget-reached`, and each package after it `not-run`; a
+go test that cannot start, exits with a status other than 0 or 1, or fails without a test failing, is `not-run`.
 
 **Vague names** lists the names a change binds that tell a reader nothing about what they hold: `data`, `info`, `value`,
 `status`, `handle` and `manager` (`VAGUE_WORDS` in `crates/checks`), or a name ending in one after an underscore, such

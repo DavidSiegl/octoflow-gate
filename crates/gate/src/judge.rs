@@ -1,5 +1,5 @@
 //! The gate's judgement of one change: what it reads of the change, and the report it gives on it, from the linters
-//! and the checks beside them, over Python and Rust, and Go for the checks that only read a change.
+//! and the checks beside them, over Python, Rust and Go.
 
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};

@@ -33,9 +33,8 @@ against it.
   together with the code), functions whose cognitive complexity it took over 15, imports it added that close a cycle
   between the project's Python or Rust modules, and, as findings to weigh that do not fail the gate, tests that are
   flaky, tests that pass without the change, surviving mutants of the functions it edits, vague names it binds, and
-  blocks of code it adds that the tree already holds, names and literals aside. Go gets all of these but three: tests
-  are rerun for flakiness in Python alone, and run without the change in Python and Rust, and Go's compiler refuses an
-  import cycle itself.
+  blocks of code it adds that the tree already holds, names and literals aside. Go gets all of these but the import
+  cycles, which Go's compiler refuses itself; Rust gets all but the reruns for flakiness.
 - **What to read**: the suppressions it added and the build configuration it edited.
 
 [docs/quality-gate.md](docs/quality-gate.md) says what each of these judges and why.
@@ -107,9 +106,9 @@ a project's environment, and only for a project that tracks Python or Markdown f
 likewise, for shell scripts, GitHub workflows and Rust files. The flaky-tests, passes-at-base and surviving-mutants
 checks of a change to Python run pytest, pytest-randomly and mutmut through the project's Python, which `gate.toml`'s
 `python` or `--python` names, `python3` without either; those of a change to Rust run cargo-nextest and cargo-mutants,
-and the flaky-tests and surviving-mutants checks of a change to Go run go test and gremlins. golangci-lint, and the go
-tool it and gremlins run, come from `PATH` for a project that tracks Go files; a Go project runs its tests with
-gotestsum ([Go tests and coverage](docs/quality-gate.md#go-tests-and-coverage)).
+and the flaky-tests, passes-at-base and surviving-mutants checks of a change to Go run go test and gremlins.
+golangci-lint, and the go tool it and gremlins run, come from `PATH` for a project that tracks Go files; a Go project
+runs its tests with gotestsum ([Go tests and coverage](docs/quality-gate.md#go-tests-and-coverage)).
 
 A linter that is missing is a failed condition naming it, and for clippy that is a `cargo clippy --version` that
 fails, as it does where rustup's `clippy` component is not installed; a check that cannot run is one of its own

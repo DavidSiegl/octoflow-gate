@@ -35,6 +35,16 @@ pub fn changed_tests<'a>(go: &'a GoChange) -> (Packages, Vec<(&'a OsStr, &'a Unr
     (by_package, unread)
 }
 
+/// The package in the directory `dir`, from the tree's top, as findings name it: "the package at `sub`", or "the
+/// package at the top level" for `.`.
+pub fn label(dir: &Path) -> String {
+    if dir == Path::new(".") {
+        "the package at the top level".into()
+    } else {
+        format!("the package at `{}`", crate::text::path(dir.as_os_str()))
+    }
+}
+
 /// What a [`run`] that finished told.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Ran {

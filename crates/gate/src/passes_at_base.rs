@@ -1,6 +1,6 @@
 //! The passes-at-base check: the tests a change adds or edits, run against the code the change started from. A test
-//! that passes there does not test the change. Python's tests run with pytest (python_at_base.rs), and Rust's, here,
-//! with cargo-nextest.
+//! that passes there does not test the change. Python's tests run with pytest (python_at_base.rs), Go's with go test
+//! (go_at_base.rs), and Rust's, here, with cargo-nextest.
 
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::{OsStr, OsString};
@@ -14,6 +14,7 @@ use serde::Deserialize;
 
 use crate::changed_tests::{changed_tests, ChangedTest};
 use crate::copies::{copy_base_with_tests, failed, finding, in_scratch_directory, sort_by_place, Budget};
+use crate::go_at_base::go_at_base;
 use crate::junit::{junit_outcomes, Outcome};
 use crate::parser_checks::{project_dir, RustChange, Sources};
 use crate::process::{run_with, Extras};
@@ -34,13 +35,15 @@ const NEXTEST_BUILD_FAILED: i32 = 101;
 /// is the check's own, without its name, and each severity "warning".
 ///
 /// Runs the tests the change adds or edits against the base's code and reports each one that passed there (rule
-/// `passes-at-base`): Python's as python_at_base::python_at_base says, then Rust's as [`rust_at_base`] does. Each
-/// language's runs may take `budget` seconds, Python's counted from when its copy of the base is made and Rust's
-/// from the start of the check, so that Rust's have what Python's left of them.
+/// `passes-at-base`): Python's as python_at_base::python_at_base says, then Rust's as [`rust_at_base`] does, then Go's
+/// as go_at_base::go_at_base does. Each language's runs may take `budget` seconds, Python's counted from when its copy
+/// of the base is made, and Rust's and Go's from the start of the check, so that Rust's have what Python's left of
+/// them, and Go's what both left.
 pub fn passes_at_base(sources: &Sources, budget: u64) -> Vec<Finding> {
     let budget = Budget::starting_now(budget);
     let mut out = python_at_base(&sources.python, budget.seconds);
     out.extend(rust_at_base(&sources.rust, &budget));
+    out.extend(go_at_base(&sources.go, &budget));
     sort_by_place(&mut out);
     out
 }
@@ -53,6 +56,28 @@ pub fn budget_reached(budget: &Budget, runner: &str, when: &str) -> Finding {
         budget.seconds
     );
     finding(None, None, "budget-reached", message)
+}
+
+/// The `not-run` finding on a file the change edits that could not be read, at `path`, for `unreadable`'s reason:
+/// the tests in it were not run.
+pub fn unread_not_run((path, unreadable): (&OsStr, &Unreadable)) -> Finding {
+    let message = format!("{}, so its tests were not run at the base.", unreadable.why);
+    finding(Some(path), unreadable.line, "not-run", message)
+}
+
+/// The `not-run` finding on `empty`, the submodules a copy of the base leaves empty, each with its path and why, as
+/// copies::copy_base_with_tests gives them, which a changed test of `language`, as "Rust", may need; None for none.
+pub fn submodules_left_empty(empty: &[(String, String)], language: &str) -> Option<Finding> {
+    if empty.is_empty() {
+        return None;
+    }
+    let named: Vec<String> = empty.iter().map(|(path, why)| format!("`{path}`, {why}")).collect();
+    let message = format!(
+        "the copy of the base leaves submodules empty, so a changed {language} test that needs one, if any does, was \
+         not judged: {}.",
+        named.join("; ")
+    );
+    Some(finding(None, None, "not-run", message))
 }
 
 /// Rust's findings of the check on `rust`, in no order.
@@ -80,11 +105,7 @@ fn rust_at_base(rust: &RustChange, budget: &Budget) -> Vec<Finding> {
         return vec![];
     }
     let (tests, unread) = changed_tests(rust.change, &rust.files, |_| true);
-    let not_run = |(path, unreadable): (&OsStr, &Unreadable)| {
-        let message = format!("{}, so its tests were not run at the base.", unreadable.why);
-        finding(Some(path), unreadable.line, "not-run", message)
-    };
-    let mut out: Vec<Finding> = unread.into_iter().map(not_run).collect();
+    let mut out: Vec<Finding> = unread.into_iter().map(unread_not_run).collect();
     let mut separable = vec![];
     for t in tests {
         if !rust.is_code(&t.path) {
@@ -132,16 +153,7 @@ fn base_run_findings(rust: &RustChange, dir: &Path, tests: &[ChangedTest], budge
             return vec![finding(None, None, "not-run", message)];
         }
     };
-    let mut out = vec![];
-    if !empty.is_empty() {
-        let named: Vec<String> = empty.iter().map(|(path, why)| format!("`{path}`, {why}")).collect();
-        let message = format!(
-            "the copy of the base leaves submodules empty, so a changed Rust test that needs one, if any does, was \
-             not judged: {}.",
-            named.join("; ")
-        );
-        out.push(finding(None, None, "not-run", message));
-    }
+    let mut out: Vec<Finding> = submodules_left_empty(&empty, "Rust").into_iter().collect();
     let layout = match CrateLayout::of(&tree, budget) {
         Ok(layout) => layout,
         Err(e) => {

@@ -267,7 +267,9 @@ of Go:
   A `platform-only` finding is one to weigh, as Rust's is; a custom tag such as `integration` or `ignore` beside
   those names makes the line a `skip`, as does an expression that holds nowhere, as `cgo && !cgo` or `!go1.21`. A
   test file's name constrains it as such a line does, so a `_GOOS`, `_GOARCH` or `_GOOS_GOARCH` suffix the change
-  gives it, as `calc_test.go` renamed to `calc_windows_test.go`, is a `platform-only` finding about the whole file;
+  gives it, as `calc_test.go` renamed to `calc_windows_test.go`, is a `platform-only` finding about the whole file,
+  where it names a platform the name at the base did not: `calc_linux_amd64_test.go` renamed to `calc_amd64_test.go`
+  builds the tests on more platforms, and is none;
 - `fewer-assertions`: a kept test with fewer assertions than at the base. An assertion is a call, in the test's own body
   or a `func` literal in it, of testify's `assert` or `require` packages (`assert.Equal(t, 3, got)`, under the names the
   file imports them by; `assert.New` is none, and a package imported with `.` is not followed, so its unqualified

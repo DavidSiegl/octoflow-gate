@@ -253,9 +253,10 @@ impl GoChange<'_> {
     }
 
     /// The test-integrity platform-only findings on the `_test.go` files of [`files`] whose names the change gave a
-    /// platform suffix they had not had at the base (lang_go::platform_suffix), as `calc_test.go` renamed to
-    /// `calc_windows_test.go`, which turns its tests off on the other platforms as a `//go:build windows` line would;
-    /// one about each whole file, by its path in the working tree.
+    /// platform suffix (lang_go::platform_suffix) that narrows the one they had at the base, as `calc_test.go` renamed
+    /// to `calc_windows_test.go`, which turns its tests off on the other platforms as a `//go:build windows` line
+    /// would: one naming a part the base's did not, so not `_linux_amd64` renamed to `_amd64`, which builds the tests
+    /// on more platforms. One about each whole file, by its path in the working tree.
     ///
     /// [`files`]: GoChange::files
     fn platform_named(&self) -> Vec<Finding> {
@@ -264,7 +265,9 @@ impl GoChange<'_> {
             let Some(after) = file.after.as_ref().filter(|a| a.among_tests) else { continue };
             let Some(suffix) = lang_go::platform_suffix(after.path.as_bytes()) else { continue };
             let had = file.before.as_ref().and_then(|b| lang_go::platform_suffix(b.path.as_bytes()));
-            if had.as_ref() != Some(&suffix) {
+            let had = had.unwrap_or_default();
+            let had: Vec<&str> = had.split('_').filter(|p| !p.is_empty()).collect();
+            if !suffix.split('_').filter(|p| !p.is_empty()).all(|part| had.contains(&part)) {
                 out.push(Finding {
                     path: Some(after.path.clone()),
                     line: None,

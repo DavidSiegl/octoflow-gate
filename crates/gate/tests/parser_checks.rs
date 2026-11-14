@@ -187,6 +187,14 @@ fn an_expected_value_changed_with_rust_code_renamed_deleted_or_a_line_of_it_remo
 }
 
 #[test]
+fn a_rust_file_that_opens_with_an_inner_attribute_naming_python_is_not_read_as_python() {
+    let python = "#![cfg(feature = \"python\")]\n\npub fn twice(n: i32) -> i32 {\n    n * 2\n}\n";
+    let repo = package(&[("crate/src/python.rs", python)]);
+    edit(&repo, "crate/src/python.rs", "n * 2", "n + n");
+    assert_eq!(found(&repo), vec![]);
+}
+
+#[test]
 fn rust_of_a_cargo_package_the_change_deletes_is_code_under_test() {
     let repo = package(&[("other/Cargo.toml", MANIFEST), ("other/src/lib.rs", "pub fn one() {}\n")]);
     repo.git(&["rm", "--quiet", "-r", "other"]);

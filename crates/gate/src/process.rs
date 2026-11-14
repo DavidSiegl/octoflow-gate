@@ -208,11 +208,14 @@ fn start(argv: &[&OsStr], cwd: &Path, stdout: Stdio, stderr: Stdio, extras: &Ext
 }
 
 /// How `child` exited, looking every [`POLL`]; None when it was still running at `deadline`. When Ctrl-C or SIGTERM
-/// reaches the gate meanwhile, kills `group` and exits through [`exit_interrupted`].
+/// reaches the gate meanwhile, kills `group`, reaps `child` and exits through [`exit_interrupted`]: unreaped, `child`
+/// would stay a zombie of `group` after the gate's exit until whatever adopts it reaps it.
 fn wait(child: &mut Child, group: &Group, deadline: Option<Instant>) -> std::io::Result<Option<ExitStatus>> {
     loop {
         if interrupted() {
             group.kill();
+            // An error leaves the zombie to its adopter; the gate is exiting either way.
+            let _ = child.wait();
             exit_interrupted();
         }
         if let Some(status) = child.try_wait()? {

@@ -398,24 +398,31 @@ impl CrateLayout {
     /// The targets that build the Rust file at `path`, a path from the copy's top: for each crate root whose module
     /// tree reaches it, the target of the package nearest above that root's file, by `cargo metadata` run there, whose
     /// crate root it is, with the file's module path from that root, as `["calc", "tests"]`. A library of any kind is
-    /// selected by `--lib`, a target of another kind by its kind and name, as `--test cli`; a build script runs no
-    /// tests and builds none.
+    /// selected by `--lib`, a target of another kind by its kind and name, as `--test cli`. A crate root that
+    /// `cargo metadata` reads but no target is built from, as a build script or a stray file, runs no tests and
+    /// adds none.
     ///
-    /// Errs when a crate root that reaches the file has no target, so that a test is never judged by only some of
-    /// the targets that build it: [`Unplaced::Stopped`] when `cargo metadata` was stopped, else
-    /// [`Unplaced::Unbuilt`], as for a file no crate root reaches.
+    /// Errs when a crate root that reaches the file may be a target that cannot be told, so that a test is never
+    /// judged by only some of the targets that build it: [`Unplaced::Stopped`] when `cargo metadata` was stopped,
+    /// else [`Unplaced::Unbuilt`], as for a file no target builds or no crate root reaches.
     fn targets(&mut self, path: &OsStr) -> Result<Vec<(Target, Vec<String>)>, Unplaced> {
         let places = self.modules.get(path).cloned().unwrap_or_default();
         if places.is_empty() {
             return Err(Unplaced::Unbuilt("it is not in the copy of the base".to_string()));
         }
-        let (mut out, mut whys) = (vec![], vec![]);
+        let (mut out, mut whys, mut untargeted) = (vec![], vec![], vec![]);
         for (root, module) in places {
             match self.target_of_root(&root) {
-                Ok((package, args)) => out.push((Target { package, args }, module)),
+                Ok(Some((package, args))) => out.push((Target { package, args }, module)),
+                Ok(None) => untargeted.push(root),
                 Err(Unplaced::Unbuilt(why)) => whys.push(why),
                 Err(stopped) => return Err(stopped),
             }
+        }
+        if out.is_empty() {
+            whys.extend(untargeted.iter().map(|root| {
+                format!("no Cargo target at the base is built from its crate root `{}`", text::path(root))
+            }));
         }
         if !whys.is_empty() {
             whys.dedup();
@@ -425,15 +432,18 @@ impl CrateLayout {
     }
 
     /// The package directory, from the copy's top, and cargo's target selection of the target whose crate root is
-    /// the file at `root`, a path from the copy's top; or why there is none, as [`CrateLayout::targets`] says.
-    fn target_of_root(&mut self, root: &OsStr) -> Result<(OsString, Vec<String>), Unplaced> {
+    /// the file at `root`, a path from the copy's top; None when `cargo metadata` lists no target, a build script
+    /// aside, with that root; or why the targets cannot be told, as [`CrateLayout::targets`] says.
+    fn target_of_root(&mut self, root: &OsStr) -> Result<Option<(OsString, Vec<String>)>, Unplaced> {
         let shown = text::path(root);
         let dir = project_dir(root, "Cargo.toml", |manifest| self.tree.join(manifest).is_file())
             .ok_or_else(|| Unplaced::Unbuilt(format!("no Cargo.toml lies above its crate root `{shown}` at the base")))?
             .to_path_buf();
-        // A workspace's `cargo metadata` lists every member, so one run read for another member serves this one.
-        let read_already = self.packages.iter().find(|(_, read)| {
-            read.as_ref().is_ok_and(|targets| targets.iter().any(|(package, _)| Path::new(package) == dir))
+        // A run in this directory serves it, failed or not; and a workspace's `cargo metadata` lists every member,
+        // so one run read for another member serves this one.
+        let read_already = self.packages.iter().find(|(ran_in, read)| {
+            **ran_in == dir
+                || read.as_ref().is_ok_and(|targets| targets.iter().any(|(package, _)| Path::new(package) == dir))
         });
         let ran_in = match read_already {
             Some((ran_in, _)) => ran_in.clone(),
@@ -445,18 +455,17 @@ impl CrateLayout {
         };
         let targets = self.packages[&ran_in].as_ref().map_err(Unplaced::clone)?;
         let file = self.tree.join(root);
-        let (package, target) = targets
-            .iter()
-            .find(|(_, t)| t.src_path == file && !t.kind.iter().any(|k| k == "custom-build"))
-            .ok_or_else(|| {
-                Unplaced::Unbuilt(format!("no Cargo target at the base is built from its crate root `{shown}`"))
-            })?;
+        let Some((package, target)) =
+            targets.iter().find(|(_, t)| t.src_path == file && !t.kind.iter().any(|k| k == "custom-build"))
+        else {
+            return Ok(None);
+        };
         let kind = ["bin", "test", "bench", "example"].into_iter().find(|k| target.kind.iter().any(|t| t == k));
         let args = match kind {
             Some(kind) => vec![format!("--{kind}"), target.name.clone()],
             None => vec!["--lib".to_string()],
         };
-        Ok((package.clone(), args))
+        Ok(Some((package.clone(), args)))
     }
 
     /// The targets `cargo metadata --no-deps`, run in `dir`, a directory from the copy's top, lists, each with its
@@ -712,6 +721,24 @@ mod tests {
         let mut layout = CrateLayout::of(&tree, &budget).unwrap();
         let Err(Unplaced::Unbuilt(why)) = layout.targets(OsStr::new("shared.rs")) else { panic!("placed") };
         assert!(why.starts_with("`cargo metadata` at `broken` exited with status 101 at the base: "), "{why}");
+    }
+
+    #[test]
+    fn a_module_a_build_script_shares_with_the_library_is_run_in_the_library() {
+        let tree = ScratchDir::new();
+        for (path, source) in [
+            ("Cargo.toml", "[package]\nname = \"calc\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"),
+            ("build.rs", "#[path = \"src/shared.rs\"]\nmod shared;\n\nfn main() {}\n"),
+            ("src/lib.rs", "mod shared;\n"),
+            ("src/shared.rs", ""),
+        ] {
+            put(&tree, path);
+            std::fs::write(tree.join(path), source).unwrap();
+        }
+        let budget = Budget { seconds: 60, deadline: Instant::now() + std::time::Duration::from_secs(60) };
+        let mut layout = CrateLayout::of(&tree, &budget).unwrap();
+        let lib = Target { package: "".into(), args: vec!["--lib".into()] };
+        assert_eq!(layout.targets(OsStr::new("src/shared.rs")), Ok(vec![(lib, vec!["shared".to_string()])]));
     }
 
     #[test]

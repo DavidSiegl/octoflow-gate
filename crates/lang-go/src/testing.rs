@@ -42,11 +42,11 @@ const TESTIFY: &[&str] = &["github.com/stretchr/testify/assert", "github.com/str
 /// - An assertion reads ([`Assertion::reads`]) each name in it that the top-level function holding it binds nowhere
 ///   ([`binds::bindings`]), but a field's name keying an element of a literal not of a map type, as `want` in
 ///   `{want: 4}`.
-/// - A weakening is a `Skip`, `Skipf` or `SkipNow` called on such a variable anywhere in the file; a `//go:build`
-///   line above its `package` clause ([`constraint::weakening`]); and, anywhere in the file, an error thrown away by
+/// - A weakening is a `Skip`, `Skipf` or `SkipNow` called on such a variable anywhere in the file; a build constraint
+///   line above its `package` clause ([`constraint::weakenings`]); and, anywhere in the file, an error thrown away by
 ///   `_ = err` or by an `if err != nil {}` whose block holds no statement, `err` being any name of an error by Go's
-///   habit: `err`, `err` then a capital or a digit, as `errClose`, or a name ending in `Err`. A parser knows no
-///   types, so an error thrown away under any other name, or as `v, _ := f()`, is not seen.
+///   habit: `err`, `err` then a capital or a digit, as `errClose`, or a name ending in `Err`. A parser knows no types,
+///   so an error thrown away under any other name, or as `v, _ := f()`, is not seen.
 pub fn read(root: Node, text: Text) -> (Vec<Test>, Vec<Weakening>) {
     let imports = Imports::of(root, text);
     let mut walk = Walk {
@@ -61,13 +61,15 @@ pub fn read(root: Node, text: Text) -> (Vec<Test>, Vec<Weakening>) {
         own: HashSet::new(),
         tables: HashSet::new(),
     };
+    let header: Vec<(&str, u32)> = named(root)
+        .into_iter()
+        .filter(|n| n.kind() == "comment" && n.end_byte() <= package_start(root))
+        .map(|n| (text.of(n), line(n)))
+        .collect();
+    walk.weakenings.extend(constraint::weakenings(&header));
     for node in named(root) {
-        match node.kind() {
-            "comment" if node.end_byte() <= package_start(root) => {
-                walk.weakenings.extend(constraint::weakening(text.of(node), line(node)));
-            }
-            "function_declaration" | "method_declaration" => walk.function(node),
-            _ => {}
+        if matches!(node.kind(), "function_declaration" | "method_declaration") {
+            walk.function(node);
         }
     }
     (walk.tests, walk.weakenings)

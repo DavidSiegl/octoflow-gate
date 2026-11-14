@@ -241,6 +241,19 @@ fn a_build_constraint_naming_only_platforms_is_weighed_not_a_skip() {
 }
 
 #[test]
+fn a_legacy_plus_build_line_is_read_where_the_file_has_no_go_build_line() {
+    let with = |header: &str| edit(CALC_TEST, "package calc\n", &format!("{header}\n\npackage calc\n"));
+    let found = |header: &str| check(&[edited(TEST_PATH, CALC_TEST, &with(header))]);
+    let ignored = found("// +build ignore");
+    assert_eq!(wheres(&ignored), [at(1, "skip")]);
+    assert_eq!(ignored[0].message, "`// +build ignore` added: it turns the file's tests off.");
+    assert_eq!(wheres(&found("// +build linux")), [at(1, "platform-only")]);
+    assert_eq!(wheres(&found("// +build linux,amd64 darwin,!cgo")), [at(1, "platform-only")]);
+    assert_eq!(wheres(&found("// +build linux\n// +build windows")), [at(1, "skip"), at(2, "skip")]);
+    assert_eq!(wheres(&found("//go:build linux\n// +build ignore")), [at(1, "platform-only")]);
+}
+
+#[test]
 fn a_build_constraint_in_a_file_of_code_is_none() {
     let calc = edit(CALC, "package calc\n", "//go:build linux\n\npackage calc\n");
     let found = check(&[edited(CALC_PATH, CALC, &calc)]);

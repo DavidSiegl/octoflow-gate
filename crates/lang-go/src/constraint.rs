@@ -1,6 +1,6 @@
-//! A Go file's build constraint, `//go:build expr` (<https://pkg.go.dev/cmd/go#hdr-Build_constraints>), read as what
-//! it does to the tests of a `_test.go` file: it builds them only where `expr` holds, so it turns them off everywhere
-//! else.
+//! A Go file's build constraint, `//go:build expr`, or in a file with none the legacy `// +build` lines
+//! (<https://pkg.go.dev/cmd/go#hdr-Build_constraints>), read as what it does to the tests of a `_test.go` file: it
+//! builds them only where the constraint holds, so it turns them off everywhere else.
 
 use model::{first_line, Lines, Weakening, WeakeningKind};
 
@@ -70,37 +70,79 @@ const GOARCHES: &[&str] = &[
     "wasm",
 ];
 
-/// The weakening the comment `comment`, on line `line` of a `_test.go` file's header, is when it is a build constraint:
-/// platform-only when its expression names no custom tag, only platforms (`GOOS` and `GOARCH` values and `unix`),
-/// release tags (`go1.1` to the newest release the gate knows, each taken as set, as on the newest toolchain:
-/// [`release_tag`]) and the toolchain's tags (`cgo`, `gc`, `gccgo`), and holds on some platform and toolchain, since
-/// that leaves the tests out only where what they test may not be built, as Rust's `cfg(unix)` does; a skip
-/// otherwise, as for a custom tag such as `integration`, `ignore` or a release no toolchain sets yet, `go1.99`, a
-/// negated release tag such as `!go1.21`, or an expression go cannot read. None for a comment that is no `//go:build`
-/// line.
-pub fn weakening(comment: &str, line: u32) -> Option<Weakening> {
+/// The weakenings that the comments `header` of a `_test.go` file before its package clause, each with the line it
+/// starts on, in the order written, are as build constraints: each `//go:build` line; or, where there is none, each
+/// `// +build` line, which go 1.17 and later still obey then: its space-separated options or'd, each option's
+/// comma-separated tags and'd, a tag negated by `!`, and the lines and'd with one another. Each is a weakening at its
+/// line of the kind its file's whole constraint is: platform-only when the constraint names no custom tag, only
+/// platforms (`GOOS` and `GOARCH` values and `unix`), release tags (`go1.1` to the newest release the gate knows, each
+/// taken as set, as on the newest toolchain: [`release_tag`]) and the toolchain's tags (`cgo`, `gc`, `gccgo`), and
+/// holds on some platform and toolchain, since that leaves the tests out only where what they test may not be built,
+/// as Rust's `cfg(unix)` does; a skip otherwise, as for a custom tag such as `integration`, `ignore` or a release no
+/// toolchain sets yet, `go1.99`, a negated release tag such as `!go1.21`, or a constraint go cannot read.
+pub fn weakenings(header: &[(&str, u32)]) -> Vec<Weakening> {
+    let read = |line: fn(&str) -> Option<Option<Expr>>| {
+        header.iter().filter_map(|&(comment, at)| Some((comment, at, line(comment)?))).collect::<Vec<_>>()
+    };
+    let go_build = read(go_build);
+    let lines = if go_build.is_empty() { read(plus_build) } else { go_build };
+    let whole = lines.iter().try_fold(None, |whole: Option<Expr>, (_, _, expr)| {
+        let expr = expr.clone()?;
+        Some(Some(match whole {
+            Some(w) => Expr::And(Box::new(w), Box::new(expr)),
+            None => expr,
+        }))
+    });
+    let platform_only = whole.flatten().is_some_and(|e| e.names_no_custom_tag() && e.holds_on_some_build());
+    lines.into_iter().map(|(comment, at, _)| weakening(comment, at, platform_only)).collect()
+}
+
+/// The constraint a `//go:build` line, `comment`, writes; None inside for one go cannot read, and None for a comment
+/// that is no such line.
+fn go_build(comment: &str) -> Option<Option<Expr>> {
     let expression = comment.strip_prefix("//go:build")?;
     if !expression.is_empty() && !expression.starts_with([' ', '\t']) {
         return None;
     }
-    let platform_only = parse(expression).is_some_and(|e| e.names_no_custom_tag() && e.holds_on_some_build());
+    Some(parse(expression))
+}
+
+/// The constraint a `// +build` line, `comment`, writes, as [`weakenings`] reads it; None inside for one go cannot
+/// read or with no option, and None for a comment that is no such line.
+fn plus_build(comment: &str) -> Option<Option<Expr>> {
+    let options = comment.strip_prefix("//")?.trim_start_matches([' ', '\t']).strip_prefix("+build")?;
+    if !options.is_empty() && !options.starts_with([' ', '\t']) {
+        return None;
+    }
+    let tag = |term: &str| {
+        let (negated, tag) = term.strip_prefix('!').map_or((false, term), |t| (true, t));
+        let readable = !tag.is_empty() && tag.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.');
+        readable.then(|| if negated { Expr::Not(Box::new(Expr::Tag(tag.into()))) } else { Expr::Tag(tag.into()) })
+    };
+    let option = |option: &str| {
+        let tags: Option<Vec<Expr>> = option.split(',').map(tag).collect();
+        tags?.into_iter().reduce(|a, b| Expr::And(Box::new(a), Box::new(b)))
+    };
+    let options: Option<Vec<Expr>> = options.split_whitespace().map(option).collect();
+    Some(options.and_then(|o| o.into_iter().reduce(|a, b| Expr::Or(Box::new(a), Box::new(b)))))
+}
+
+/// The weakening a constraint line `comment`, on line `line`, is: platform-only or a skip ([`weakenings`]).
+fn weakening(comment: &str, line: u32, platform_only: bool) -> Weakening {
     let written = first_line(comment.trim_end());
+    let lines = Lines { first: line, last: line };
     let code = model::without_whitespace(comment);
-    Some(if platform_only {
+    if platform_only {
         Weakening {
-            lines: Lines { first: line, last: line },
+            lines,
             kind: WeakeningKind::PlatformOnly,
             code,
             message: format!("`{written}` added: it turns the file's tests off on the other platforms and toolchains."),
         }
     } else {
-        Weakening {
-            lines: Lines { first: line, last: line },
-            kind: WeakeningKind::Skip,
-            code,
-            message: format!("`{written}` added: it turns the file's tests off."),
-        }
-    })
+        let message = format!("`{written}` added: it turns the file's tests off.");
+        Weakening { lines, kind: WeakeningKind::Skip, code, message }
+    }
 }
 
 /// The compilers' names, which the go tool sets as a tag for the compiler that builds.
@@ -132,7 +174,7 @@ struct Build<'a> {
 }
 
 /// A build constraint's expression.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 enum Expr {
     Tag(String),
     Not(Box<Expr>),
@@ -271,7 +313,7 @@ mod tests {
     use super::*;
 
     fn kind(comment: &str) -> Option<WeakeningKind> {
-        weakening(comment, 1).map(|w| w.kind)
+        weakenings(&[(comment, 1)]).first().map(|w| w.kind)
     }
 
     #[test]
@@ -335,7 +377,7 @@ mod tests {
         ] {
             assert_eq!(kind(comment), Some(WeakeningKind::Skip), "{comment}");
         }
-        for comment in ["// go:build linux", "//go:buildx linux", "// +build linux", "// Package x."] {
+        for comment in ["// go:build linux", "//go:buildx linux", "// +buildx linux", "// Package x."] {
             assert_eq!(kind(comment), None, "{comment}");
         }
     }

@@ -249,8 +249,10 @@ removing one or changing its output is not seen (#73). The findings are Python's
 - `skip`: a `t.Skip`, `t.Skipf` or `t.SkipNow` on an added line, called on a parameter of type `*testing.T`, `*B`,
   `*F` or `testing.TB` of any function or `func` literal of the file, a helper's included; and a `//go:build` line
   added above the file's `package` clause, which builds the file's tests only where its expression holds, as Rust's
-  `cfg` does;
-- `platform-only`: such a `//go:build` line whose expression names no custom tag, only platforms (`GOOS` and `GOARCH`
+  `cfg` does. In a file with no `//go:build` line, each legacy `// +build` line added there is one too, as go 1.17
+  and later still obey it: its space-separated options or'd, each option's comma-separated tags and'd, a tag negated
+  by `!`, and the file's `// +build` lines and'd, each line judged by the whole they make;
+- `platform-only`: such a constraint line whose expression names no custom tag, only platforms (`GOOS` and `GOARCH`
   values and `unix`), release tags (`go1.21`, written as go writes them) and the toolchain's tags (`cgo`, `gc`,
   `gccgo`), with `!`, `&&`, `||` and parentheses, and holds on at least one platform and toolchain, as
   `//go:build linux || darwin` or `//go:build go1.21`. A release tag, `go1.1` up to the newest Go release the gate

@@ -142,7 +142,7 @@ pub fn under_mutmut_state(path: &OsStr) -> bool {
 /// Errs when it cannot judge: `cwd` is not in a git work tree, `base` names no commit, the settings cannot be read
 /// or the rules are no file, a test or coverage report cannot be read, a report a test command names cannot be
 /// removed before it runs, a file the change adds lines to cannot be read, or a source file the parser checks read
-/// cannot be shown at the base or read in the working tree. Ctrl-C or SIGTERM during a process it runs ends the
+/// cannot be shown at the base or read in the working tree. Ctrl-C, SIGTERM or SIGHUP during a process it runs ends the
 /// gate (process::run).
 pub fn judge_change(cwd: &Path, base: &str, given: &Given) -> Result<QualityReport, Unjudged> {
     let done = git::run(cwd, &["rev-parse", "--show-toplevel"])?;

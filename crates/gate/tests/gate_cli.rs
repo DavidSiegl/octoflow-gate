@@ -202,6 +202,38 @@ fn sigterm_stops_what_the_gate_started_writes_nothing_and_exits_130() {
 }
 
 #[test]
+fn sigterm_or_sighup_while_a_tool_runs_in_a_scratch_directory_leaves_none() {
+    for signal in ["TERM", "HUP"] {
+        let repo = repo();
+        let tmp = repo.outside.join("tmp");
+        std::fs::create_dir(&tmp).unwrap();
+        let started = repo.outside.join("started");
+        // pymarkdown runs in a scratch directory of the gate's.
+        let path = repo.stub_linters();
+        repo.stub("pymarkdown", &format!("pwd > '{0}.part'; mv '{0}.part' '{0}'; exec sleep 30", started.display()));
+        repo.put("notes.md", b"# Notes\n");
+        repo.git(&["add", "notes.md"]);
+        let mut gate = repo.gate_command("HEAD")
+            .env("PATH", path)
+            .env("TMPDIR", &tmp)
+            .spawn().unwrap();
+        let start = std::time::Instant::now();
+        while !started.exists() {
+            assert!(start.elapsed() < std::time::Duration::from_secs(30), "pymarkdown never started");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let scratch = std::fs::read_to_string(&started).unwrap();
+        assert!(Path::new(scratch.trim()).starts_with(&tmp), "{scratch}");
+        let sent = Command::new("kill").args([&format!("-{signal}"), &gate.id().to_string()]).status().unwrap();
+        assert!(sent.success());
+        let done = gate.wait().unwrap();
+        assert_eq!(done.code(), Some(130), "SIG{signal}");
+        let left: Vec<_> = std::fs::read_dir(&tmp).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert!(left.is_empty(), "SIG{signal} left {left:?}");
+    }
+}
+
+#[test]
 fn ctrl_c_writes_nothing_and_exits_130() {
     let repo = repo();
     repo.put("gate.toml", b"[[test]]\nname = \"slow\"\ncommand = [\"sh\", \"-c\", \"touch started; sleep 30\"]\n\

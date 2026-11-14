@@ -11,7 +11,7 @@ use std::time::Duration;
 use regex::bytes::Regex;
 
 use crate::glob::Globs;
-use crate::copies::scratch_directory;
+use crate::copies::ScratchDirectory;
 use crate::judge::under_mutmut_state;
 use crate::paths::{normpath, rel_path};
 use crate::process;
@@ -230,14 +230,15 @@ impl Linter {
         if !apart {
             return read_run(name, detail, &command(rules, files), root, root, tracked);
         }
-        let dir = match scratch_directory(&std::env::temp_dir()) {
+        let dir = match ScratchDirectory::new(&std::env::temp_dir()) {
             Ok(dir) => dir,
             Err(e) => return (vec![], vec![format!("`{name}` did not run: could not make a directory to run it in: {e}.")]),
         };
         let files: Vec<OsString> = files.iter().map(|f| root.join(f).into_os_string()).collect();
-        let (found, mut conditions) = read_run(name, detail, &command(rules, &files), &dir, root, tracked);
-        if let Err(e) = std::fs::remove_dir_all(&dir) {
-            conditions.push(format!("Could not remove the directory `{name}` ran in, `{}`: {e}.", dir.display()));
+        let (found, mut conditions) = read_run(name, detail, &command(rules, &files), dir.path(), root, tracked);
+        let path = dir.path().to_path_buf();
+        if let Err(e) = dir.remove() {
+            conditions.push(format!("Could not remove the directory `{name}` ran in, `{}`: {e}.", path.display()));
         }
         (found, conditions)
     }

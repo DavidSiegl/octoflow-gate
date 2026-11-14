@@ -22,6 +22,7 @@ use serde_json::{json, Value};
 use toml::Table;
 
 use crate::copies::{copy_tracked, finding, in_scratch_directory};
+use crate::git;
 use crate::glob::fnmatch;
 use crate::judge::MUTMUT_STATE;
 use crate::mutants::{KILL_WAIT, STOP_GRACE, SURVIVOR_EXAMPLES};
@@ -86,7 +87,10 @@ pub struct Mutmut<'a> {
 /// change adds lines to, decorators included, or removes lines from, in a Python file outside the tests that it
 /// leaves a regular file in the working tree. Lines removed right after a function's last line count too, though
 /// they may have been the blank lines below it; comments and blank lines above its first decorator do not, since
-/// they change nothing mutmut mutates. Reports at its def each such function with mutants its tests did not notice
+/// they change nothing mutmut mutates. Nor does a function whose file's base has one of its name with the same code,
+/// its decorators, parameters, defaults, annotations and body, whatever its comments and layout ([`edited`]): an
+/// edit to its comments or layout alone changes nothing mutmut mutates, while one to its signature alone can change
+/// what its body does. Reports at its def each such function with mutants its tests did not notice
 /// (`survived`), with how many of the mutants tried they were and what the first mutants::SURVIVOR_EXAMPLES change,
 /// as a line before and after; and each one no test calls (`untested`).
 ///
@@ -119,11 +123,38 @@ pub fn python_mutants(python: &PythonChange, mutmut: &Mutmut, seconds: u64) -> V
         finding(Some(&path), None, "not-run", format!("{why}, so its functions were not mutation-tested."))
     };
     let mut out: Vec<Finding> = unreadable.into_iter().map(not_read).collect();
-    let functions: Vec<Function> = units.into_iter().map(|(path, unit)| Function { path, unit }).collect();
+    let functions = edited(python, units);
     if !functions.is_empty() {
         out.extend(mutation_test(python, &functions, mutmut, seconds));
     }
     out
+}
+
+/// Those of `units`, each with its file's path as PythonChange::changed_units gives them, whose code the change
+/// edited, in the same order: all but a unit whose file's base has a unit of its name with the same code
+/// (lang_python::Unit::code), which only the unit's comments and layout can have changed, as nothing mutmut mutates
+/// does. A file whose base cannot be read or parsed, or that has none, has every unit edited.
+fn edited(python: &PythonChange, units: Vec<(OsString, Unit)>) -> Vec<Function> {
+    let mut bases: HashMap<OsString, Vec<Unit>> = HashMap::new();
+    let mut out = vec![];
+    for (path, unit) in units {
+        let base = bases.entry(path.clone()).or_insert_with(|| base_units(python, &path));
+        if !base.iter().any(|b| b.name == unit.name && b.code == unit.code) {
+            out.push(Function { path, unit });
+        }
+    }
+    out
+}
+
+/// The units of the base side of the file whose working-tree path is `path` in `python`'s change, read from git;
+/// none where the file has no base side or it cannot be read or parsed as Python.
+fn base_units(python: &PythonChange, path: &OsStr) -> Vec<Unit> {
+    let file = python.files.iter().find(|f| f.after.as_ref().is_some_and(|after| after.path == path));
+    let Some(before) = file.and_then(|f| f.before.as_ref()) else { return vec![] };
+    let mut spec = OsString::from(format!("{}:", python.change.base));
+    spec.push(&before.path);
+    let blob = git::output(&python.change.root, &[OsStr::new("cat-file"), OsStr::new("blob"), &spec]);
+    blob.ok().and_then(|source| lang_python::units(&source).ok()).unwrap_or_default()
 }
 
 /// A function the change touched, the unit mutmut mutates.

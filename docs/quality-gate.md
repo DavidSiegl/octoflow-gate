@@ -487,8 +487,10 @@ installed in the project's Python, so every pytest run there shuffles the tests 
 **Surviving mutants** mutation-tests the functions the change edits, so that code its tests run without checking what
 it does is found; coverage counts such code as tested. A function counts when the change adds lines to it or removes
 lines from it, decorators included, since a deleted guard clause needs a test as much as an added one: a top-level
-function, or a method of a top-level class, in a Python file outside the test files and, as above, `mutants/`.
-mutmut, installed in the project's Python, makes small changes to each, one at a time - an operator
+function, or a method of a top-level class, in a Python file outside the test files and, as above, `mutants/`; but
+not one whose file's base has a function of its name with the same code, its decorators, parameters, defaults,
+annotations and body, whatever its comments and layout, as an edit to its comments or layout alone changes nothing
+mutmut mutates; a signature edited alone is an edit. mutmut, installed in the project's Python, makes small changes to each, one at a time - an operator
 swapped, a number or a string altered, an argument dropped - and runs each of these mutants against the tests that
 call the function:
 

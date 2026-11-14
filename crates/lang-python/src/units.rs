@@ -5,7 +5,9 @@
 use model::{Lines, Unreadable};
 use tree_sitter::Node;
 
-use crate::syntax::{children, decorated, end_line, fields, line, named, of_kind, undecorated, unparenthesized, Text};
+use crate::syntax::{
+    children, decorated, digest_of, end_line, fields, line, named, of_kind, undecorated, unparenthesized, Text,
+};
 
 /// A top-level def, or a method directly in a top-level class: what pytest runs as one test and mutmut mutates as one
 /// function. A def under a statement such as an `if`, in a nested class or in another def is none.
@@ -29,6 +31,10 @@ pub struct Unit {
     pub body: Vec<Statement>,
     /// Its lines as written, from `lines.first` to `lines.last`; only `\n` ends one, so one may end in `\r`.
     pub source: Vec<String>,
+    /// A digest of its code but its name, as syntax::digest gives one: its decorators, parameters with their defaults
+    /// and annotations, return annotation and body, its docstring included, whatever their layout and comments. Two
+    /// units of one digest differ at most in their names, comments and layout.
+    pub code: String,
 }
 
 /// A statement directly in a [`Unit`]'s body.
@@ -165,7 +171,11 @@ fn block_units(block: Node, opener: u32, prefix: &str, text: Text) -> Vec<Unit> 
     for statement in named(block) {
         let definition = undecorated(statement);
         if definition.kind() == "function_definition" {
-            let decorators = of_kind(decorated(definition), "decorator").into_iter().filter_map(|d| named(d).pop());
+            let decorator_nodes = of_kind(decorated(definition), "decorator");
+            let decorators = decorator_nodes.iter().filter_map(|d| named(*d).pop());
+            let name_node = definition.child_by_field_name("name");
+            let unnamed = children(definition).into_iter().filter(|c| Some(*c) != name_node);
+            let code: Vec<Node> = decorator_nodes.iter().copied().chain(unnamed).collect();
             let span = Lines { first: line(statement), last: end_line(definition) };
             let mut body: Vec<Node> = fields(definition, "body").into_iter().flat_map(named).collect();
             if body.first().is_some_and(|first| is_docstring(*first, text)) {
@@ -182,6 +192,7 @@ fn block_units(block: Node, opener: u32, prefix: &str, text: Text) -> Vec<Unit> 
                 decorators: decorators.map(|written| text.of(unparenthesized(written)).to_string()).collect(),
                 header_comment: header(definition, text).comment,
                 body: body.iter().map(statement_of).collect(),
+                code: digest_of(&code, text),
             });
         }
         floor = end_line(statement);
@@ -243,6 +254,30 @@ def g(): pass
     fn a_decorated_class_s_methods_are_units_from_its_class_line() {
         let source = "@final\nclass C:\n    def m(self): pass\n\n    @staticmethod\n    def s(): pass\n";
         assert_eq!(placed(source), [("C.m".to_string(), 3, 3, 3, 2), ("C.s".to_string(), 6, 5, 6, 3)]);
+    }
+
+    #[test]
+    fn a_unit_s_code_is_all_of_it_but_its_name_comments_and_layout() {
+        let code = |source: &str| units(source.as_bytes()).unwrap().remove(0).code;
+        let base = code("@cache\ndef f(a, b=1) -> int:\n    if a:\n        a = 2\n    return a + b\n");
+        for same in [
+            "@cache\ndef g(a, b=1) -> int:\n    if a:\n        a = 2\n    return a + b\n",
+            "# f\n@cache  # kept\ndef f(\n    a,\n    b = 1,\n) -> int:\n    if a:  # a\n        a = 2\n\n\
+             \x20   return a + \\\n        b\n",
+        ] {
+            assert_eq!(code(same), base, "{same}");
+        }
+        for other in [
+            "def f(a, b=1) -> int:\n    if a:\n        a = 2\n    return a + b\n",
+            "@cache\ndef f(a, b=2) -> int:\n    if a:\n        a = 2\n    return a + b\n",
+            "@cache\ndef f(b, a=1) -> int:\n    if a:\n        a = 2\n    return a + b\n",
+            "@cache\ndef f(a, b=1) -> str:\n    if a:\n        a = 2\n    return a + b\n",
+            "@cache\nasync def f(a, b=1) -> int:\n    if a:\n        a = 2\n    return a + b\n",
+            "@cache\ndef f(a, b=1) -> int:\n    \"\"\"Adds.\"\"\"\n    if a:\n        a = 2\n    return a + b\n",
+            "@cache\ndef f(a, b=1) -> int:\n    if a:\n        a = 2\n        return a + b\n",
+        ] {
+            assert_ne!(code(other), base, "{other}");
+        }
     }
 
     #[test]

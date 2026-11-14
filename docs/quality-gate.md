@@ -45,7 +45,7 @@ The files in the table are each linter's default, which a project's [settings](#
 | shellcheck | `**/*.sh` | its defaults |
 | actionlint | `.github/workflows/*.yml`, `*.yaml` | its defaults |
 | clippy | `**/*.rs` and `**/Cargo.toml`, in each Cargo workspace, here the one at the top level | the workspace's `[lints]` and `clippy.toml` |
-| golangci-lint | `**/*.go` and `**/go.mod`, in each Go module | the module's `.golangci.yml`, `.yaml`, `.toml` or `.json` |
+| golangci-lint | `**/*.go` and `**/go.mod`, in each Go module | the module's `.golangci.yml`, `.yaml`, `.toml` or `.json`, the nearest inside the tree |
 
 ruff's rules include the coding rules the agents are given as prose that a linter can apply, so that every harness
 gets them, every time: a docstring on every public module, class, method and function (`D100`-`D104`, `D106`,
@@ -76,8 +76,11 @@ golangci-lint runs as `golangci-lint run --allow-serial-runners --output.json.pa
 --max-issues-per-linter 0 --max-same-issues 0 --issues-exit-code 1 --path-mode abs ./...` in the directory of each
 go.mod among its files, its tests included, but for a module the go tool leaves out of `./...`, as one under
 `testdata` or `vendor` (`linted_module` in `crates/gate/src/golangci.rs`). Which linters it runs, and how, is the
-module's own choice, the configuration golangci-lint finds from the module's directory up, as clippy's lints are the
-workspace's; without one it runs its standard set (errcheck, govet, ineffassign, staticcheck, unused). The gate asks
+module's own choice, as clippy's lints are the workspace's: the gate passes `--config` with the configuration
+golangci-lint would find itself from the module's directory up, but no higher than the tree's top, or `--no-config`
+where there is none (`config_flags`), so that a `.golangci.yml` above the tree or in the home directory, which no change
+shows, cannot change the findings. Without one it runs its standard set (errcheck, govet, ineffassign, staticcheck,
+unused). The gate asks
 for every finding, none held back as a repeat of another, and for exit status 1 on findings, whatever the
 configuration says, and each is an `error` named by its linter, as `golangci-lint errcheck`. Code that does not
 compile is a failed condition naming the type checker's first error, as clippy's is, since golangci-lint places it at

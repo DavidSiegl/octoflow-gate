@@ -276,12 +276,8 @@ impl<'t> Walk<'t> {
     /// The method a call, `node`, calls on a testing variable in scope, as `Errorf` for `t.Errorf(...)`; None for
     /// any other call.
     fn testing_method(&self, node: Node<'t>) -> Option<&'t str> {
-        let callee = node.child_by_field_name("function").filter(|f| f.kind() == "selector_expression")?;
-        let operand = callee.child_by_field_name("operand").filter(|o| o.kind() == "identifier")?;
-        if !self.scope.contains(&self.text.of(operand)) {
-            return None;
-        }
-        Some(self.text.of(callee.child_by_field_name("field")?))
+        let (operand, field) = self.selector_call(node)?;
+        self.scope.contains(&operand).then_some(field)
     }
 
     /// Whether the call `node` is a testify assertion: a function of a package the file imports testify's `assert`

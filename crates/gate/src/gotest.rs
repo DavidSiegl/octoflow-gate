@@ -74,8 +74,17 @@ struct Event {
     test: Option<String>,
     /// What the line printed, when the action is "output".
     output: Option<String>,
-    /// The package that did not build, on the package's "fail" when its tests did not.
+    /// The package that did not build, on the package's "fail" when its tests did not; go 1.24 and later only.
     failed_build: Option<String>,
+}
+
+impl Event {
+    /// Whether the event tells that the package's tests did not build: by `FailedBuild`, or, from a go before 1.24,
+    /// which has no such field, by the package's `FAIL\t<package> [build failed]` line.
+    fn unbuilt(&self) -> bool {
+        let said_unbuilt = |output: &str| output.trim_end().ends_with(" [build failed]");
+        self.failed_build.is_some() || (self.test.is_none() && self.output.as_deref().is_some_and(said_unbuilt))
+    }
 }
 
 /// Runs the tests `names` of the Go package in `dir`, once, as `go test -json -count=1 <flags> -run '^(names)$' .`,
@@ -108,7 +117,7 @@ pub fn run(dir: &Path, names: &[&str], flags: &[&str], timeout: Duration, doing:
     if ![0, 1].contains(&done.status) {
         return Err(problem(format!("go test, {doing}, exited with status {}: {}", done.status, said())));
     }
-    if events.iter().any(|e| e.failed_build.is_some()) {
+    if events.iter().any(Event::unbuilt) {
         return Ok(Ran::Unbuilt);
     }
     let asked: HashSet<&str> = names.iter().copied().collect();

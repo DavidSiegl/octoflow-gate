@@ -142,7 +142,7 @@ pub fn failed(what: &str, path: &Path, e: &std::io::Error) -> String {
 /// symbolic link as a link, to its path in the working tree. A symbolic link is written as it is, wherever it points,
 /// and no file is written or removed through one: a link on the way to a replaced file is replaced by a directory, as
 /// the working tree has one there. A submodule holds the files of the commit the base records for it, as
-/// [`unpack_commit`] writes them.
+/// [`unpack_commit`] writes them, unless `beside` accepts its path: then it holds the working tree's directory.
 ///
 /// Gives back the submodules left empty, as [`unpack_commit`] does. Errs, a clause, when git cannot list or write a
 /// commit, `tar` cannot unpack it, `dest` exists or a file cannot be written.
@@ -154,12 +154,9 @@ pub fn copy_base_with_tests(
 ) -> Result<Vec<(String, String)>, String> {
     std::fs::create_dir(dest).map_err(|e| failed("make", dest, &e))?;
     let empty = unpack_commit(&change.root, &change.base, dest, archive, "")?;
-    // A path the base tracks has no link above it there.
+    // A path the base tracks has no link above it there; it is a directory when the base records a submodule there.
     for old in change.files.iter().filter_map(|f| f.before.as_ref()).filter(|p| beside(p)) {
-        let path = dest.join(old);
-        if path.symlink_metadata().is_ok() {
-            std::fs::remove_file(&path).map_err(|e| failed("remove", &path, &e))?;
-        }
+        remove_entry(&dest.join(old))?;
     }
     for new in change.files.iter().filter_map(|f| f.after.as_ref()).filter(|p| beside(p)) {
         let src = change.root.join(new);
@@ -168,15 +165,21 @@ pub fn copy_base_with_tests(
         }
         let dst = unlinked_path(dest, new)?;
         // A directory the base had where the change has a file or a link: emptied by the removals above, or not.
-        match dst.symlink_metadata() {
-            Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(&dst),
-            Ok(_) => std::fs::remove_file(&dst),
-            Err(_) => Ok(()),
-        }
-        .map_err(|e| failed("remove", &dst, &e))?;
+        remove_entry(&dst)?;
         copy(&src, &dst)?;
     }
     Ok(empty)
+}
+
+/// Removes what is at `path`, a directory with all it holds, nothing when there is nothing, and never through a link
+/// at `path` itself. Errs, a clause, when it cannot.
+fn remove_entry(path: &Path) -> Result<(), String> {
+    match path.symlink_metadata() {
+        Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(path),
+        Ok(_) => std::fs::remove_file(path),
+        Err(_) => Ok(()),
+    }
+    .map_err(|e| failed("remove", path, &e))
 }
 
 /// Writes the files git tracked at `commit` in the repository whose working tree's top is `repo` to `dest`, an

@@ -408,6 +408,23 @@ fn a_test_reading_from_a_submodule_is_judged_at_the_base() {
 }
 
 #[test]
+fn a_change_that_moves_the_commit_of_a_submodule_beside_the_tests_is_judged() {
+    let repo = calc(&[]);
+    add_submodules(&repo, &["tests/fixture"], &[]);
+    let fixture = repo.repo.join("tests/fixture");
+    std::fs::write(fixture.join("notes.txt"), "new notes\n").unwrap();
+    let done = Command::new("git")
+        .current_dir(&fixture)
+        .args(["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit"])
+        .args(["--quiet", "-am", "new notes"])
+        .output()
+        .unwrap();
+    assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+    repo.put("tests/calc.rs", ADDS.as_bytes());
+    assert_eq!(found(&repo), vec![at("tests/calc.rs", fn_line(&repo, "tests/calc.rs", "adds"), "passes-at-base")]);
+}
+
+#[test]
 fn a_submodule_without_the_base_s_commit_is_one_finding() {
     let repo = calc(&[]);
     add_submodules(&repo, &["vendor/lib"], &[]);

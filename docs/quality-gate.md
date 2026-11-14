@@ -619,9 +619,10 @@ tree or at the base, that is not a test file (as for test integrity) or a file t
 A change to the tests alone, or to the tests and the docs, has no "without the change" a test could see. The base
 is the files git tracked at `--base`, as `git archive` writes them, with every one of the change's files that belong
 with the tests (those three kinds) taken from the working tree, or removed where the change removed it, so the
-changed tests keep their fixtures and data. A submodule
-holds the files of the commit the base records for it, from its own repository in the working tree; one that is not
-initialised there, or lacks that commit, is left empty, and a `not-run` finding names it. pytest, in the project's
+changed tests keep their fixtures and data. A submodule holds the files of the commit the base records for it, from
+its own repository in the working tree, unless it is one of those files, as a fixture repository under `tests/` whose
+commit the change moves, which the working tree's directory replaces; one that is not initialised there, or lacks that
+commit, is left empty, and a `not-run` finding names it. pytest, in the project's
 Python, with the configurations flaky-tests' reruns get, found the same way in the base, once for each, and the
 copy's own `TMPDIR`, first collects the changed test files with `--continue-on-collection-errors`, then runs those of
 the changed tests it collected, all within the one time limit:

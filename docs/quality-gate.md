@@ -260,7 +260,9 @@ removing one or changing its output is not seen (#73). The findings are Python's
   set, as on the newest toolchain, where the tests that matter run; a `go1.N` above it, as `go1.99`, is set by no
   toolchain and is a custom tag, so until the constant is raised a test file naming a new release's tag is a `skip`.
   A `platform-only` finding is one to weigh, as Rust's is; a custom tag such as `integration` or `ignore` beside
-  those names makes the line a `skip`, as does an expression that holds nowhere, as `cgo && !cgo` or `!go1.21`;
+  those names makes the line a `skip`, as does an expression that holds nowhere, as `cgo && !cgo` or `!go1.21`. A
+  test file's name constrains it as such a line does, so a `_GOOS`, `_GOARCH` or `_GOOS_GOARCH` suffix the change
+  gives it, as `calc_test.go` renamed to `calc_windows_test.go`, is a `platform-only` finding about the whole file;
 - `fewer-assertions`: a kept test with fewer assertions than at the base. An assertion is a call, in the test's own
   body or a `func` literal in it, of testify's `assert` or `require` packages (`assert.Equal(t, 3, got)`, under the
   names the file imports them by; `assert.New` is none, and a package imported with `.` is not followed, so its

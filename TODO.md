@@ -225,6 +225,12 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   `go1.28`, so the constant wants raising, in a `patch` release, once the first of them ships, and so on for each
   release. The user's choice in go-support/01 (2026-11-11), over reading the tag set from the go tool on `PATH`, which
   would make the finding depend on the machine. Closes only if that choice is revisited.
+- **A Go test file's name and its constraint lines are judged apart.** A `_windows` suffix the change gives a test
+  file's name is a `platform-only` finding whatever the file's `//go:build` says (`GoChange::platform_named`,
+  `crates/gate/src/parser_checks.rs`), and a constraint line is judged without the name (`constraint::weakenings`), so
+  `calc_test.go` with `//go:build linux` renamed to `calc_windows_test.go`, which then builds nowhere, is a finding to
+  weigh rather than a failing `skip`. Found with todo/28 (2026-11-14). Closes with the name's suffix and'd into the
+  constraint each is judged by, which needs the front end told the file's name.
 - **A comment or blank line inside a Go block of statements is a line to cover.** A Go coverage profile gives a block
   by where it starts and ends, not by its lines, so `go_profile_lines` (`crates/gate/src/coverage.rs`) counts every
   line between, covered or not as the block is, as gocover-cobertura and Codecov read profiles too. Found with

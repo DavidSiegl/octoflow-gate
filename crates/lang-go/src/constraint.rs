@@ -1,6 +1,7 @@
 //! A Go file's build constraint, `//go:build expr`, or in a file with none the legacy `// +build` lines
 //! (<https://pkg.go.dev/cmd/go#hdr-Build_constraints>), read as what it does to the tests of a `_test.go` file: it
-//! builds them only where the constraint holds, so it turns them off everywhere else.
+//! builds them only where the constraint holds, so it turns them off everywhere else. A file's name constrains it too
+//! ([`platform_suffix`]).
 
 use model::{first_line, Lines, Weakening, WeakeningKind};
 
@@ -95,6 +96,25 @@ pub fn weakenings(header: &[(&str, u32)]) -> Vec<Weakening> {
     });
     let platform_only = whole.flatten().is_some_and(|e| e.names_no_custom_tag() && e.holds_on_some_build());
     lines.into_iter().map(|(comment, at, _)| weakening(comment, at, platform_only)).collect()
+}
+
+/// The suffix of the Go file name at `path`, from the tree's top level, that builds the file on one platform alone,
+/// as written, as `_windows` of `calc_windows_test.go`: its last `_`-separated part before `.` but for a `_test`, a
+/// `GOOS` or `GOARCH` value ([`GOOSES`], [`GOARCHES`]), or its last two, a `GOOS` then a `GOARCH` value, as go/build
+/// reads a file name (<https://pkg.go.dev/go/build#hdr-Build_Constraints>). None for a name with no such suffix, as
+/// `windows_test.go`, whose part before its first `_` is no suffix, or `calc_unix_test.go`, as `unix` constrains a
+/// file only in a constraint line.
+pub fn platform_suffix(path: &[u8]) -> Option<String> {
+    let name = path.rsplit(|&b| b == b'/').next().unwrap_or(path);
+    let name = std::str::from_utf8(name).ok()?.split('.').next().unwrap_or_default();
+    let name = name.strip_suffix("_test").unwrap_or(name);
+    let parts: Vec<&str> = name.split('_').skip(1).collect();
+    let suffix = match parts.as_slice() {
+        [.., os, arch] if GOOSES.contains(os) && GOARCHES.contains(arch) => &parts[parts.len() - 2..],
+        [.., last] if GOOSES.contains(last) || GOARCHES.contains(last) => &parts[parts.len() - 1..],
+        _ => return None,
+    };
+    Some(suffix.iter().map(|p| format!("_{p}")).collect())
 }
 
 /// The constraint a `//go:build` line, `comment`, writes; None inside for one go cannot read, and None for a comment
@@ -314,6 +334,20 @@ mod tests {
 
     fn kind(comment: &str) -> Option<WeakeningKind> {
         weakenings(&[(comment, 1)]).first().map(|w| w.kind)
+    }
+
+    #[test]
+    fn a_file_name_s_suffix_is_read_from_its_name_alone_up_to_its_first_dot() {
+        for (path, suffix) in [
+            ("pkg/calc_windows_test.go", Some("_windows")),
+            ("calc_windows.pb_test.go", Some("_windows")),
+            ("calc_darwin_arm64.go", Some("_darwin_arm64")),
+            ("calc_x_amd64_test.go", Some("_amd64")),
+            ("windows/calc_test.go", None),
+            ("calc_windows_x_test.go", None),
+        ] {
+            assert_eq!(platform_suffix(path.as_bytes()).as_deref(), suffix, "{path}");
+        }
     }
 
     #[test]

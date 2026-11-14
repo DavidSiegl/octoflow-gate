@@ -930,6 +930,31 @@ fn go_of_a_module_whose_go_mod_the_change_deletes_is_still_read() {
     assert_eq!(rules, [(Some("sub/calc_test.go".into()), "test-integrity removed-test".into())]);
 }
 
+#[test]
+fn a_go_test_file_renamed_to_a_goos_or_goarch_name_is_platform_only() {
+    let platform_only = |path: &str| vec![(Some(path.to_string()), None, "test-integrity platform-only".to_string())];
+    for (from, to, expected) in [
+        ("calc_test.go", "calc_windows_test.go", platform_only("calc_windows_test.go")),
+        ("calc_test.go", "calc_linux_amd64_test.go", platform_only("calc_linux_amd64_test.go")),
+        ("calc_test.go", "calc_arm64_test.go", platform_only("calc_arm64_test.go")),
+        ("calc_linux_test.go", "calc_windows_test.go", platform_only("calc_windows_test.go")),
+        ("calc_test.go", "windows_test.go", vec![]),
+        ("calc_test.go", "calc_unix_test.go", vec![]),
+        ("calc_test.go", "calc_windows_extra_test.go", vec![]),
+        ("calc_windows_test.go", "calc_test.go", vec![]),
+        ("calc_windows_test.go", "add_windows_test.go", vec![]),
+    ] {
+        let repo = go_module("go.mod", &[]);
+        if from != "calc_test.go" {
+            repo.git(&["mv", "calc_test.go", from]);
+            repo.git(&["commit", "--quiet", "-m", "rename"]);
+        }
+        repo.git(&["mv", from, to]);
+        let found: Vec<_> = found(&repo).into_iter().map(|(path, line, rule, _)| (path, line, rule)).collect();
+        assert_eq!(found, expected, "{from} to {to}");
+    }
+}
+
 /// A Go function scoring 16, over the limit, that binds the vague name `info`, after `header`, in package calc.
 fn big_go(header: &str) -> String {
     let ifs: String = (0..16).map(|k| format!("\tif x == {k} {{\n\t\tx += {k}\n\t}}\n")).collect();

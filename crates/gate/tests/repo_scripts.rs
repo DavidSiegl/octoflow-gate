@@ -85,6 +85,11 @@ struct Judged {
 /// Runs `repo`'s scripts/gate as outside a Jenkins build, with stubs first on PATH for the tools it asks for before
 /// it judges, uv among them, which runs what it is given, and the released gate exiting `gate_exit`.
 fn run_gate(repo: &Repo, gate_exit: i32) -> Judged {
+    run_gate_with(repo, gate_exit, &[])
+}
+
+/// [`run_gate`], with the environment variables `env`, (name, value), set beside.
+fn run_gate_with(repo: &Repo, gate_exit: i32, env: &[(&str, &Path)]) -> Judged {
     let uv = "[ \"$1\" = sync ] && exit 0\nshift\nwhile [ \"${1#--}\" != \"$1\" ]; do shift; done\nexec \"$@\"";
     let mut bin = repo.stub("uv", uv);
     let installed = "echo clippy-x\necho llvm-tools-x";
@@ -101,6 +106,8 @@ fn run_gate(repo: &Repo, gate_exit: i32) -> Judged {
         .env_remove("WORKSPACE")
         .env_remove("WORKSPACE_TMP")
         .env_remove("CHANGE_TARGET")
+        .env_remove("JENKINS_URL")
+        .envs(env.iter().copied())
         .output()
         .unwrap();
     Judged {
@@ -156,6 +163,30 @@ fn the_release_is_fetched_by_the_judge_s_script_not_the_change_s() {
     repo.put("ci/fetch-gate.sh", b"#!/bin/sh\necho 'fetched by the change' >&2\nexit 1\n");
     let judged = run_gate(&repo, 0);
     assert_eq!((judged.status, judged.stderr.as_str()), (Some(2), "fetched by the judge\n"));
+}
+
+#[test]
+fn a_workspace_outside_a_jenkins_build_changes_nothing() {
+    let repo = script_repo();
+    commit_judge(&repo, "0.7.0", &fetching());
+    let workspace = repo.outside.join("workspace");
+    let judged = run_gate_with(&repo, 0, &[("WORKSPACE", &workspace)]);
+    assert_eq!(judged.status, Some(0), "{}", judged.stderr);
+}
+
+#[test]
+fn a_jenkins_build_keeps_its_temporary_files_in_its_workspace() {
+    let repo = script_repo();
+    commit_judge(&repo, "0.7.0", &fetching());
+    let (workspace, workspace_tmp) = (repo.outside.join("workspace"), repo.outside.join("workspace@tmp"));
+    let jenkins = Path::new("https://jenkins.example.com/");
+    let judged = run_gate_with(&repo, 0, &[("JENKINS_URL", jenkins), ("WORKSPACE", &workspace)]);
+    assert_eq!(judged.status, Some(2), "{}", judged.stderr);
+    assert!(judged.stderr.contains("WORKSPACE_TMP is not"), "{}", judged.stderr);
+    let build = [("JENKINS_URL", jenkins), ("WORKSPACE", &workspace), ("WORKSPACE_TMP", &workspace_tmp)];
+    let judged = run_gate_with(&repo, 0, &build);
+    assert_eq!(judged.status, Some(0), "{}", judged.stderr);
+    assert!(workspace_tmp.join("tmp").is_dir());
 }
 
 #[test]

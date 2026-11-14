@@ -135,10 +135,15 @@ change cannot weaken its tests unseen. Each of these is a finding:
   edits code outside the tests, which is Python source as **Passes at base** below counts it, on either side of the
   change: the "update the expected value to match the output" move. A value written of literals alone is one
   literal, its sign and its brackets with it, so `-5` becoming `5` and `("a",)` becoming `"a"` count; parentheses
-  around such a value change nothing. The finding names the assertion before and after. An expected value held in a
-  constant counts too: when a kept test's assertions name a constant of its own file at the base and still name it,
-  bare or as `module.NAME` (the module by its dotted name or a module-level import alias of it), and the constant's
-  expression changed other than in layout, or it is no longer a
+  around such a value change nothing. The finding names the assertion before and after. The two sides' assertions
+  are paired within runs of consecutive assertions of one shape, in every language: a run that kept its length is
+  paired in order, so raising every value of a sequence by one is a finding at each, even where the new values repeat
+  old ones; in a run that grew or shrank, those that stayed whole are matched first and the rest paired in order only
+  between two such matches with as many on each side, so a case appended to a table leaves the others unchanged, and
+  an edit beside an added assertion of its shape, which cannot be told from an added one, is not reported. An expected
+  value held in a constant counts too: when a kept test's assertions name a constant of its own file at the base and
+  still name it, bare or as `module.NAME` (the module by its dotted name or a module-level import alias of it), and
+  the constant's expression changed other than in layout, or it is no longer a
   constant, that is one finding per constant and test, at the test's first assertion naming it, naming the constant
   and its line. A constant whose name the test binds anywhere, even by a binding that does nothing (`global NAME`, a
   comprehension target, a lambda parameter), is not checked, so such a line hides an edited constant; a reviewer
@@ -213,9 +218,8 @@ order. The findings are Python's, read of Rust:
   `Result` thrown away that holds neither, as `let _ = check();` or `check().ok();`, is not seen, since that is
   also how a test's cleanup ignores a failure, nor a `catch_unwind` whose result is bound to a name and never read;
 - `expected-value-changed`: a kept test's assertion, its macro and its shape the same, whose literals changed, in a
-  change that also edits Rust code outside the tests, on either side. The assertions of the two sides are aligned
-  first on those that stayed whole, then by macro and shape between them, so one added or removed beside others of its
-  shape leaves them unchanged, in every language. An expected value held in a constant counts too, as Python's does: when a kept test's assertions name a
+  change that also edits Rust code outside the tests, on either side, the two sides' assertions paired as Python's
+  are. An expected value held in a constant counts too, as Python's does: when a kept test's assertions name a
   constant of its own file at the base and still name it, bare or by a path ending in it, as `super::EXPECTED`, and its
   value changed other than in layout or comments, or it is no longer a constant, that is one finding per constant and
   test, at the test's first assertion naming it. A constant is a `const` or `static` outside any `fn`, `impl`, `trait`

@@ -333,6 +333,17 @@ fn an_expected_value_changed_with_the_code_is_reported_as_the_pair_and_alone_not
 }
 
 #[test]
+fn expected_values_moved_onto_their_neighbours_old_ones_are_each_changed() {
+    let path = "tests/test_s.py";
+    let base = "def test_s():\n    assert next(c) == 1\n    assert next(c) == 2\n    assert next(c) == 3\n";
+    let raised = base.replace("== 3", "== 4").replace("== 2", "== 3").replace("== 1", "== 2");
+    let lines = |files: &[ChangedFile]| found(files).0.into_iter().map(|f| f.1).collect::<Vec<_>>();
+    assert_eq!(lines(&[code_edit(), edited(path, base, &raised)]), [Some(2), Some(3), Some(4)]);
+    let base = "def test_s():\n    assert f(0) == 1\n    assert f(0) == 2\n";
+    assert_eq!(lines(&[code_edit(), edited(path, base, &base.replace("== 1", "== 2"))]), [Some(2)]);
+}
+
+#[test]
 fn a_string_requoted_is_no_changed_value_and_one_of_another_prefix_or_text_is() {
     let base = "def test_s():\n    assert name() == 'a' \"b\"\n    assert f'{x}-{y}' == b'c'\n";
     let path = "tests/test_s.py";

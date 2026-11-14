@@ -361,24 +361,39 @@ fn first_added(file: &ChangedFile, w: &Weakening) -> Option<u32> {
     file.added.range(w.lines.first..=w.lines.last).next().copied()
 }
 
-/// The (before, after) pairs of a test's assertions `was` and `now` that kept their shape but not their literals. The
-/// two sides are aligned by [`matching_pairs`] first on whole assertions, shape and literals, and then, in each gap
-/// between two of those matches, on shapes alone: an assertion added or removed beside unchanged ones of its shape,
-/// as a case appended to a table, leaves them matched to themselves rather than shifted onto their neighbours.
+/// The (before, after) pairs of a test's assertions `was` and `now` that kept their shape but not their literals.
+///
+/// Each side is cut into runs of consecutive assertions of one shape, and the runs of the two sides are aligned on
+/// their shapes by [`matching_pairs`]. A run that kept its length is paired in order, so that every expected value of
+/// a sequence or a table edited at once is reported, even where the new values repeat old ones. In a run that grew or
+/// shrank, the assertions that stayed whole are matched first, so that one added or removed, as a case appended to a
+/// table, leaves the others matched to themselves; between two such matches, the assertions are paired in order only
+/// where the two sides hold as many, and where they do not, which was edited and which added cannot be told.
 fn changed_literals<'a>(was: &'a [Assertion], now: &'a [Assertion]) -> Vec<(&'a Assertion, &'a Assertion)> {
-    let whole = |x: &'a [Assertion]| x.iter().map(|x| (&x.shape, &x.literals)).collect::<Vec<_>>();
+    let runs = |x: &'a [Assertion]| x.chunk_by(|p, q| p.shape == q.shape).collect::<Vec<_>>();
+    let (a, b) = (runs(was), runs(now));
+    let shapes = |runs: &[&'a [Assertion]]| runs.iter().map(|r| r[0].shape.as_str()).collect::<Vec<_>>();
+    let mut out = vec![];
+    for (i, j) in matching_pairs(&shapes(&a), &shapes(&b)) {
+        out.extend(paired_in_run(a[i], b[j]));
+    }
+    out.retain(|(x, y)| x.literals != y.literals);
+    out
+}
+
+/// The pairs of `was` and `now`, two aligned runs of assertions of one shape, as [`changed_literals`] pairs them.
+fn paired_in_run<'a>(was: &'a [Assertion], now: &'a [Assertion]) -> Vec<(&'a Assertion, &'a Assertion)> {
+    if was.len() == now.len() {
+        return was.iter().zip(now).collect();
+    }
+    let whole = |x: &'a [Assertion]| x.iter().map(|x| &x.literals).collect::<Vec<_>>();
     let kept = matching_pairs(&whole(was), &whole(now));
     // Each gap, as (start in was, start in now), ends at the next kept pair, the last at both sides' ends.
     let ends = kept.iter().copied().chain([(was.len(), now.len())]);
     let starts = [(0, 0)].into_iter().chain(kept.iter().map(|&(i, j)| (i + 1, j + 1)));
-    let mut out = vec![];
-    for ((alo, blo), (ahi, bhi)) in starts.zip(ends) {
-        let shapes = |x: &'a [Assertion]| x.iter().map(|x| x.shape.as_str()).collect::<Vec<_>>();
-        let pairs = matching_pairs(&shapes(&was[alo..ahi]), &shapes(&now[blo..bhi]));
-        out.extend(pairs.into_iter().map(|(i, j)| (&was[alo + i], &now[blo + j])));
-    }
-    out.retain(|(x, y)| x.literals != y.literals);
-    out
+    let gaps = starts.zip(ends).filter(|((alo, blo), (ahi, bhi))| ahi - alo == bhi - blo);
+    let in_gaps = gaps.flat_map(|((alo, blo), (ahi, bhi))| was[alo..ahi].iter().zip(&now[blo..bhi]));
+    in_gaps.chain(kept.iter().map(|&(i, j)| (&was[i], &now[j]))).collect()
 }
 
 /// The pairs (i, j), ascending, of the elements `a[i] == b[j]` that Python's

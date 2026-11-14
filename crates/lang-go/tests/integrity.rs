@@ -322,6 +322,9 @@ fn a_case_added_to_or_removed_from_a_table_with_the_code_leaves_its_neighbours_u
     assert_eq!(changed(&test), vec![]);
     let test = edit(&base, "\t\t{in: 3, want: 6},\n", "");
     assert_eq!(wheres(&changed(&test)), [at(41, "fewer-assertions")]);
+    let test = edit(&edit(&base, "{in: 3, want: 6}", "{in: 3, want: 7}"), "{in: 2, want: 4}", "{in: 3, want: 6}");
+    let found = changed(&test);
+    assert_eq!(wheres(&found), [at(43, "expected-value-changed"), at(44, "expected-value-changed")], "each moved on");
 }
 
 /// A test with a table of cases, `cases`, ranged over by name and keyed by a constant, beside literals that are no

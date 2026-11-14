@@ -734,8 +734,8 @@ The gate is `GATE: ERROR` when any of these holds, and `GATE: OK` otherwise:
   import path, through the `module` line of the go.mod nearest above each changed `.go` file.
 
 Exit status 0 means `GATE: OK`, 1 `GATE: ERROR`, and 2 that the gate could not judge (a bad argument, `REV` names no
-commit, not a git tree, settings it cannot read, an unreadable report, a source file of the change it cannot read),
-in which case it writes nothing; 130 (`EXIT_INTERRUPTED`) means Ctrl-C stopped it, and it wrote nothing either.
+commit, not a git tree, settings it cannot read, an unreadable report, a source file of the change it cannot read), in
+which case it writes nothing; 130 (`EXIT_INTERRUPTED`) means Ctrl-C or SIGTERM stopped it, and it wrote nothing either.
 
 A change to a file whose contents are not UTF-8, such as a Latin-1 line or a binary file that git diffs as text,
 is judged like any other. The gate reads the diff, git's file lists and the linters' output as they were printed,
@@ -988,7 +988,7 @@ judged is a failed condition of its own, naming the command, and none of its rep
 
 A coverage report a command wrote that cannot be read stops the gate, which exits 2, as one `--coverage` names does.
 `--tests` or `--coverage`, given at all, replace every command: a CI that has already run the tests passes their
-reports, and no command runs. Ctrl-C during a command kills its process group, and the gate exits 130.
+reports, and no command runs. Ctrl-C or SIGTERM during a command kills its process group, and the gate exits 130.
 
 A CI that judges a change by `main`'s settings, as below, runs `main`'s commands, so a change cannot alter which
 commands judge it.

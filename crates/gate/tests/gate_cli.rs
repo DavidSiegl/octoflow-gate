@@ -174,6 +174,34 @@ fn a_change_it_cannot_judge_writes_nothing_and_exits_2() {
 }
 
 #[test]
+fn sigterm_stops_what_the_gate_started_writes_nothing_and_exits_130() {
+    let repo = repo();
+    repo.put("gate.toml", b"[[test]]\nname = \"slow\"\n\
+                           command = [\"sh\", \"-c\", \"echo $$ > pid; mv pid started; exec sleep 30\"]\n\
+                           junit = [\"results.xml\"]\n");
+    let out = repo.outside.join("quality.md");
+    let mut gate = Command::new(env!("CARGO_BIN_EXE_gate")).current_dir(&repo.repo)
+        .args(["--base", "HEAD", "--out"]).arg(&out)
+        .spawn().unwrap();
+    let start = std::time::Instant::now();
+    while !repo.repo.join("started").exists() {
+        assert!(start.elapsed() < std::time::Duration::from_secs(30), "the test command never started");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let tool = std::fs::read_to_string(repo.repo.join("started")).unwrap().trim().to_string();
+    let sent = Command::new("kill").args(["-TERM", &gate.id().to_string()]).status().unwrap();
+    assert!(sent.success());
+    let done = gate.wait().unwrap();
+    assert_eq!(done.code(), Some(130));
+    assert!(start.elapsed() < std::time::Duration::from_secs(20), "{:?}", start.elapsed());
+    assert!(!out.exists() && !repo.outside.join("quality.json").exists());
+    // The tool's session is its own process group, whose leader the gate started: none of it is left.
+    let left = Command::new("kill").args(["-0", "--", &format!("-{tool}")]).stderr(std::process::Stdio::null())
+        .status().unwrap();
+    assert!(!left.success(), "a process of the tool's session {tool} is still running");
+}
+
+#[test]
 fn ctrl_c_writes_nothing_and_exits_130() {
     let repo = repo();
     repo.put("gate.toml", b"[[test]]\nname = \"slow\"\ncommand = [\"sh\", \"-c\", \"touch started; sleep 30\"]\n\

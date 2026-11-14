@@ -1,6 +1,6 @@
 //! Running the programs the gate judges a change with, git, a linter or a test command: each in a session of its
-//! own, killed with all it started when it overruns or when Ctrl-C stops the gate, and the gate's own exit on
-//! Ctrl-C.
+//! own, killed with all it started when it overruns or when Ctrl-C or SIGTERM stops the gate, and the gate's own exit
+//! on those.
 
 use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
@@ -19,7 +19,8 @@ const KILL_WAIT: Duration = Duration::from_secs(5);
 /// How often the gate looks whether a process has exited, so the most it waits on past the exit.
 const POLL: Duration = Duration::from_millis(50);
 
-/// The gate's exit status when Ctrl-C stopped it, having written no report: 128 + SIGINT, as a shell reports it.
+/// The gate's exit status when Ctrl-C or SIGTERM stopped it, having written no report: 128 + SIGINT, as a shell
+/// reports Ctrl-C; SIGTERM gives the same, so that a caller has one status to tell a stop by.
 pub const EXIT_INTERRUPTED: i32 = 130;
 
 /// What a process printed, and how it ended.
@@ -109,9 +110,9 @@ pub struct Extras<'a> {
 /// Once it has exited, or been killed, every process left in its group, such as a server it started, is killed too, and
 /// what was printed is read until no process holds the output open, and the input written until none holds it open, for
 /// at most [`KILL_WAIT`] more: only one that left the group can still hold them, and what that prints later is lost. So
-/// the call returns within `timeout`, the soft stop's grace and [`KILL_WAIT`]. When Ctrl-C reaches the gate meanwhile,
-/// the group is killed and the gate exits through [`exit_interrupted`]. Errs when `argv` cannot be started, and when
-/// its input cannot be written for a reason other than the process ending before it read it all.
+/// the call returns within `timeout`, the soft stop's grace and [`KILL_WAIT`]. When Ctrl-C or SIGTERM reaches the gate
+/// meanwhile, the group is killed and the gate exits through [`exit_interrupted`]. Errs when `argv` cannot be started,
+/// and when its input cannot be written for a reason other than the process ending before it read it all.
 ///
 /// The process starts a session of its own, so it has no controlling terminal: the terminal's Ctrl-C is the gate's
 /// to pass on, and a tool that would read the terminal, or write to it under `stty tostop`, fails rather than
@@ -206,8 +207,8 @@ fn start(argv: &[&OsStr], cwd: &Path, stdout: Stdio, stderr: Stdio, extras: &Ext
     Ok((child, group))
 }
 
-/// How `child` exited, looking every [`POLL`]; None when it was still running at `deadline`. When Ctrl-C reaches
-/// the gate meanwhile, kills `group` and exits through [`exit_interrupted`].
+/// How `child` exited, looking every [`POLL`]; None when it was still running at `deadline`. When Ctrl-C or SIGTERM
+/// reaches the gate meanwhile, kills `group` and exits through [`exit_interrupted`].
 fn wait(child: &mut Child, group: &Group, deadline: Option<Instant>) -> std::io::Result<Option<ExitStatus>> {
     loop {
         if interrupted() {
@@ -285,46 +286,50 @@ impl Printed {
     }
 }
 
-/// True once Ctrl-C has reached the gate since [`catch_interrupt`].
+/// True once Ctrl-C or SIGTERM has reached the gate since [`catch_interrupt`].
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 
-/// Makes Ctrl-C stop the gate, through [`run`] and [`interrupted`], unless the gate was started with SIGINT ignored,
-/// as a command a Jenkins `sh` step runs is: then it stays ignored, for the gate and every process it starts. Call it
-/// once, at the start. Errs when the handler cannot be installed, as Ctrl-C would then leave the processes the gate
-/// starts running.
+/// Makes Ctrl-C (SIGINT) and SIGTERM, as `timeout` sends, stop the gate, through [`run`] and [`interrupted`], with
+/// what it started killed, unless the gate was started with that signal ignored, as a command a Jenkins `sh` step runs
+/// is SIGINT: then it stays ignored, for the gate and every process it starts. Call it once, at the start. Errs when a
+/// handler cannot be installed, as the signal would then leave the processes the gate starts running.
 pub fn catch_interrupt() -> std::io::Result<()> {
     extern "C" fn note(_: libc::c_int) {
         INTERRUPTED.store(true, Ordering::SeqCst);
     }
-    // SAFETY: sigaction(2) with a zeroed struct read back, and then a handler that only stores to an atomic, which is
-    // async-signal-safe.
-    #[allow(unsafe_code, reason = "sigaction(2) has no safe wrapper in std")]
-    unsafe {
-        let mut was: libc::sigaction = std::mem::zeroed();
-        if libc::sigaction(libc::SIGINT, std::ptr::null(), &mut was) != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        if was.sa_sigaction == libc::SIG_IGN {
-            return Ok(());
-        }
-        let mut action: libc::sigaction = std::mem::zeroed();
-        action.sa_sigaction = note as extern "C" fn(libc::c_int) as libc::sighandler_t;
-        if libc::sigemptyset(&mut action.sa_mask) != 0
-            || libc::sigaction(libc::SIGINT, &action, std::ptr::null_mut()) != 0
-        {
-            return Err(std::io::Error::last_os_error());
+    for signal in [libc::SIGINT, libc::SIGTERM] {
+        // SAFETY: sigaction(2) with a zeroed struct read back, and then a handler that only stores to an atomic,
+        // which is async-signal-safe.
+        #[allow(unsafe_code, reason = "sigaction(2) has no safe wrapper in std")]
+        unsafe {
+            let mut was: libc::sigaction = std::mem::zeroed();
+            if libc::sigaction(signal, std::ptr::null(), &mut was) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if was.sa_sigaction == libc::SIG_IGN {
+                continue;
+            }
+            let mut action: libc::sigaction = std::mem::zeroed();
+            action.sa_sigaction = note as extern "C" fn(libc::c_int) as libc::sighandler_t;
+            if libc::sigemptyset(&mut action.sa_mask) != 0
+                || libc::sigaction(signal, &action, std::ptr::null_mut()) != 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
         }
     }
     Ok(())
 }
 
-/// Whether Ctrl-C has reached the gate, which must then stop through [`exit_interrupted`] before it writes a report.
+/// Whether Ctrl-C or SIGTERM has reached the gate, which must then stop through [`exit_interrupted`] before it writes
+/// a report.
 pub fn interrupted() -> bool {
     INTERRUPTED.load(Ordering::SeqCst)
 }
 
-/// Ends the gate as Ctrl-C does, saying so on standard error, with [`EXIT_INTERRUPTED`]; no report is written past
-/// this. The one place the gate exits other than from main, so that a Ctrl-C deep in a check needs no path back up.
+/// Ends the gate as Ctrl-C or SIGTERM does, saying so on standard error, with [`EXIT_INTERRUPTED`]; no report is
+/// written past this. The one place the gate exits other than from main, so that a stop deep in a check needs no path
+/// back up.
 pub fn exit_interrupted() -> ! {
     eprintln!("interrupted; the report was not written whole");
     std::process::exit(EXIT_INTERRUPTED)

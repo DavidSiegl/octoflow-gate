@@ -227,7 +227,8 @@ fn dotted_root<'t>(mut node: Node, text: Text<'t>) -> Option<&'t str> {
 }
 
 /// Whether `identifier` is a name Python's ast reads as an expression: not an attribute's own name, a keyword
-/// argument's, a parameter's, a def's or class's, an import's, a global's, an except's alias or a pattern's.
+/// argument's, a parameter's, a def's or class's, a type parameter's ([`names_type_parameter`]), an import's, a
+/// global's, an except's alias or a pattern's.
 fn is_expression(identifier: Node) -> bool {
     let Some(parent) = identifier.parent() else { return true };
     let field = |name: &str| parent.child_by_field_name(name) == Some(identifier);
@@ -247,8 +248,42 @@ fn is_expression(identifier: Node) -> bool {
             let holder = parent.parent().and_then(|as_pattern| as_pattern.parent());
             !holder.is_some_and(|h| matches!(h.kind(), "except_clause" | "except_group_clause"))
         }
+        "type" | "splat_type" => !names_type_parameter(identifier),
         _ => true,
     }
+}
+
+/// Whether `identifier` is the name a type parameter declares, as `T`, `Ts` and `P` of `def f[T: int, *Ts, **P]()`,
+/// of a def, a class or a type alias, where ast has no Name; not one in its bound, or in a subscript of a type, as
+/// `list[T]`, which tree-sitter reads with the same nodes.
+fn names_type_parameter(identifier: Node) -> bool {
+    // Each parameter is a `type` in the `type_parameter` list: the name alone, a `splat_type` around it, or a
+    // `constrained_type` whose first `type` is the name and whose second its bound.
+    let declared = |ty: Node| ty.kind() == "type" && ty.parent().is_some_and(declares_type_parameters);
+    let Some(parent) = identifier.parent() else { return false };
+    let Some(above) = parent.parent() else { return false };
+    match parent.kind() {
+        "splat_type" => declared(above),
+        "type" if above.kind() == "constrained_type" => {
+            above.named_child(0) == Some(parent) && above.parent().is_some_and(declared)
+        }
+        _ => declared(parent),
+    }
+}
+
+/// Whether `node` is a `type_parameter` list that declares its parameters: a def's or a class's, or the one after a
+/// type alias's name, rather than a type's subscript.
+fn declares_type_parameters(node: Node) -> bool {
+    let Some(parent) = node.parent().filter(|_| node.kind() == "type_parameter") else { return false };
+    if parent.child_by_field_name("type_parameters") == Some(node) {
+        return true;
+    }
+    // `type A[T] = …` is read as a generic_type `A[T]` that is the alias's left side.
+    let alias = parent.parent().filter(|ty| ty.kind() == "type").and_then(|ty| Some((ty, ty.parent()?)));
+    parent.kind() == "generic_type"
+        && alias.is_some_and(|(ty, statement)| {
+            statement.kind() == "type_alias_statement" && statement.child_by_field_name("left") == Some(ty)
+        })
 }
 
 /// Every name `node` binds anywhere inside it, whatever the scope: by assignment of any kind, as a parameter of it
@@ -470,3 +505,4 @@ fn imports<'t>(root: Node, text: Text<'t>) -> Vec<(Option<String>, String, Optio
     }
     out
 }
+

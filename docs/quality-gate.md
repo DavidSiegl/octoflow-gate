@@ -666,12 +666,12 @@ The targets are found from the copy's module tree and `cargo metadata`: each cra
 of the package nearest above it whose root file it is, so a `[[test]] path`, a module of `src/main.rs` beside a
 `src/lib.rs`, benches and examples are each run in their own target. A test in a module several targets share, as a
 `tests/common/mod.rs` two integration tests declare, is run in each, and passes at the base only if it passes in every
-one. A crate root no target is built from, as a build script that `#[path]`s a module of the library, adds no
-target. A test no target builds is a `not-run` finding, and so is one a crate root reaches whose package `cargo
-metadata` cannot read, since a target there may build it too. A target whose tests do not compile at the base
-(rustc's `could not compile`) counts as failing there, which is what the check expects of a test that needs the
-change, and gives no finding: so a change that adds a function and a test file calling it is judged as one whose tests
-fail at the base. Any other cargo error, as a lock file
+one. A build script's crate root, as one that `#[path]`s a module of the library, adds no target. A test no target
+builds is a `not-run` finding, and so is one reached from a crate root whose target cannot be told, since that target
+may build it too: one whose package `cargo metadata` cannot read, or that the package nearest above it lists as no
+target's root. A target whose tests do not compile at the base (rustc's `could not compile`) counts as failing there,
+which is what the check expects of a test that needs the change, and gives no finding: so a change that adds a
+function and a test file calling it is judged as one whose tests fail at the base. Any other cargo error, as a lock file
 `--locked` refuses, is a `not-run` finding. The findings are those above, `cargo nextest` in place of pytest; a test
 passes when every case nextest reports under its name passed, and a test it did not report, as one a `cfg` leaves out at
 the base, gives nothing. A test edited by removing its first attribute, as an `#[ignore]`, counts as edited. The target

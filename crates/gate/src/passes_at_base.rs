@@ -9,9 +9,9 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use checks::Finding;
-use model::Unreadable;
 use serde::Deserialize;
 
+use crate::base_findings::{budget_reached, submodules_left_empty, unread_not_run};
 use crate::changed_tests::{changed_tests, ChangedTest};
 use crate::copies::{copy_base_with_tests, failed, finding, in_scratch_directory, sort_by_place, Budget};
 use crate::go_at_base::go_at_base;
@@ -46,38 +46,6 @@ pub fn passes_at_base(sources: &Sources, budget: u64) -> Vec<Finding> {
     out.extend(go_at_base(&sources.go, &budget));
     sort_by_place(&mut out);
     out
-}
-
-/// The check's finding that `budget` ran out `when`, a clause such as "while it collected the changed tests",
-/// stopping `runner`, the test runner as it is named, such as "cargo nextest".
-pub fn budget_reached(budget: &Budget, runner: &str, when: &str) -> Finding {
-    let message = format!(
-        "{runner} was stopped at {} seconds (`--base-run-budget`) {when}, so none of them was judged.",
-        budget.seconds
-    );
-    finding(None, None, "budget-reached", message)
-}
-
-/// The `not-run` finding on a file the change edits that could not be read, at `path`, for `unreadable`'s reason:
-/// the tests in it were not run.
-pub fn unread_not_run((path, unreadable): (&OsStr, &Unreadable)) -> Finding {
-    let message = format!("{}, so its tests were not run at the base.", unreadable.why);
-    finding(Some(path), unreadable.line, "not-run", message)
-}
-
-/// The `not-run` finding on `empty`, the submodules a copy of the base leaves empty, each with its path and why, as
-/// copies::copy_base_with_tests gives them, which a changed test of `language`, as "Rust", may need; None for none.
-pub fn submodules_left_empty(empty: &[(String, String)], language: &str) -> Option<Finding> {
-    if empty.is_empty() {
-        return None;
-    }
-    let named: Vec<String> = empty.iter().map(|(path, why)| format!("`{path}`, {why}")).collect();
-    let message = format!(
-        "the copy of the base leaves submodules empty, so a changed {language} test that needs one, if any does, was \
-         not judged: {}.",
-        named.join("; ")
-    );
-    Some(finding(None, None, "not-run", message))
 }
 
 /// Rust's findings of the check on `rust`, in no order.

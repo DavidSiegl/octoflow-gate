@@ -11,11 +11,11 @@ use std::time::Instant;
 
 use regex::bytes::Regex;
 
+use crate::base_findings::budget_reached;
 use crate::copies::{copy_base_with_tests, failed, finding, in_scratch_directory, Budget};
 use crate::change::Change;
 use crate::junit::{junit_outcomes, Outcome};
 use crate::parser_checks::{python_test, PythonChange};
-use crate::passes_at_base::budget_reached;
 use crate::paths::{real_path, rel_path};
 use crate::process::Finished;
 use crate::pytest::{self, changed_tests, junit_case, labels, listed_tests, node_parts, Group, Setup, Tests};

@@ -181,14 +181,14 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   - F8, `crates/gate/src/parser_checks.rs`: "`changed_units` reads and parses each changed Python file again after
     `Sources::read` did, and is reached three times a run (flaky_tests, python_at_base, python_mutants); its "could not
     be read" branch is all but dead." Closes with the three checks given the units read once.
-  - F9, `crates/gate/src/python_at_base.rs`, `mutants.rs`: "The Python halves and the Rust halves' modules import each
-    other (`passes_at_base` <-> `python_at_base` for `budget_reached`; `mutants` <-> `python_mutants` for `KILL_WAIT`,
-    `STOP_GRACE`, `SURVIVOR_EXAMPLES`), consts widened to `pub(crate)` to cross the cycle." Closes with what both halves
-    of a check share in a module neither half is. The dependency-cycles check (structural-checks/01) fails a change
-    that closes such a cycle from now on, but not one the base has that the change adds no import of a new file to, so
-    these two stay until a change breaks them; an import a change adds between two files of such a cycle that were not
-    yet joined does fail it. The run over 50 commits found more such cycles in `crates/gate` (`judge` holds `Change`
-    and calls every check that imports it; `report` <-> `config_edits`, `golangci` <-> `linters`).
+  - F9, `crates/gate/src/mutants.rs`: "The Python halves and the Rust halves' modules import each other (...
+    `mutants` <-> `python_mutants` for `KILL_WAIT`, `STOP_GRACE`, `SURVIVOR_EXAMPLES`), consts widened to `pub(crate)`
+    to cross the cycle." Go's half, `go_mutants`, imports those and more from `mutants` the same way. Closes with what
+    the halves of a check share in a module none of them is, as passes-at-base's findings are in `base_findings.rs`.
+    The dependency-cycles check (structural-checks/01) fails a change that closes such a cycle from now on, but not one
+    the base has that the change adds no import of a new file to, so these stay until a change breaks them; an import
+    a change adds between two files of such a cycle that were not yet joined does fail it. The run over 50 commits
+    found more such cycles in `crates/gate` (`report` <-> `config_edits`, `golangci` <-> `linters`).
   - F12, `crates/gate/src/glob.rs`: "`fnmatch` arrives as an `across_slashes` flag through `translate_name` and
     `bracket` with two added match arms, the bolted-on flag the user's CLAUDE.md design rule names; it also compiles a
     Regex on each call." Closes with fnmatch's translation a function of its own, compiled once a pattern.

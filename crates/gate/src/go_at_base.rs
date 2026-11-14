@@ -8,11 +8,11 @@ use std::time::Instant;
 
 use checks::Finding;
 
+use crate::base_findings::{budget_reached, submodules_left_empty, unread_not_run};
 use crate::copies::{copy_base_with_tests, finding, in_scratch_directory, Budget};
 use crate::gotest::{self, Packages, Ran};
 use crate::junit::Outcome;
 use crate::parser_checks::GoChange;
-use crate::passes_at_base::{budget_reached, submodules_left_empty, unread_not_run};
 
 /// Go's findings of the passes-at-base check on `go`, in no order.
 ///

@@ -11,7 +11,7 @@ use std::time::Duration;
 use regex::bytes::Regex;
 
 use crate::glob::Globs;
-use crate::copies::ScratchDirectory;
+use crate::scratch_directory::ScratchDirectory;
 use crate::judge::under_mutmut_state;
 use crate::paths::{normpath, rel_path};
 use crate::process;

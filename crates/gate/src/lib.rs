@@ -29,6 +29,7 @@ pub mod python_mutants;
 pub mod report;
 #[cfg(test)]
 mod scratch;
+pub mod scratch_directory;
 pub mod settings;
 pub mod suppressions;
 pub mod test_commands;

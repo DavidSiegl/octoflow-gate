@@ -337,22 +337,12 @@ pub fn interrupted() -> bool {
 }
 
 /// Ends the gate as Ctrl-C, SIGTERM or SIGHUP does, saying so on standard error, with [`EXIT_INTERRUPTED`], having
-/// removed its scratch directories ([`crate::copies::ScratchDirectory`]); no report is written past this. The one place
-/// the gate exits other than from main, so that a stop deep in a check needs no path back up.
+/// removed its scratch directories ([`crate::scratch_directory::ScratchDirectory`]); no report is written past this.
+/// The one place the gate exits other than from main, so that a stop deep in a check needs no path back up.
 pub fn exit_interrupted() -> ! {
-    crate::copies::remove_scratch_directories();
+    crate::scratch_directory::remove_scratch_directories();
     eprintln!("interrupted; the report was not written whole");
     std::process::exit(EXIT_INTERRUPTED)
-}
-
-/// Whether a process of id `pid` runs, in the gate's pid namespace, as a zombie included; true, too, when that cannot
-/// be told.
-pub(crate) fn runs(pid: u32) -> bool {
-    let Ok(pid) = libc::pid_t::try_from(pid) else { return false };
-    // SAFETY: kill(2) with signal 0 sends nothing and touches no memory of the gate's; it only checks that pid exists.
-    #[allow(unsafe_code, reason = "kill(2) has no safe wrapper in std; it reads no memory")]
-    let sent = unsafe { libc::kill(pid, 0) };
-    sent == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
 }
 
 #[cfg(test)]

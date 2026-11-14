@@ -70,7 +70,7 @@ impl Default for Settings {
             python_tests: Globs::new(&["**/tests/**/*.py", "**/test_*.py", "**/*_test.py"]),
             rust_tests: Globs::new(&["**/tests/**/*.rs", "**/tests.rs"]),
             test_support: Globs::new(&["**/conftest.py", "**/tests/**"]),
-            golden: Globs::new(&["**/tests/**/golden/**"]),
+            golden: Globs::new(&["**/tests/**/golden/**", "**/testdata/**/*.golden"]),
             complexity_exempt: Globs::new(&["tests/**", "**/tests/**/*.rs", "**/tests.rs"]),
             cycles_exempt: Globs::new(&[
                 "**/tests/**",

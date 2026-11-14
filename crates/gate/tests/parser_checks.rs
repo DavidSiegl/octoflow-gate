@@ -909,6 +909,20 @@ fn go_of_a_go_module_gets_each_parser_check_s_findings() {
 }
 
 #[test]
+fn a_go_golden_file_under_testdata_changed_with_the_code_is_an_expected_value_changed() {
+    let repo = go_module("go.mod", &[("testdata/add.golden", "3\n")]);
+    repo.put("testdata/add.golden", b"4\n");
+    edit(&repo, "calc.go", "return a + b\n", "return a + b + 1\n");
+    let golden = (
+        Some("testdata/add.golden".to_string()),
+        None,
+        "test-integrity expected-value-changed".to_string(),
+        "warning".to_string(),
+    );
+    assert_eq!(found_by(&repo, Settings::default()), vec![golden]);
+}
+
+#[test]
 fn go_outside_a_go_module_or_under_testdata_is_not_read() {
     for (module, more) in [("", vec![]), ("go.mod", vec![("testdata/broken.go", "package broken\nfunc (\n")])] {
         let repo = go_module(module, &more);

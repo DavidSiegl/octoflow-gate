@@ -122,10 +122,10 @@ change](docs/quality-gate.md#whose-rules-judge-a-change) says.
 Which files are tests, which go with them, which hold expected output, which the complexity check leaves alone, which
 take part in no dependency cycle, which duplicated-blocks leaves alone and the shortest block it reports, which further
 files are build configuration, which files each linter reads, the checks' time budgets and the commands that run the
-tests: a `gate.toml` at the project's top level says each, or the
-file `--config` names. Every key has a default, so a project without one is judged as the gate always judged; [the
-gate's settings](docs/quality-gate.md#the-gates-settings) lists them. An unknown key or a value of the wrong kind
-exits 2.
+tests: a `gate.toml` at the project's top level says each, or the file `--config` names. Every key has a default, so a
+project without one is judged as the gate always judged: expected output, for one, is a file under a `golden` directory
+inside `tests`, or a `.golden` file under `testdata`, as Go keeps it; [the gate's
+settings](docs/quality-gate.md#the-gates-settings) lists them. An unknown key or a value of the wrong kind exits 2.
 
 octoflow's, for example:
 

@@ -132,32 +132,31 @@ change cannot weaken its tests unseen. Each of these is a finding:
 - `fewer-assertions`: a test with fewer `assert` statements, `self.assert*` calls and `pytest.raises` calls than at
   the base. It is one to weigh, like `removed-test`: a test the spec reshapes may need fewer;
 - `swallowed-error`: a bare `except:`, or an `except Exception:` that does nothing, on an added line;
-- `expected-value-changed`: an assertion whose literals changed while the rest of it stayed, in a change that also
-  edits code outside the tests, which is Python source as **Passes at base** below counts it, on either side of the
-  change: the "update the expected value to match the output" move. A value written of literals alone is one
-  literal, its sign and its brackets with it, so `-5` becoming `5` and `("a",)` becoming `"a"` count; parentheses
-  around such a value change nothing. The finding names the assertion before and after. The two sides' assertions
-  are paired in order, each with one of its own shape, in every language: of the pairings that pair the most, the one
-  that leaves the most unchanged. So raising every value of a sequence by one is a finding at each, even where the
-  new values repeat old ones, and an assertion added or removed, of any shape, as a case appended to a table, leaves
-  the others paired with themselves. Where two pairings tie, the earlier assertions are paired first, so an edit
-  beside an added assertion of its shape is reported against whichever of the two comes first. An expected
-  value held in a constant counts too: when a kept test's assertions name a constant of its own file at the base and
-  still name it, bare or as `module.NAME` (the module by its dotted name or a module-level import alias of it), and
-  the constant's expression changed other than in layout, or it is no longer a
-  constant, that is one finding per constant and test, at the test's first assertion naming it, naming the constant
-  and its line. A constant whose name the test binds anywhere, even by a binding that does nothing (`global NAME`, a
-  comprehension target, a lambda parameter), is not checked, so such a line hides an edited constant; a reviewer
-  sees it in the diff. Neither is a `module.NAME` whose `module` the test binds. Only a top-level import statement's
-  alias counts as the module; one imported under a module-level `if` or `try` does not. A constant is a module-level
-  assignment of one name, bound nowhere else in the module's scope, to an expression with no call in it. One the
-  change adds, one imported from another module or computed by a call, one reached through a local or a helper, an
-  edit to another constant one is built from, and a fixture's return value do not count. It is one to weigh, like
+- `expected-value-changed`: an assertion whose literals changed while the rest of it stayed, in a change that also edits
+  code outside the tests, which is Python source as **Passes at base** below counts it, on either side of the change:
+  the "update the expected value to match the output" move. A value written of literals alone is one literal, its sign
+  and its brackets with it, so `-5` becoming `5` and `("a",)` becoming `"a"` count; parentheses around such a value
+  change nothing. The finding names the assertion before and after. The two sides' assertions are paired in order, each
+  with one of its own shape, in every language: of the pairings that pair the most, the one that leaves the most
+  unchanged. So raising every value of a sequence by one is a finding at each, even where the new values repeat old
+  ones, and an assertion added or removed, of any shape, as a case appended to a table, leaves the others paired with
+  themselves. Where two pairings tie, the earlier assertions are paired first, so an edit beside an added assertion of
+  its shape is reported against whichever of the two comes first. An expected value held in a constant counts too: when
+  a kept test's assertions name a constant of its own file at the base and still name it, bare or as `module.NAME` (the
+  module by its dotted name or a module-level import alias of it), and the constant's expression changed other than in
+  layout, or it is no longer a constant, that is one finding per constant and test, at the test's first assertion naming
+  it, naming the constant and its line. A constant whose name the test binds anywhere, even by a binding that does
+  nothing (`global NAME`, a comprehension target, a lambda parameter), is not checked, so such a line hides an edited
+  constant; a reviewer sees it in the diff. Neither is a `module.NAME` whose `module` the test binds. Only a top-level
+  import statement's alias counts as the module; one imported under a module-level `if` or `try` does not. A constant is
+  a module-level assignment of one name, bound nowhere else in the module's scope, to an expression with no call in it.
+  One the change adds, one imported from another module or computed by a call, one reached through a local or a helper,
+  an edit to another constant one is built from, and a fixture's return value do not count. It is one to weigh, like
   `removed-test`, since the spec may ask for the new value. A golden file, by default one under a `golden` directory
-  inside a `tests` directory, as this repository's `tests/golden/`, is an expected value too, one that a suite can
-  usually rewrite to whatever the code now writes: a change that edits or deletes one and also edits code outside the
-  tests gets one such finding per file, on the whole file, also to weigh. A golden file added, or renamed unedited,
-  is none.
+  inside a `tests` directory, as this repository's `tests/golden/`, or a `.golden` file under a `testdata` directory, as
+  Go's tests keep their expected output, is an expected value too, one that a suite can usually rewrite to whatever the
+  code now writes: a change that edits or deletes one and also edits code outside the tests gets one such finding per
+  file, on the whole file, also to weigh. A golden file added, or renamed unedited, is none.
 
 What weakens a test is on an added line when the change added any line of it, as the condition of a wrapped `skipif` or
 a mark added inside a case's wrapped `marks=[...]`, and the finding points at the first such line. A test kept, renamed
@@ -995,7 +994,7 @@ trailing `/**` for all below.
 | `test-files.python` | `**/tests/**/*.py`, `**/test_*.py`, `**/*_test.py` | Python's test files |
 | `test-files.rust` | `**/tests/**/*.rs`, `**/tests.rs` | Rust's test files by where they are; a file only `#[cfg(test)] mod name;` takes in is one too, and a `#[cfg(test)]` item holds tests wherever it is |
 | `test-files.support` | `**/conftest.py`, `**/tests/**` | files that go with the tests rather than the code, which the checks that run tests take from the working tree |
-| `test-files.golden` | `**/tests/**/golden/**` | golden files, which test integrity reads as expected values |
+| `test-files.golden` | `**/tests/**/golden/**`, `**/testdata/**/*.golden` | golden files, which test integrity reads as expected values |
 | `complexity.exempt` | `tests/**`, `**/tests/**/*.rs`, `**/tests.rs` | files whose functions cognitive complexity does not score |
 | `dependency-cycles.exempt` | `**/tests/**`, `**/tests.rs`, `**/test_*.py`, `**/*_test.py`, `**/conftest.py` | files that take part in no dependency cycle, their imports and the imports of them both left out |
 | `duplicated-blocks.exempt` | `**/tests/**`, `**/tests.rs`, `**/test_*.py`, `**/*_test.py`, `**/conftest.py`, `**/*_test.go`, `**/testdata/**`, `**/fixtures/**` | files duplicated-blocks neither judges nor matches a block against |

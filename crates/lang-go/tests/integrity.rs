@@ -95,10 +95,15 @@ fn at(line: u32, rule: &str) -> (Option<u32>, String) {
 fn the_tests_are_the_go_test_functions_and_the_subtests_named_by_a_literal() {
     let file = lang_go::read(CALC_TEST.as_bytes(), true).unwrap();
     let tests: Vec<_> = file.tests.iter().map(|t| (t.name.as_str(), t.line, t.assertions.len())).collect();
-    assert_eq!(tests, [("TestAdd", 9, 2), ("TestAdd/negative", 13, 1), ("BenchmarkAdd", 25, 0), ("FuzzAdd", 31, 1)]);
+    assert_eq!(tests, [("TestAdd", 9, 3), ("TestAdd/negative", 13, 1), ("BenchmarkAdd", 25, 0), ("FuzzAdd", 31, 1)]);
     let first = &file.tests[0].assertions[0];
     assert_eq!(first.literals, ["1", "2", "3", "\"Add(1, 2) = %d, want 3\""]);
     assert_eq!(model::first_line(&first.text), "if got := Add(1, 2); got != 3 {");
+    // `got` and `t` are the test's own names.
+    assert_eq!(first.reads, ["Add"]);
+    // The case of its table is an assertion too.
+    let case = &file.tests[0].assertions[1];
+    assert_eq!((case.line, case.text.as_str(), case.literals.len()), (16, "{1, 1, 2}", 3));
 }
 
 #[test]
@@ -263,6 +268,48 @@ fn an_expected_value_changed_with_the_code_is_found_and_without_it_is_not() {
         found[1].message,
         "`TestAdd/negative`: `require.Equal(t, -2, Add(-1, -1))` became `require.Equal(t, -3, Add(-1, -1))`, in a \
          change that also edits the code under test."
+    );
+}
+
+/// A test whose expected values stand outside its assertions: in a case of its table, and in a constant of the file.
+const TABLE_TEST: &str = r#"
+const want = 3
+
+func TestTable(t *testing.T) {
+	for _, c := range []struct{ in, want int }{
+		{in: 2, want: 4},
+		{in: 3, want: 6},
+	} {
+		if got := Add(c.in, c.in); got != c.want {
+			t.Errorf("Add(%d, %d) = %d", c.in, c.in, got)
+		}
+	}
+	if Add(1, 2) != want {
+		t.Error("not want")
+	}
+}
+"#;
+
+#[test]
+fn a_case_of_a_table_and_a_constant_edited_with_the_code_are_changed_expected_values() {
+    let base = format!("{CALC_TEST}{TABLE_TEST}");
+    let calc = edit(CALC, "a + b", "a + b + 1");
+    let changed = |test: &str| check(&[edited(CALC_PATH, CALC, &calc), edited(TEST_PATH, &base, test)]);
+    let test = edit(&base, "{in: 2, want: 4}", "{in: 2, want: 5}");
+    assert_eq!(check(&[edited(TEST_PATH, &base, &test)]), vec![], "an edit of the tests alone");
+    let found = changed(&test);
+    assert_eq!(wheres(&found), [at(43, "expected-value-changed")]);
+    assert_eq!(
+        found[0].message,
+        "`TestTable`: `{in: 2, want: 4}` became `{in: 2, want: 5}`, in a change that also edits the code under test."
+    );
+    let test = edit(&base, "const want = 3", "const want = 4");
+    let found = changed(&test);
+    assert_eq!(wheres(&found), [at(50, "expected-value-changed")]);
+    assert_eq!(
+        found[0].message,
+        "`want` (line 39), which `TestTable` names in its assertions, changed, in a change that also edits the code \
+         under test."
     );
 }
 

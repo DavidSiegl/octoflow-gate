@@ -1,12 +1,15 @@
-//! The tests of a `_test.go` file, their assertions, and what in the file weakens them.
+//! The tests of a `_test.go` file, their assertions, and what in the file weakens them; and the constants of a Go
+//! file that its tests' assertions can name.
 
 use std::collections::HashSet;
 
-use model::{first_line, Assertion, Lines, Test, Weakening, WeakeningKind};
+use model::{first_line, Assertion, Constant, Lines, Test, Weakening, WeakeningKind};
 use tree_sitter::Node;
 
-use crate::constraint;
-use crate::syntax::{children, digest, digest_of, doc_line, end_line, function_name, is_literal, line, named, tokens, Text};
+use crate::syntax::{
+    children, digest, digest_of, doc_line, end_line, fields, function_name, is_literal, line, named, tokens, Text,
+};
+use crate::{binds, constraint};
 
 /// The methods of `testing.T`, `B` and `F` that fail the test they are called on.
 const FAILING: &[&str] = &["Error", "Errorf", "Fatal", "Fatalf", "Fail", "FailNow"];
@@ -31,6 +34,12 @@ const TESTIFY: &[&str] = &["github.com/stretchr/testify/assert", "github.com/str
 ///   it holds: its text the `if` to the end of its block, and its literals and shape those of its initializer and
 ///   condition and of those calls, so that `if got != 3 { t.Errorf(...) }` changing its 3 is a changed expected
 ///   value. A literal is a number, a rune or a string.
+/// - A table of cases in its body, a composite literal of a slice, array or map type whose elements are written in
+///   braces of their own, as `[]struct{ in, want int }{{in: 2, want: 4}}`, holds its expected values: each such
+///   element, its key with it in a map's, is an assertion too, in the order written, its literals and shape its own.
+///   A table within a case is part of that case.
+/// - An assertion reads ([`Assertion::reads`]) each name in it that the top-level function holding it binds nowhere
+///   ([`binds::bindings`]), but a key of a keyed element, as `want` in `{want: 4}`.
 /// - A weakening is a `Skip`, `Skipf` or `SkipNow` called on such a variable anywhere in the file; a `//go:build`
 ///   line above its `package` clause ([`constraint::weakening`]); and, anywhere in the file, an error thrown away by
 ///   `_ = err` or by an `if err != nil {}` whose block holds no statement, `err` being any name of an error by Go's
@@ -47,6 +56,8 @@ pub fn read(root: Node, text: Text) -> (Vec<Test>, Vec<Weakening>) {
         owner: None,
         consumed: HashSet::new(),
         function: String::new(),
+        own: HashSet::new(),
+        in_table: false,
     };
     for node in named(root) {
         match node.kind() {
@@ -129,6 +140,10 @@ struct Walk<'t> {
     consumed: HashSet<usize>,
     /// The name of the top-level function the walk is in, as a finding names it.
     function: String,
+    /// The names the top-level function the walk is in binds anywhere, which its assertions do not read as the file's.
+    own: HashSet<String>,
+    /// Whether the walk is inside a table of cases, whose cases are read whole.
+    in_table: bool,
 }
 
 impl<'t> Walk<'t> {
@@ -136,6 +151,7 @@ impl<'t> Walk<'t> {
     fn function(&mut self, node: Node<'t>) {
         let Some(body) = node.child_by_field_name("body") else { return };
         self.function = function_name(node, self.text);
+        self.own = binds::bindings(node, self.text).into_iter().map(|b| b.name).collect();
         let params = self.testing_params(node);
         self.owner = None;
         if node.kind() == "function_declaration" && self.is_test(node) {
@@ -214,6 +230,12 @@ impl<'t> Walk<'t> {
             "assignment_statement" => {
                 self.discard(node);
                 self.children(node);
+            }
+            "composite_literal" => {
+                let outer = self.in_table;
+                self.in_table = outer || self.table(node);
+                self.children(node);
+                self.in_table = outer;
             }
             _ => self.children(node),
         }
@@ -296,6 +318,29 @@ impl<'t> Walk<'t> {
         }
     }
 
+    /// A composite literal, `node`, outside any table: when it is a table of cases ([`read`]), each case an assertion
+    /// of the test the walk is in. Whether it was one.
+    fn table(&mut self, node: Node<'t>) -> bool {
+        let listed = node.child_by_field_name("type").is_some_and(|ty| {
+            matches!(ty.kind(), "slice_type" | "array_type" | "implicit_length_array_type" | "map_type")
+        });
+        let elements = node.child_by_field_name("body").filter(|_| listed).map(named).unwrap_or_default();
+        let braced = |element: &Node| {
+            let value = match element.kind() {
+                "literal_element" => Some(*element),
+                "keyed_element" => element.child_by_field_name("value"),
+                _ => None,
+            };
+            value.and_then(|v| v.named_child(0)).is_some_and(|v| v.kind() == "literal_value")
+        };
+        let cases: Vec<Node> = elements.into_iter().filter(braced).collect();
+        for case in &cases {
+            let assertion = self.assertion(*case, &[*case], case.end_byte());
+            self.assert(assertion);
+        }
+        !cases.is_empty()
+    }
+
     fn assert(&mut self, assertion: Assertion) {
         if let Some(owner) = self.owner {
             self.tests[owner].assertions.push(assertion);
@@ -361,8 +406,28 @@ impl<'t> Walk<'t> {
             text: self.text.0[node.start_byte()..end].into(),
             shape: shape.join(" "),
             literals,
-            reads: vec![],
+            reads: self.reads(parts),
         }
+    }
+
+    /// The names `parts`, an assertion's, read as the file's, each once, in the order written ([`read`]).
+    fn reads(&self, parts: &[Node]) -> Vec<String> {
+        let key = |n: Node| {
+            let element = n.parent().filter(|p| p.kind() == "literal_element");
+            let keyed = element.and_then(|e| e.parent()).filter(|k| k.kind() == "keyed_element");
+            keyed.and_then(|k| k.child_by_field_name("key")) == element && element.is_some()
+        };
+        let mut out: Vec<String> = vec![];
+        // Nodes still to read, the next one last.
+        let mut pending: Vec<Node> = parts.iter().rev().copied().collect();
+        while let Some(node) = pending.pop() {
+            let name = self.text.of(node);
+            if node.kind() == "identifier" && !key(node) && !self.own.contains(name) && !out.iter().any(|n| n == name) {
+                out.push(name.into());
+            }
+            pending.extend(named(node).into_iter().rev());
+        }
+        out
     }
 
     /// Whether `condition` is `err != nil` or `nil != err`, `err` naming an error ([`names_an_error`]).
@@ -398,6 +463,38 @@ impl<'t> Walk<'t> {
             }
         }
     }
+}
+
+/// The constants of `root`, a Go file's tree, in the order written: each name of a top-level `const` given a value of
+/// its own that calls nothing, as `const want = 3`; a name `_`, and one an `iota` run gives its value implicitly, as
+/// `B` in `const (A = iota; B)`, are left out. The go tool refuses a second top-level declaration of a name in a
+/// package, so each is bound once.
+pub fn constants(root: Node, text: Text) -> Vec<Constant> {
+    let declarations = named(root).into_iter().filter(|d| d.kind() == "const_declaration");
+    let specs = declarations.flat_map(named).filter(|s| s.kind() == "const_spec");
+    let mut out = vec![];
+    for spec in specs {
+        let values: Vec<Node> = spec.child_by_field_name("value").map(named).unwrap_or_default();
+        let values = values.into_iter().filter(|v| v.kind() != "comment");
+        for (name, value) in fields(spec, "name").into_iter().zip(values) {
+            if text.of(name) != "_" && !holds_call(value) {
+                out.push(Constant { name: text.of(name).into(), line: line(spec), expression: digest(value, text) });
+            }
+        }
+    }
+    out
+}
+
+/// Whether `node` is or holds a call.
+fn holds_call(node: Node) -> bool {
+    let mut pending = vec![node];
+    while let Some(node) = pending.pop() {
+        if node.kind() == "call_expression" {
+            return true;
+        }
+        pending.extend(named(node));
+    }
+    false
 }
 
 /// Whether `name` names an error by Go's habit: `err`, `err` then a capital or a digit, as `errClose` or `err2`, or a

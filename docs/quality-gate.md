@@ -261,15 +261,25 @@ removing one or changing its output is not seen (#73). The findings are Python's
   parameter as above. Such a call that is a statement of an `if`'s block makes that `if` one assertion, however many
   it holds, since the `if` holds the expected value: `if got := Add(1, 2); got != 3 { t.Errorf(...) }` is one. A
   helper's calls are not followed into the tests that call it: `check(t, Add(1, 2), 3)`, where `check` holds the
-  `t.Errorf`, is no assertion of the test, so a test that asserts only through helpers has none to lose (#72);
+  `t.Errorf`, is no assertion of the test, so a test that asserts only through helpers has none to lose (#72). Each
+  case of a table of cases in the test's body is an assertion too (`expected-value-changed` below), so a case removed
+  is one fewer;
 - `swallowed-error`: on an added line anywhere in the file, `_ = err`, or an `if err != nil {}` whose block holds no
   statement, its lines those from the `if` to the block's `{`, `err` being a name Go gives an error by habit: `err`,
   `err` then a capital or a digit, or a name ending in `Err`. A parser knows no types, so an error thrown away under
   another name, or as `v, _ := f()`, is not seen; nor is a block the change empties by deleting or commenting out its
   statements, since that adds no line from its `if` to its `{`;
 - `expected-value-changed`: as Rust's, an assertion whose literals (numbers, runes and strings) changed while its shape
-  stayed, an `if`'s initializer and condition included, in a change that also edits Go code outside the tests.
-  Constants and a table-driven test's table of cases are not followed, so an expected value held there is not seen;
+  stayed, an `if`'s initializer and condition included, in a change that also edits Go code outside the tests. A
+  table-driven test's cases are such assertions: in a composite literal of a slice, array or map type in the test's
+  body whose elements are written in braces of their own, as `[]struct{ in, want int }{{in: 2, want: 4}}`, each such
+  element, with its key in a map's, its first line quoted, so `{in: 2, want: 4}` becoming `{in: 2, want: 5}` is a
+  finding at the case. A table within a case is part of that case; a table outside the test, as a package-level `var`,
+  and a local such as `want := 3` are not read. An expected value held in a constant counts as Rust's does, at the
+  test's first assertion naming it: a top-level `const` given a value of its own that calls nothing (a conversion,
+  as `int64(3)`, is a call), not `_` and not one an `iota` run gives its value implicitly. A name the test's function
+  binds anywhere, as a parameter, a `:=` or a `var`, hides the constant it shadows, as does a keyed element's key,
+  `want` in `{want: 4}`;
 - `unparsable`: as Rust's.
 
 Go's tests run through a `[[test]]` command, as [Go tests and coverage](#go-tests-and-coverage) says,

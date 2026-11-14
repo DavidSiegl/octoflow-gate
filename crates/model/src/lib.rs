@@ -124,7 +124,8 @@ pub struct Test {
     pub assertions: Vec<Assertion>,
 }
 
-/// One assertion of a test.
+/// One assertion of a test, or a case of a table of cases its body holds where the front end reads such a case as
+/// holding expected values, as lang-go does.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Assertion {
     pub line: u32,

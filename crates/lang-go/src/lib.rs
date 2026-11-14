@@ -58,8 +58,8 @@ pub fn among_tests(path: &[u8]) -> bool {
 ///   start at its doc comment; its calls resolve within the file as [`calls`] says;
 /// - the tests, their assertions and the weakenings are those testing.rs's `read` finds, in a `_test.go` file only;
 /// - a binding is one of those binds.rs's `bindings` lists;
-/// - there are no test groups, as Go has no item that holds tests, and no constants: an expected value in a `const`
-///   or in a table of cases is not followed.
+/// - there are no test groups, as Go has no item that holds tests;
+/// - the constants are those testing.rs's `constants` gives.
 ///
 /// Errs when `source` is not UTF-8, or does not parse as Go, at the line of the first token tree-sitter could not
 /// place.
@@ -75,7 +75,7 @@ pub fn read(source: &[u8], among_tests: bool) -> Result<SourceFile, Unreadable> 
         test_lines: if among_tests { vec![Lines { first: 1, last: n }] } else { vec![] },
         weakenings,
         bindings: binds::bindings(root, text),
-        constants: vec![],
+        constants: testing::constants(root, text),
     })
 }
 

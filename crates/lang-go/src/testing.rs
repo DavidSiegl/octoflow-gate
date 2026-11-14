@@ -35,7 +35,9 @@ const TESTIFY: &[&str] = &["github.com/stretchr/testify/assert", "github.com/str
 ///   that is a statement of an `if`'s block is that `if`'s assertion, the `if` counting once whatever number of them
 ///   it holds: its text the `if` to the end of its block, and its literals and shape those of its initializer and
 ///   condition and of those calls, so that `if got != 3 { t.Errorf(...) }` changing its 3 is a changed expected
-///   value. A literal is a number, a rune or a string.
+///   value. A call, by its name, of a helper of the file, as `check(t, Add(1, 2), 3)`, with such a variable among its
+///   arguments, is one too, its literals the call's: a helper is a top-level function that holds such a failing call
+///   or a testify assertion outside any test, or calls another helper so. A literal is a number, a rune or a string.
 /// - A table of cases in its body, a composite literal that a `for … range` in the same top-level function ranges
 ///   over, written there or by a name a `:=` or a `var` there binds to it, as `[]struct{ in, want int }{{in: 2, want:
 ///   4}}`, holds its expected values: each of its elements written in braces of their own, its key with it in a
@@ -63,6 +65,8 @@ pub fn read(root: Node, text: Text) -> (Vec<Test>, Vec<Weakening>) {
         own: HashSet::new(),
         tables: HashSet::new(),
         assertors: HashSet::new(),
+        helpers: HashSet::new(),
+        helper_calls: vec![],
     };
     let header: Vec<(&str, u32)> = named(root)
         .into_iter()
@@ -75,6 +79,7 @@ pub fn read(root: Node, text: Text) -> (Vec<Test>, Vec<Weakening>) {
             walk.function(node);
         }
     }
+    walk.keep_helper_calls();
     (walk.tests, walk.weakenings)
 }
 
@@ -154,6 +159,20 @@ struct Walk<'t> {
     /// The names the top-level function the walk is in binds to testify's `New`, whose methods are assertions
     /// ([`read`]).
     assertors: HashSet<&'t str>,
+    /// The names of the top-level functions met so far that are helpers ([`read`]) by a failing call of their own;
+    /// [`Walk::keep_helper_calls`] adds those that are helpers by calling one.
+    helpers: HashSet<String>,
+    /// Each call met of a function by its name with a testing variable among its arguments, as a helper is called,
+    /// where it was met, with the name of the function called.
+    helper_calls: Vec<(Caller, &'t str)>,
+}
+
+/// Where a call [`Walk::helper_calls`] holds was met.
+enum Caller {
+    /// In a test: its index in [`Walk::tests`], and the index among its assertions of the one the call was taken for.
+    Test(usize, usize),
+    /// In the top-level function of this name, outside any test.
+    Function(String),
 }
 
 impl<'t> Walk<'t> {
@@ -337,7 +356,61 @@ impl<'t> Walk<'t> {
         let failing = method.is_some_and(|m| FAILING.contains(&m)) && !self.consumed.contains(&node.id());
         if failing || self.testify(node) {
             let assertion = self.assertion(node, &[node], node.end_byte());
+            self.fail(assertion);
+        } else if let Some(callee) = self.passing_testing(node) {
+            let caller = match self.owner {
+                Some(test) => {
+                    let assertion = self.assertion(node, &[node], node.end_byte());
+                    self.assert(assertion);
+                    Caller::Test(test, self.tests[test].assertions.len() - 1)
+                }
+                None => Caller::Function(self.function.clone()),
+            };
+            self.helper_calls.push((caller, callee));
+        }
+    }
+
+    /// The name of the function a call, `node`, calls by its name with a testing variable in scope among its
+    /// arguments, as a helper is called; None for any other call.
+    fn passing_testing(&self, node: Node<'t>) -> Option<&'t str> {
+        let callee = node.child_by_field_name("function").filter(|f| f.kind() == "identifier")?;
+        let args = node.child_by_field_name("arguments").map(named).unwrap_or_default();
+        let passed = |a: &Node| a.kind() == "identifier" && self.scope.contains(&self.text.of(*a));
+        args.iter().any(passed).then(|| self.text.of(callee))
+    }
+
+    /// An assertion that fails the test it is in: the test's; outside any test, what makes the top-level function the
+    /// walk is in a helper.
+    fn fail(&mut self, assertion: Assertion) {
+        if self.owner.is_some() {
             self.assert(assertion);
+        } else {
+            self.helpers.insert(self.function.clone());
+        }
+    }
+
+    /// Adds to [`Walk::helpers`] each function that calls one, then drops from the tests the assertions taken for
+    /// calls of a function that is no helper.
+    fn keep_helper_calls(&mut self) {
+        loop {
+            let calling = self.helper_calls.iter().filter_map(|(caller, callee)| match caller {
+                Caller::Function(name) if self.helpers.contains(*callee) && !self.helpers.contains(name) => Some(name),
+                _ => None,
+            });
+            let found: Vec<String> = calling.cloned().collect();
+            if found.is_empty() {
+                break;
+            }
+            self.helpers.extend(found);
+        }
+        // In reverse, so that each index still points at the assertion it was taken for.
+        for (caller, callee) in self.helper_calls.iter().rev() {
+            match caller {
+                Caller::Test(test, k) if !self.helpers.contains(*callee) => {
+                    self.tests[*test].assertions.remove(*k);
+                }
+                _ => {}
+            }
         }
     }
 
@@ -400,7 +473,7 @@ impl<'t> Walk<'t> {
             ["initializer", "condition"].iter().filter_map(|f| node.child_by_field_name(f)).collect();
         parts.extend(&calls);
         let assertion = self.assertion(node, &parts, block.end_byte());
-        self.assert(assertion);
+        self.fail(assertion);
     }
 
     /// The assertion that starts at `node` and ends at the byte `end`, its literals and shape those of `parts`.

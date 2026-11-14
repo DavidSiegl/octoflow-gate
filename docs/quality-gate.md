@@ -271,10 +271,11 @@ removing one or changing its output is not seen (#73). The findings are Python's
   parameter as above. A parser knows no types, so a name such a value is copied to, and a testify suite's methods
   (`s.Equal(3, got)`), are not followed. Such a call that is a statement of an `if`'s block makes that `if` one
   assertion, however many it holds, since the `if` holds the expected value: `if got := Add(1, 2); got != 3 {
-  t.Errorf(...) }` is one. A helper's calls are not followed into the tests that call it: `check(t, Add(1, 2), 3)`,
-  where `check` holds the `t.Errorf`, is no assertion of the test, so a test that asserts only through helpers has none
-  to lose (#72). Each case of a table of cases in the test's body is an assertion too (`expected-value-changed` below),
-  so a case removed is one fewer;
+  t.Errorf(...) }` is one. A call of a helper of the same file by its name, with a testing variable among its arguments,
+  is one too, its literals the call's, as `check(t, Add(1, 2), 3)` where `check` holds the `t.Errorf`: a helper is a
+  top-level function that holds a failing call or a testify assertion outside any test, or calls another helper so. A
+  helper of another file, a method, or a `func` value is not followed. Each case of a table of cases in the test's body
+  is an assertion too (`expected-value-changed` below), so a case removed is one fewer;
 - `swallowed-error`: on an added line anywhere in the file, `_ = err`, or an `if err != nil {}` whose block holds no
   statement, its lines those from the `if` to the block's `{`, `err` being a name Go gives an error by habit: `err`,
   `err` then a capital or a digit, or a name ending in `Err`. A parser knows no types, so an error thrown away under

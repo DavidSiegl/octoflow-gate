@@ -185,6 +185,66 @@ func TestAdd(t *testing.T) {
     assert_eq!(wheres(&check(&[edited(TEST_PATH, source, &fewer)])), [at(10, "fewer-assertions")]);
 }
 
+/// Tests that assert through helpers of the file: `check` fails its test itself, `checkAll` through `check2`, `log`
+/// fails nothing, and `t.Run`'s literal passes its own `t` on.
+const HELPER_TEST: &str = r#"package calc
+
+import "testing"
+
+func TestAdd(t *testing.T) {
+	check(t, Add(1, 2), 3)
+	checkAll(t, Add(2, 2), 4)
+	log(t, Add(3, 3))
+	t.Run("negative", func(t *testing.T) {
+		check(t, Add(-1, -1), -2)
+	})
+	other(Add(1, 1), 2)
+}
+
+func check(t *testing.T, got, want int) {
+	t.Helper()
+	if got != want {
+		t.Errorf("got %d, want %d", got, want)
+	}
+}
+
+func checkAll(tb testing.TB, got, want int) {
+	check2(tb, got, want)
+}
+
+func check2(tb testing.TB, got, want int) {
+	if got != want {
+		tb.Fatal("wrong")
+	}
+}
+
+func log(t *testing.T, got int) {
+	t.Log(got)
+}
+
+func other(got, want int) bool {
+	return got == want
+}
+"#;
+
+#[test]
+fn a_call_of_a_helper_of_the_file_that_fails_the_test_it_is_passed_is_an_assertion() {
+    let file = lang_go::read(HELPER_TEST.as_bytes(), true).unwrap();
+    let asserted: Vec<(&str, Vec<&str>)> = (file.tests.iter())
+        .map(|t| (t.name.as_str(), t.assertions.iter().map(|a| a.text.as_str()).collect()))
+        .collect();
+    assert_eq!(asserted, [
+        ("TestAdd", vec!["check(t, Add(1, 2), 3)", "checkAll(t, Add(2, 2), 4)"]),
+        ("TestAdd/negative", vec!["check(t, Add(-1, -1), -2)"]),
+    ]);
+    let fewer = edit(HELPER_TEST, "\tcheck(t, Add(1, 2), 3)\n", "");
+    assert_eq!(wheres(&check(&[edited(TEST_PATH, HELPER_TEST, &fewer)])), [at(5, "fewer-assertions")]);
+    let changed = edit(HELPER_TEST, "Add(1, 2), 3)", "Add(1, 2), 4)");
+    let calc = edit(CALC, "a + b", "a + b + 1");
+    let found = check(&[edited(CALC_PATH, CALC, &calc), edited(TEST_PATH, HELPER_TEST, &changed)]);
+    assert_eq!(wheres(&found), [at(6, "expected-value-changed")]);
+}
+
 #[test]
 fn an_edit_beside_the_tests_has_no_findings() {
     let files = [edited(CALC_PATH, CALC, &edit(CALC, "a + b", "b + a"))];

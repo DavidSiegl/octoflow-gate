@@ -13,7 +13,8 @@ use std::time::{Duration, Instant};
 /// Seconds a linter or a test command may run before the gate stops it, and judges it as not having finished.
 pub const TOOL_TIMEOUT: u64 = 600;
 
-/// The most the gate waits, after a process has exited or been killed, for the rest of what its group printed.
+/// The most the gate waits, after a process has exited or been killed, for the rest of what its group printed and for
+/// the process to be reaped.
 const KILL_WAIT: Duration = Duration::from_secs(5);
 
 /// How often the gate looks whether a process has exited, so the most it waits on past the exit.
@@ -208,14 +209,18 @@ fn start(argv: &[&OsStr], cwd: &Path, stdout: Stdio, stderr: Stdio, extras: &Ext
 }
 
 /// How `child` exited, looking every [`POLL`]; None when it was still running at `deadline`. When Ctrl-C or SIGTERM
-/// reaches the gate meanwhile, kills `group`, reaps `child` and exits through [`exit_interrupted`]: unreaped, `child`
-/// would stay a zombie of `group` after the gate's exit until whatever adopts it reaps it.
+/// reaches the gate meanwhile, kills `group`, reaps `child` within [`KILL_WAIT`] and exits through
+/// [`exit_interrupted`]: unreaped, `child` would stay a zombie of `group` after the gate's exit until whatever adopts
+/// it reaps it. One that outlives the wait, as in an uninterruptible sleep, is left to its adopter.
 fn wait(child: &mut Child, group: &Group, deadline: Option<Instant>) -> std::io::Result<Option<ExitStatus>> {
     loop {
         if interrupted() {
             group.kill();
-            // An error leaves the zombie to its adopter; the gate is exiting either way.
-            let _ = child.wait();
+            let end = Instant::now() + KILL_WAIT;
+            // An error, as a child already reaped, ends the wait as its exit would; the gate is exiting either way.
+            while matches!(child.try_wait(), Ok(None)) && Instant::now() < end {
+                std::thread::sleep(POLL);
+            }
             exit_interrupted();
         }
         if let Some(status) = child.try_wait()? {

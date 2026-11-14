@@ -324,6 +324,58 @@ fn a_case_added_to_or_removed_from_a_table_with_the_code_leaves_its_neighbours_u
     assert_eq!(wheres(&changed(&test)), [at(41, "fewer-assertions")]);
 }
 
+/// A test with a table of cases, `cases`, ranged over by name and keyed by a constant, beside literals that are no
+/// table: an input, and expected values inside testify's assertions.
+const LITERALS_TEST: &str = r#"
+const keyA = "a"
+
+func TestLiterals(t *testing.T) {
+	cases := map[string]struct{ in, want int }{
+		keyA: {
+			in:   2,
+			want: 4,
+		},
+	}
+	for name, c := range cases {
+		if Add(c.in, len(name)) != c.want {
+			t.Error(name)
+		}
+	}
+	in := []struct{ a int }{{a: 1}}
+	require.Equal(t, []struct{ a int }{{a: 2}, {a: 3}}, Sum(in))
+	require.Equal(t, map[string]int{keyA: 1}, Count(in))
+}
+"#;
+
+#[test]
+fn only_a_literal_ranged_over_is_a_table_and_its_cases_are_quoted_whole() {
+    let base = format!("{CALC_TEST}{LITERALS_TEST}");
+    let calc = edit(CALC, "a + b", "a + b + 1");
+    let changed = |test: &str| check(&[edited(CALC_PATH, CALC, &calc), edited(TEST_PATH, &base, test)]);
+    let found = changed(&edit(&base, "want: 4,", "want: 5,"));
+    assert_eq!(wheres(&found), [at(43, "expected-value-changed")]);
+    assert_eq!(
+        found[0].message,
+        "`TestLiterals`: `keyA: {in:   2, want: 4,}` became `keyA: {in:   2, want: 5,}`, in a change that also edits \
+         the code under test."
+    );
+    assert_eq!(changed(&edit(&base, "{a: 1}", "{a: 7}")), vec![], "an input");
+    assert_eq!(wheres(&changed(&edit(&base, "{a: 3}", "{a: 4}"))), [at(54, "expected-value-changed")]);
+    assert_eq!(changed(&edit(&base, ", {a: 3}}", "}")), vec![], "an expected value one item shorter");
+}
+
+#[test]
+fn a_constant_keying_a_map_is_read() {
+    let base = format!("{CALC_TEST}{LITERALS_TEST}");
+    let calc = edit(CALC, "a + b", "a + b + 1");
+    let changed = |test: &str| {
+        check(&[edited(CALC_PATH, CALC, &calc), edited(TEST_PATH, test, &edit(test, "\"a\"", "\"b\""))])
+    };
+    assert_eq!(wheres(&changed(&base)), [at(43, "expected-value-changed")], "a table's key");
+    let unkeyed = edit(&base, "\t\tkeyA: {", "\t\t\"x\": {");
+    assert_eq!(wheres(&changed(&unkeyed)), [at(55, "expected-value-changed")], "an assertion's map");
+}
+
 #[test]
 fn errors_thrown_away_in_test_code_are_swallowed_errors() {
     let helper = "

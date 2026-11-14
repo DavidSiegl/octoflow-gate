@@ -272,15 +272,18 @@ removing one or changing its output is not seen (#73). The findings are Python's
   statements, since that adds no line from its `if` to its `{`;
 - `expected-value-changed`: as Rust's, an assertion whose literals (numbers, runes and strings) changed while its shape
   stayed, an `if`'s initializer and condition included, in a change that also edits Go code outside the tests. A
-  table-driven test's cases are such assertions: in a composite literal of a slice, array or map type in the test's
-  body whose elements are written in braces of their own, as `[]struct{ in, want int }{{in: 2, want: 4}}`, each such
-  element, with its key in a map's, its first line quoted, so `{in: 2, want: 4}` becoming `{in: 2, want: 5}` is a
-  finding at the case. A table within a case is part of that case; a table outside the test, as a package-level `var`,
-  and a local such as `want := 3` are not read. An expected value held in a constant counts as Rust's does, at the
-  test's first assertion naming it: a top-level `const` given a value of its own that calls nothing (a conversion,
-  as `int64(3)`, is a call), not `_` and not one an `iota` run gives its value implicitly. A name the test's function
-  binds anywhere, as a parameter, a `:=` or a `var`, hides the constant it shadows, as does a keyed element's key,
-  `want` in `{want: 4}`;
+  table-driven test's cases are such assertions. A table is a composite literal that a `for … range` in the test's
+  function ranges over, written in the `range` or bound to the name it ranges over by a `:=` or a `var` in that
+  function, as `for _, c := range []struct{ in, want int }{{in: 2, want: 4}}`; each of its elements written in
+  braces of its own, with its key in a map's, is a case, quoted on one line, so `{in: 2, want: 4}` becoming
+  `{in: 2, want: 5}` is a finding at the case. A literal in a case is part of that case. Any other composite literal
+  is no table: an input passed to the code, or an expected value in an assertion, which is that assertion's. A table
+  outside the test, as a package-level `var`, and a local such as `want := 3` are not read. An expected value held in
+  a constant counts as Rust's does, at the test's first assertion naming it: a top-level `const` given a value of its
+  own that calls nothing (a conversion, as `int64(3)`, is a call), not `_` and not one an `iota` run gives its value
+  implicitly. A name the test's function binds anywhere, as a parameter, a `:=` or a `var`, hides the constant it
+  shadows, as does a field's name keying an element, `want` in `{want: 4}`; a map's key, as `keyA` in
+  `map[string]int{keyA: 1}`, is read as any other name;
 - `unparsable`: as Rust's.
 
 Go's tests run through a `[[test]]` command, as [Go tests and coverage](#go-tests-and-coverage) says,

@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 
-use model::{first_line, Assertion, Constant, Lines, Test, Weakening, WeakeningKind};
+use model::{first_line, on_one_line, Assertion, Constant, Lines, Test, Weakening, WeakeningKind};
 use tree_sitter::Node;
 
 use crate::syntax::{
@@ -34,12 +34,14 @@ const TESTIFY: &[&str] = &["github.com/stretchr/testify/assert", "github.com/str
 ///   it holds: its text the `if` to the end of its block, and its literals and shape those of its initializer and
 ///   condition and of those calls, so that `if got != 3 { t.Errorf(...) }` changing its 3 is a changed expected
 ///   value. A literal is a number, a rune or a string.
-/// - A table of cases in its body, a composite literal of a slice, array or map type whose elements are written in
-///   braces of their own, as `[]struct{ in, want int }{{in: 2, want: 4}}`, holds its expected values: each such
-///   element, its key with it in a map's, is an assertion too, in the order written, its literals and shape its own.
-///   A table within a case is part of that case.
+/// - A table of cases in its body, a composite literal that a `for … range` in the same top-level function ranges
+///   over, written there or by a name a `:=` or a `var` there binds to it, as `[]struct{ in, want int }{{in: 2, want:
+///   4}}`, holds its expected values: each of its elements written in braces of their own, its key with it in a
+///   map's, is an assertion too, in the order written, its literals and shape its own and its text on one line
+///   ([`on_one_line`]). A literal in a case is part of that case.
 /// - An assertion reads ([`Assertion::reads`]) each name in it that the top-level function holding it binds nowhere
-///   ([`binds::bindings`]), but a key of a keyed element, as `want` in `{want: 4}`.
+///   ([`binds::bindings`]), but a field's name keying an element of a literal not of a map type, as `want` in
+///   `{want: 4}`.
 /// - A weakening is a `Skip`, `Skipf` or `SkipNow` called on such a variable anywhere in the file; a `//go:build`
 ///   line above its `package` clause ([`constraint::weakening`]); and, anywhere in the file, an error thrown away by
 ///   `_ = err` or by an `if err != nil {}` whose block holds no statement, `err` being any name of an error by Go's
@@ -57,7 +59,7 @@ pub fn read(root: Node, text: Text) -> (Vec<Test>, Vec<Weakening>) {
         consumed: HashSet::new(),
         function: String::new(),
         own: HashSet::new(),
-        in_table: false,
+        tables: HashSet::new(),
     };
     for node in named(root) {
         match node.kind() {
@@ -142,8 +144,8 @@ struct Walk<'t> {
     function: String,
     /// The names the top-level function the walk is in binds anywhere, which its assertions do not read as the file's.
     own: HashSet<String>,
-    /// Whether the walk is inside a table of cases, whose cases are read whole.
-    in_table: bool,
+    /// The tables of cases ([`read`]) of the top-level function the walk is in, by their nodes' ids.
+    tables: HashSet<usize>,
 }
 
 impl<'t> Walk<'t> {
@@ -152,6 +154,7 @@ impl<'t> Walk<'t> {
         let Some(body) = node.child_by_field_name("body") else { return };
         self.function = function_name(node, self.text);
         self.own = binds::bindings(node, self.text).into_iter().map(|b| b.name).collect();
+        self.tables = ranged_literals(body, self.text);
         let params = self.testing_params(node);
         self.owner = None;
         if node.kind() == "function_declaration" && self.is_test(node) {
@@ -231,11 +234,9 @@ impl<'t> Walk<'t> {
                 self.discard(node);
                 self.children(node);
             }
-            "composite_literal" => {
-                let outer = self.in_table;
-                self.in_table = outer || self.table(node);
+            "composite_literal" if self.tables.contains(&node.id()) => {
+                self.table(node);
                 self.children(node);
-                self.in_table = outer;
             }
             _ => self.children(node),
         }
@@ -318,28 +319,14 @@ impl<'t> Walk<'t> {
         }
     }
 
-    /// A composite literal, `node`, outside any table: when it is a table of cases ([`read`]), each case an assertion
-    /// of the test the walk is in. Whether it was one.
-    fn table(&mut self, node: Node<'t>) -> bool {
-        let listed = node.child_by_field_name("type").is_some_and(|ty| {
-            matches!(ty.kind(), "slice_type" | "array_type" | "implicit_length_array_type" | "map_type")
-        });
-        let elements = node.child_by_field_name("body").filter(|_| listed).map(named).unwrap_or_default();
-        let braced = |element: &Node| {
-            // What the element writes: a keyed element's value, without its key.
-            let written = match element.kind() {
-                "literal_element" => Some(*element),
-                "keyed_element" => element.child_by_field_name("value"),
-                _ => None,
-            };
-            written.and_then(|w| w.named_child(0)).is_some_and(|v| v.kind() == "literal_value")
-        };
-        let cases: Vec<Node> = elements.into_iter().filter(braced).collect();
-        for case in &cases {
-            let assertion = self.assertion(*case, &[*case], case.end_byte());
+    /// A table of cases, `node` ([`read`]): each case an assertion of the test the walk is in.
+    fn table(&mut self, node: Node<'t>) {
+        let elements = node.child_by_field_name("body").map(named).unwrap_or_default();
+        for case in elements.into_iter().filter(|e| is_case(*e)) {
+            let mut assertion = self.assertion(case, &[case], case.end_byte());
+            assertion.text = on_one_line(&assertion.text);
             self.assert(assertion);
         }
-        !cases.is_empty()
     }
 
     fn assert(&mut self, assertion: Assertion) {
@@ -413,17 +400,22 @@ impl<'t> Walk<'t> {
 
     /// The names `parts`, an assertion's, read as the file's, each once, in the order written ([`read`]).
     fn reads(&self, parts: &[Node]) -> Vec<String> {
-        let key = |n: Node| {
+        let field = |n: Node| {
             let element = n.parent().filter(|p| p.kind() == "literal_element");
             let keyed = element.and_then(|e| e.parent()).filter(|k| k.kind() == "keyed_element");
-            keyed.and_then(|k| k.child_by_field_name("key")) == element && element.is_some()
+            let key = keyed.and_then(|k| k.child_by_field_name("key")) == element && element.is_some();
+            // A map's key is an expression; a literal whose type is elided, nested in another, is taken for a struct.
+            let literal = keyed.and_then(|k| k.parent()).and_then(|body| body.parent());
+            let of_map = literal.and_then(|l| l.child_by_field_name("type")).is_some_and(|ty| ty.kind() == "map_type");
+            key && !of_map
         };
         let mut out: Vec<String> = vec![];
         // Nodes still to read, the next one last.
         let mut pending: Vec<Node> = parts.iter().rev().copied().collect();
         while let Some(node) = pending.pop() {
             let name = self.text.of(node);
-            if node.kind() == "identifier" && !key(node) && !self.own.contains(name) && !out.iter().any(|n| n == name) {
+            let fresh = !self.own.contains(name) && !out.iter().any(|n| n == name);
+            if node.kind() == "identifier" && !field(node) && fresh {
                 out.push(name.into());
             }
             pending.extend(named(node).into_iter().rev());
@@ -475,15 +467,59 @@ pub fn constants(root: Node, text: Text) -> Vec<Constant> {
     let specs = declarations.flat_map(named).filter(|s| s.kind() == "const_spec");
     let mut out = vec![];
     for spec in specs {
-        let values: Vec<Node> = spec.child_by_field_name("value").map(named).unwrap_or_default();
-        let values = values.into_iter().filter(|v| v.kind() != "comment");
-        for (name, value) in fields(spec, "name").into_iter().zip(values) {
-            if text.of(name) != "_" && !holds_call(value) {
-                out.push(Constant { name: text.of(name).into(), line: line(spec), expression: digest(value, text) });
+        for (name, initializer) in fields(spec, "name").into_iter().zip(initializers(spec)) {
+            if text.of(name) != "_" && !holds_call(initializer) {
+                let expression = digest(initializer, text);
+                out.push(Constant { name: text.of(name).into(), line: line(spec), expression });
             }
         }
     }
     out
+}
+
+/// Whether `element`, of a composite literal's body, is a case of a table: written in braces of its own, its value's
+/// when it is keyed.
+fn is_case(element: Node) -> bool {
+    let written = match element.kind() {
+        "literal_element" => Some(element),
+        "keyed_element" => element.child_by_field_name("value"),
+        _ => None,
+    };
+    written.and_then(|w| w.named_child(0)).is_some_and(|v| v.kind() == "literal_value")
+}
+
+/// The composite literals that a `for … range` in `body`, a function's, ranges over, written in the `range` or bound
+/// to the name it ranges over by a `:=` or a `var` anywhere in `body`, whatever the scope: its tables of cases, by
+/// their nodes' ids.
+fn ranged_literals(body: Node, text: Text) -> HashSet<usize> {
+    let mut ranged = vec![];
+    let mut bound: Vec<(&str, Node)> = vec![];
+    let mut pending = vec![body];
+    while let Some(node) = pending.pop() {
+        match node.kind() {
+            "range_clause" => ranged.extend(node.child_by_field_name("right")),
+            "short_var_declaration" => {
+                let names = node.child_by_field_name("left").map(named).unwrap_or_default();
+                bound.extend(names.into_iter().map(|n| text.of(n)).zip(initializers(node)));
+            }
+            "var_spec" => bound.extend(fields(node, "name").into_iter().map(|n| text.of(n)).zip(initializers(node))),
+            _ => {}
+        }
+        pending.extend(named(node));
+    }
+    let literals = ranged.into_iter().flat_map(|r| match r.kind() {
+        "identifier" => bound.iter().filter(|(name, _)| *name == text.of(r)).map(|(_, value)| *value).collect(),
+        _ => vec![r],
+    });
+    literals.filter(|l| l.kind() == "composite_literal").map(|l| l.id()).collect()
+}
+
+/// The expressions a `const_spec`, `var_spec` or `short_var_declaration`, `node`, gives its names, in order, its
+/// comments left out.
+fn initializers(node: Node) -> Vec<Node> {
+    let field = if node.kind() == "short_var_declaration" { "right" } else { "value" };
+    let written = node.child_by_field_name(field).map(named).unwrap_or_default();
+    written.into_iter().filter(|v| v.kind() != "comment").collect()
 }
 
 /// Whether `node` is or holds a call.

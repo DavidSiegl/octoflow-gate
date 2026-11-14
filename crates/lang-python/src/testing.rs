@@ -4,12 +4,12 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use model::{first_line, Assertion, Constant, Lines, Test, TestGroup, Weakening, WeakeningKind};
+use model::{first_line, on_one_line, Assertion, Constant, Lines, Test, TestGroup, Weakening, WeakeningKind};
 use tree_sitter::Node;
 
 use crate::binds::{binds, declared, deleted, How, SCOPES};
 use crate::syntax::{
-    children, decorated, digest, digest_of, end_line, fields, line, named, of_kind, on_one_line, tokens, undecorated,
+    children, decorated, digest, digest_of, end_line, fields, line, named, of_kind, tokens, undecorated,
     unparenthesized, Text, Token,
 };
 

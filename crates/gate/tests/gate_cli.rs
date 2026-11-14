@@ -203,8 +203,12 @@ fn the_base_files_of_a_change_are_read_by_one_git_process() {
         ("notes.md", b"notes\n"),
         ("run", b"#!/bin/sh\necho run\n"),
         ("tool", b"#!/usr/bin/env python3\nprint(1)\n"),
+        ("lib.rs", b"pub fn one() -> u32 {\n    1\n}\n"),
     ]);
-    for (path, contents) in [("notes.md", "more notes\n"), ("run", "#!/bin/sh\necho ran\n"), ("tool", "print(2)\n")] {
+    // lib.rs, Rust outside a Cargo package, is read by the parser checks and starts no cargo.
+    let edits = [("notes.md", "more notes\n"), ("run", "#!/bin/sh\necho ran\n"), ("tool", "print(2)\n"),
+                 ("lib.rs", "pub fn one() -> u32 {\n    2\n}\n")];
+    for (path, contents) in edits {
         repo.put(path, contents.as_bytes());
     }
     let log = repo.outside.join("git.log");

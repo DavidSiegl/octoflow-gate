@@ -142,9 +142,11 @@ pub fn failed(what: &str, path: &Path, e: &std::io::Error) -> String {
 /// symbolic link as a link, to its path in the working tree. A symbolic link is written as it is, wherever it points,
 /// and no file is written or removed through one: a link on the way to a replaced file is replaced by a directory, as
 /// the working tree has one there. A submodule holds the files of the commit the base records for it, as
-/// [`unpack_commit`] writes them, unless `beside` accepts its path: then it holds the working tree's directory.
+/// [`unpack_commit`] writes them, unless `beside` accepts its path: then it holds those of the commit its checkout in
+/// the working tree is at, without what that checkout holds that git does not track there.
 ///
-/// Gives back the submodules left empty, as [`unpack_commit`] does. Errs, a clause, when git cannot list or write a
+/// Gives back the submodules left empty, as [`unpack_commit`] does, of the base's and of those taken from the working
+/// tree. Errs, a clause, when git cannot list or write a
 /// commit, `tar` cannot unpack it, `dest` exists or a file cannot be written.
 pub fn copy_base_with_tests(
     change: &Change,
@@ -153,10 +155,12 @@ pub fn copy_base_with_tests(
     beside: impl Fn(&OsStr) -> bool,
 ) -> Result<Vec<(String, String)>, String> {
     std::fs::create_dir(dest).map_err(|e| failed("make", dest, &e))?;
-    let empty = unpack_commit(&change.root, &change.base, dest, archive, "")?;
+    let mut empty = unpack_commit(&change.root, &change.base, dest, archive, "")?;
     // A path the base tracks has no link above it there; it is a directory when the base records a submodule there.
     for old in change.files.iter().filter_map(|f| f.before.as_ref()).filter(|p| beside(p)) {
         remove_entry(&dest.join(old))?;
+        let removed = text::path(old);
+        empty.retain(|(name, _)| name != &removed && !name.starts_with(&format!("{removed}/")));
     }
     for new in change.files.iter().filter_map(|f| f.after.as_ref()).filter(|p| beside(p)) {
         let src = change.root.join(new);
@@ -166,7 +170,14 @@ pub fn copy_base_with_tests(
         let dst = unlinked_path(dest, new)?;
         // A directory the base had where the change has a file or a link: emptied by the removals above, or not.
         remove_entry(&dst)?;
-        copy(&src, &dst)?;
+        // A path the change records a commit at is a submodule's checkout, whose own `.git` would lead nowhere in the
+        // copy: it is written as the files of that commit.
+        if src.join(".git").symlink_metadata().is_ok() {
+            std::fs::create_dir(&dst).map_err(|e| failed("make", &dst, &e))?;
+            empty.extend(unpack_commit(&src, "HEAD", &dst, archive, &format!("{}/", text::path(new)))?);
+        } else {
+            copy(&src, &dst)?;
+        }
     }
     Ok(empty)
 }

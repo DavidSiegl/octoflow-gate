@@ -425,6 +425,22 @@ fn a_change_that_moves_the_commit_of_a_submodule_beside_the_tests_is_judged() {
 }
 
 #[test]
+fn a_submodule_beside_the_tests_holds_the_commit_the_working_tree_records_whatever_the_base_s() {
+    let repo = calc(&[]);
+    add_submodules(&repo, &["tests/fixture"], &[]);
+    // The base records a commit the submodule's repository never had, and the working tree's checkout holds a named
+    // pipe git does not track: the copy takes neither.
+    repo.git(&["update-index", "--cacheinfo", &format!("160000,{},tests/fixture", "1".repeat(40))]);
+    repo.git(&["commit", "--quiet", "-m", "unknown submodule commit"]);
+    let made = Command::new("mkfifo").arg(repo.repo.join("tests/fixture/pipe")).status().unwrap();
+    assert!(made.success());
+    let reads = "#[test]\nfn reads() {\n    assert_eq!(include_str!(\"fixture/notes.txt\"), \"notes\\n\");\n    \
+                 assert!(!std::path::Path::new(\"tests/fixture/.git\").exists());\n}\n";
+    repo.put("tests/calc.rs", reads.as_bytes());
+    assert_eq!(found(&repo), vec![at("tests/calc.rs", 2, "passes-at-base")]);
+}
+
+#[test]
 fn a_submodule_without_the_base_s_commit_is_one_finding() {
     let repo = calc(&[]);
     add_submodules(&repo, &["vendor/lib"], &[]);

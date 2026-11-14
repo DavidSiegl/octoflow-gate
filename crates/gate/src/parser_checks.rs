@@ -29,6 +29,8 @@ pub struct Sources<'a> {
     pub python: PythonChange<'a>,
     pub rust: RustChange<'a>,
     pub go: GoChange<'a>,
+    /// The contents at the base of each of the change's files that is a regular file there, by its base path.
+    at_base: HashMap<OsString, Vec<u8>>,
 }
 
 impl<'a> Sources<'a> {
@@ -50,6 +52,7 @@ impl<'a> Sources<'a> {
             python: PythonChange { change, files: python, bases_not_python },
             rust,
             go: GoChange { change, files: go, gone: stored.gone },
+            at_base: stored.at_base,
         })
     }
 }
@@ -150,7 +153,7 @@ impl<'a> RustChange<'a> {
     fn of(change: &'a Change, stored: &Stored) -> Result<RustChange<'a>, Unjudged> {
         let (mut test_modules_at_base, mut test_modules_now) = (HashSet::new(), HashSet::new());
         if any_path(change, |path| path.as_bytes().ends_with(b".rs")) {
-            let (base, now) = trees(change, b".rs")?;
+            let (base, now) = trees(change, &stored.at_base, b".rs")?;
             test_modules_at_base = lang_rust::test_modules(&base);
             test_modules_now = lang_rust::test_modules(&now);
         }
@@ -302,18 +305,19 @@ pub fn vague_names(sources: &Sources) -> Vec<Finding> {
 pub fn dependency_cycles(sources: &Sources) -> Result<Vec<Finding>, Unjudged> {
     let mut out = vec![];
     if !sources.python.files.is_empty() {
-        out.extend(new_cycles_in(sources.change, b".py", lang_python::imports)?);
+        out.extend(new_cycles_in(sources, b".py", lang_python::imports)?);
     }
     if !sources.rust.files.is_empty() {
-        out.extend(new_cycles_in(sources.change, b".rs", lang_rust::imports)?);
+        out.extend(new_cycles_in(sources, b".rs", lang_rust::imports)?);
     }
     Ok(by_path_and_line(out))
 }
 
-/// The dependency-cycles check's findings on `change`'s files whose paths end in `suffix`, which `imports` reads, as
-/// [`dependency_cycles`] says.
-fn new_cycles_in(change: &Change, suffix: &[u8], imports: ReadImports) -> Result<Vec<Finding>, Unjudged> {
-    let (base, now) = trees(change, suffix)?;
+/// The dependency-cycles check's findings on the files of `sources`' change whose paths end in `suffix`, which
+/// `imports` reads, as [`dependency_cycles`] says.
+fn new_cycles_in(sources: &Sources, suffix: &[u8], imports: ReadImports) -> Result<Vec<Finding>, Unjudged> {
+    let change = sources.change;
+    let (base, now) = trees(change, &sources.at_base, suffix)?;
     let renamed: HashMap<&OsStr, &OsString> = change
         .files
         .iter()
@@ -339,18 +343,22 @@ type ReadImports = fn(&[(OsString, Vec<u8>)]) -> ImportGraph;
 type TreeFiles = Vec<(OsString, Vec<u8>)>;
 
 /// (path, bytes) of each of the tree's tracked regular files outside mutmut's state ([`under_mutmut_state`]) whose
-/// path ends in `suffix`, as `change`'s base holds them and as its working tree does. A base path is the file's there,
-/// which the change may rename. Errs when git cannot list the files or show one at the base, or one cannot be read in
-/// the working tree.
-fn trees(change: &Change, suffix: &[u8]) -> Result<(TreeFiles, TreeFiles), Unjudged> {
+/// path ends in `suffix`, as `change`'s base holds them and as its working tree does, `at_base` being the contents at
+/// the base of the change's files that are regular files there, by base path ([`Stored::at_base`]). A base path is the
+/// file's there, which the change may rename. Errs when git cannot list the working tree's files, or one cannot be
+/// read.
+fn trees(
+    change: &Change,
+    at_base: &HashMap<OsString, Vec<u8>>,
+    suffix: &[u8],
+) -> Result<(TreeFiles, TreeFiles), Unjudged> {
     let now = working_tree_files(change, |path| path.as_bytes().ends_with(suffix))?;
     // A file the change leaves alone is the same at the base; one it touches is git's there, under its base path.
     let touched: HashSet<&OsStr> = change.files.iter().filter_map(|f| f.after.as_deref()).collect();
     let mut base: TreeFiles =
         now.iter().filter(|(path, _)| !touched.contains(path.as_os_str())).cloned().collect();
-    let before: Vec<OsString> =
-        change.files.iter().filter_map(|f| f.before.clone()).filter(|p| p.as_bytes().ends_with(suffix)).collect();
-    base.extend(regular_files_at_base(change, &before)?);
+    let changed = at_base.iter().filter(|(path, _)| path.as_bytes().ends_with(suffix));
+    base.extend(changed.map(|(path, bytes)| (path.clone(), bytes.clone())));
     Ok((base, now))
 }
 

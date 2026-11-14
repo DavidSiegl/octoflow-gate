@@ -245,6 +245,50 @@ fn a_call_of_a_helper_of_the_file_that_fails_the_test_it_is_passed_is_an_asserti
     assert_eq!(wheres(&found), [at(6, "expected-value-changed")]);
 }
 
+/// Examples: two with their output to check, and one with none, which `go test` compiles but does not run.
+const EXAMPLE_TEST: &str = r#"package calc
+
+import "fmt"
+
+func ExampleAdd() {
+	fmt.Println(Add(1, 2))
+	// Output: 3
+}
+
+func Example_unordered() {
+	fmt.Println(Add(1, 1))
+	fmt.Println(Add(2, 2))
+	// Unordered output:
+	// 4
+	// 2
+}
+
+func ExampleSub() {
+	fmt.Println(Add(1, 2))
+}
+"#;
+
+#[test]
+fn an_example_with_its_output_is_a_test_whose_assertion_is_that_output() {
+    let file = lang_go::read(EXAMPLE_TEST.as_bytes(), true).unwrap();
+    let names: Vec<&str> = file.tests.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, ["ExampleAdd", "Example_unordered"]);
+    let asserted: Vec<(u32, &str, &[String])> = (file.tests.iter().flat_map(|t| &t.assertions))
+        .map(|a| (a.line, a.text.as_str(), a.literals.as_slice()))
+        .collect();
+    assert_eq!(asserted, [
+        (7, "// Output: 3", &["3".to_string()][..]),
+        (13, "// Unordered output:\n\t// 4\n\t// 2", &["4\n2".to_string()][..]),
+    ]);
+    let removed = edit(EXAMPLE_TEST, "func ExampleAdd() {\n\tfmt.Println(Add(1, 2))\n\t// Output: 3\n}\n\n", "");
+    assert_eq!(wheres(&check(&[edited(TEST_PATH, EXAMPLE_TEST, &removed)])), [at(5, "removed-test")]);
+    let changed = edit(EXAMPLE_TEST, "// Output: 3", "// Output: 4");
+    assert_eq!(check(&[edited(TEST_PATH, EXAMPLE_TEST, &changed)]), vec![], "an edit of the tests alone");
+    let calc = edit(CALC, "a + b", "a + b + 1");
+    let found = check(&[edited(CALC_PATH, CALC, &calc), edited(TEST_PATH, EXAMPLE_TEST, &changed)]);
+    assert_eq!(wheres(&found), [at(7, "expected-value-changed")]);
+}
+
 #[test]
 fn an_edit_beside_the_tests_has_no_findings() {
     let files = [edited(CALC_PATH, CALC, &edit(CALC, "a + b", "b + a"))];

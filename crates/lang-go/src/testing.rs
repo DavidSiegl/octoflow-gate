@@ -25,7 +25,8 @@ const TESTIFY: &[&str] = &["github.com/stretchr/testify/assert", "github.com/str
 ///   them, X empty or not starting with a lowercase letter; and a subtest, a `t.Run("name", func(...) {...})` whose
 ///   name is a string literal, named after the test holding it as `go test` names it, `TestX/name`, a space in the
 ///   literal written `_`. A `t.Run` named by any other expression, as a table-driven test's, is part of the test
-///   holding it.
+///   holding it. An example, `ExampleX()`, is a test too where `go test` runs it, as [`example_output`] says, its one
+///   assertion its output comment.
 /// - Its assertions are those in its body but its subtests', in the order written: a call of testify's `assert` or
 ///   `require` (`assert.Equal(t, 3, got)`, by the names the file imports them under, `assert.New` not one), or of a
 ///   method of a name that a `:=` or a `var` in the same top-level function binds to such a `New` (`a :=
@@ -186,14 +187,15 @@ impl<'t> Walk<'t> {
         self.assertors = bound.iter().filter(|(_, value)| self.testify_new(*value)).map(|(name, _)| *name).collect();
         let params = self.testing_params(node);
         self.owner = None;
-        if node.kind() == "function_declaration" && self.is_test(node) {
+        let output = example_output(node, self.text);
+        if node.kind() == "function_declaration" && (self.is_test(node) || output.is_some()) {
             self.owner = Some(self.tests.len());
             self.tests.push(Test {
                 name: self.function.clone(),
                 line: line(node),
                 lines: Lines { first: doc_line(node).unwrap_or(line(node)), last: end_line(node) },
                 body: digest(body, self.text),
-                assertions: vec![],
+                assertions: output.into_iter().collect(),
             });
         }
         let depth = self.scope.len();
@@ -570,6 +572,59 @@ pub fn constants(root: Node, text: Text) -> Vec<Constant> {
         }
     }
     out
+}
+
+/// The output comment of the example `node` declares, as an assertion, where `go test` runs it: a function
+/// `ExampleX` with no parameters and no results, X empty or not starting with a lowercase letter, whose body's last
+/// comment group, its comments on lines with none between, starts with `Output:` or `Unordered output:`, either in any
+/// case, after the comment's `//` or `/*` and spaces (<https://pkg.go.dev/testing#hdr-Examples>). The assertion's text
+/// is the group as written; its shape which of the two it starts with, in lowercase; and its one literal the output:
+/// the text after that start, each line without its comment's `//` and the one space after, as go/doc reads a comment,
+/// and with the space around the whole taken off, as `go test` compares it. None for any other node.
+fn example_output(node: Node, text: Text) -> Option<Assertion> {
+    let name = text.of(node.child_by_field_name("name")?);
+    let suffix = name.strip_prefix("Example")?;
+    let params = node.child_by_field_name("parameters").map(named).unwrap_or_default();
+    if node.kind() != "function_declaration"
+        || suffix.starts_with(char::is_lowercase)
+        || params.iter().any(|p| p.kind() != "comment")
+        || node.child_by_field_name("result").is_some()
+        || node.child_by_field_name("type_parameters").is_some()
+    {
+        return None;
+    }
+    let mut comments: Vec<Node> = vec![];
+    let mut pending = vec![node.child_by_field_name("body")?];
+    while let Some(n) = pending.pop() {
+        if n.kind() == "comment" {
+            comments.push(n);
+        }
+        pending.extend(named(n));
+    }
+    comments.sort_by_key(Node::start_byte);
+    let last = comments.last()?;
+    let before_last = comments.windows(2).rev().take_while(|w| line(w[1]) == end_line(w[0]) + 1).count();
+    let group = &comments[comments.len() - 1 - before_last..];
+    let uncommented = |c: &Node| {
+        let written = text.of(*c);
+        match written.strip_prefix("//") {
+            Some(rest) => rest.strip_prefix(' ').unwrap_or(rest),
+            None => written.trim_start_matches("/*").trim_end_matches("*/"),
+        }
+    };
+    let joined = group.iter().map(uncommented).collect::<Vec<_>>().join("\n");
+    let start = joined.trim_start();
+    let (shape, output) = ["unordered output:", "output:"].into_iter().find_map(|shape| {
+        let head = start.get(..shape.len()).filter(|h| h.eq_ignore_ascii_case(shape))?;
+        Some((shape, &start[head.len()..]))
+    })?;
+    Some(Assertion {
+        line: line(group[0]),
+        text: text.0[group[0].start_byte()..last.end_byte()].into(),
+        shape: shape.into(),
+        literals: vec![output.trim().into()],
+        reads: vec![],
+    })
 }
 
 /// Whether `element`, of a composite literal's body, is a case of a table: written in braces of its own, its value's

@@ -241,8 +241,10 @@ where the gate does not judge it: a vendored, generated or symlinked file is cod
 `FuzzX(f *testing.F)`, as `go test` finds them, and a subtest, `t.Run("name", func(t *testing.T) {...})`, named by its
 string literal after the test holding it, as `TestAdd/negative`, with `_` for a space as `go test` writes it. A subtest
 named by any other expression, as a table-driven test's `t.Run(tc.name, ...)`, is part of the test holding it. An
-example, `ExampleX()` with its `// Output:` comment, is no test, though `go test` runs it and checks its output, so
-removing one or changing its output is not seen (#73). The findings are Python's, read of Go:
+example, `ExampleX()`, is a test where `go test` runs it, as it does where the last comment of its body starts with
+`// Output:` or `// Unordered output:`: its one assertion is that comment, the output after it its expected value, so
+changing `// Output: 3` to `4` beside the code is an `expected-value-changed` finding. The findings are Python's, read
+of Go:
 
 - `removed-test`: a test or subtest gone from its file, its body compared by a digest of its tokens as Rust's is; a
   deleted file is one finding. Go has no item that holds tests, so there is no group finding;

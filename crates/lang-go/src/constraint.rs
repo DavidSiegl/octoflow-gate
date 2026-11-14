@@ -151,13 +151,36 @@ fn holds_code(mut line: &str, in_block_comment: &mut bool) -> bool {
     }
 }
 
+/// The platform suffix ([`platform_suffix`]) of the Go file name at `path` where it narrows the platforms the name at
+/// `base` builds the file on, as a name with none renamed to `calc_windows_test.go`, or `_linux` to `_linux_amd64`:
+/// where it names a `GOOS` or `GOARCH` that the suffix at `base` does not, by itself or as one it implies, as
+/// `android` implies `linux`. None where it does not narrow them, as `_linux_amd64` renamed to `_amd64`, or `_android`
+/// to `_linux`; `base` None for a file new at the change.
+pub fn narrowing_platform_suffix(base: Option<&[u8]>, path: &[u8]) -> Option<String> {
+    let suffix = platform_suffix(path)?;
+    let had = base.and_then(platform_suffix).unwrap_or_default();
+    let had: Vec<&str> = had.split('_').filter(|p| !p.is_empty()).flat_map(|p| [p, implied_os(p)]).collect();
+    let narrows = !suffix.split('_').filter(|p| !p.is_empty()).all(|part| had.contains(&part));
+    narrows.then_some(suffix)
+}
+
+/// The `GOOS` that go sets as a tag beside `os`, as `linux` on `android`; `os` itself for any other.
+fn implied_os(os: &str) -> &str {
+    match os {
+        "android" => "linux",
+        "ios" => "darwin",
+        "illumos" => "solaris",
+        _ => os,
+    }
+}
+
 /// The suffix of the Go file name at `path`, from the tree's top level, that builds the file on one platform alone,
 /// as written, as `_windows` of `calc_windows_test.go`: its last `_`-separated part before `.` but for a `_test`, a
 /// `GOOS` or `GOARCH` value ([`GOOSES`], [`GOARCHES`]), or its last two, a `GOOS` then a `GOARCH` value, as go/build
 /// reads a file name (<https://pkg.go.dev/go/build#hdr-Build_Constraints>). None for a name with no such suffix, as
 /// `windows_test.go`, whose part before its first `_` is no suffix, or `calc_unix_test.go`, as `unix` constrains a
 /// file only in a constraint line.
-pub fn platform_suffix(path: &[u8]) -> Option<String> {
+fn platform_suffix(path: &[u8]) -> Option<String> {
     let name = path.rsplit(|&b| b == b'/').next().unwrap_or(path);
     let name = std::str::from_utf8(name).ok()?.split('.').next().unwrap_or_default();
     let name = name.strip_suffix("_test").unwrap_or(name);
@@ -304,14 +327,8 @@ impl Expr {
         match self {
             Expr::Tag(tag) => {
                 let os = build.os;
-                let implied = match os {
-                    "android" => "linux",
-                    "ios" => "darwin",
-                    "illumos" => "solaris",
-                    _ => os,
-                };
                 tag == os
-                    || tag == implied
+                    || tag == implied_os(os)
                     || tag == build.arch
                     || (tag == "unix" && UNIX.contains(&os))
                     || tag == build.compiler

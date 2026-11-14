@@ -14,7 +14,7 @@ mod syntax;
 mod testing;
 
 pub use code_tokens::code_tokens;
-pub use constraint::platform_suffix;
+pub use constraint::narrowing_platform_suffix;
 use flow::Call;
 use syntax::{doc_line, end_line, function_name, line, named, receiver_name, receiver_type, Text};
 

@@ -8,6 +8,13 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
 
 ## Open issues
 
+- **A Go test helper is followed only in the calling test's file.** As cross-review 37 put it (F5, 2026-11-14):
+  "`Walk` is per file, and `keep_helper_calls` drops a test's call of a function not among this file's helpers.
+  Base: calc_test.go holds `check` (with `t.Errorf`) and `TestAdd` calling `check(t, Add(1, 2), 3)`. The change moves
+  `check` unchanged to helpers_test.go. At head the call is no assertion, and every caller gets a fewer-assertions
+  finding (to weigh) although no test changed." todo/30 scoped helpers to the file; `read` and `Walk` are in
+  `crates/lang-go/src/testing.rs`. Closes with helpers read package-wide, the front end told the package's other
+  test files.
 - **Go's and Python's readers repeat work that nothing needs repeated.** As cross-review 36 put it (F9,
   2026-11-14): "`Walk::function` (`testing.rs:154`) recomputes `binds::bindings` for every top-level function,
   helpers whose assertions are dropped included, although `lang_go::read` already computes the file's bindings.

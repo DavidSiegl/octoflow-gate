@@ -11,7 +11,7 @@ use std::time::Instant;
 use checks::Finding;
 use serde::Deserialize;
 
-use crate::base_findings::{budget_reached, submodules_left_empty, unread_not_run};
+use crate::base_findings::{budget_reached, not_reached, submodules_left_empty, unread_not_run};
 use crate::changed_tests::{changed_tests, ChangedTest};
 use crate::copies::{copy_base_with_tests, failed, finding, in_scratch_directory, sort_by_place, Budget};
 use crate::go_at_base::go_at_base;
@@ -158,7 +158,7 @@ fn group_by_target(mut layout: CrateLayout, tests: &[ChangedTest], budget: &Budg
             }
             Err(Unplaced::Stopped(at)) => {
                 out.push(budget_reached(budget, "cargo metadata", &format!("while it read the Cargo targets at {at}")));
-                out.extend(groups.iter().map(|(target, _)| not_reached(budget, target)));
+                out.extend(groups.iter().map(|(target, _)| not_reached(budget, &target.label())));
                 return (out, vec![]);
             }
         };
@@ -171,17 +171,6 @@ fn group_by_target(mut layout: CrateLayout, tests: &[ChangedTest], budget: &Budg
         }
     }
     (out, groups)
-}
-
-/// The `not-run` finding on `target`, whose changed tests `budget` ran out before.
-fn not_reached(budget: &Budget, target: &Target) -> Finding {
-    let message = format!(
-        "the run at the base used its {} seconds (`--base-run-budget`) before it reached {}, so its changed tests \
-         were not run there.",
-        budget.seconds,
-        target.label()
-    );
-    finding(None, None, "not-run", message)
 }
 
 /// The findings of running `groups`, [`group_by_target`]'s of `tests`, as [`run_target`] runs one, in turn, within
@@ -205,7 +194,7 @@ fn run_groups(run: &Run, groups: &[Group], tests: &[ChangedTest], budget: &Budge
             }
             Ran::Stopped(f) => {
                 out.push(f);
-                out.extend(groups[n + 1..].iter().map(|(later, _)| not_reached(budget, later)));
+                out.extend(groups[n + 1..].iter().map(|(later, _)| not_reached(budget, &later.label())));
                 groups[n..].iter().flat_map(|(_, theirs)| theirs).for_each(|&(i, _)| passed[i] = false);
                 break;
             }

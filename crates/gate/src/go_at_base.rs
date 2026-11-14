@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use checks::Finding;
 
-use crate::base_findings::{budget_reached, submodules_left_empty, unread_not_run};
+use crate::base_findings::{budget_reached, not_reached, submodules_left_empty, unread_not_run};
 use crate::copies::{copy_base_with_tests, finding, in_scratch_directory, Budget};
 use crate::gotest::{self, Packages, Ran};
 use crate::junit::Outcome;
@@ -79,11 +79,11 @@ fn base_run_findings(go: &GoChange, dir: &Path, packages: &Packages, budget: &Bu
             None | Some(Err(gotest::Problem { overran: true, .. })) => {
                 let when = if left.is_zero() { "before it ran" } else { "while it ran" };
                 out.push(budget_reached(budget, "go test", &format!("{when} the changed tests of {label}")));
-                out.extend(packages.keys().skip(n + 1).map(|later| not_reached(budget, later)));
+                out.extend(packages.keys().skip(n + 1).map(|later| not_reached(budget, &gotest::label(later))));
                 break;
             }
             Some(Err(problem)) => {
-                out.push(finding(None, None, "not-run", problem.clause));
+                out.push(finding(None, None, "not-run", format!("{}; they were not run there.", problem.clause)));
                 continue;
             }
         };
@@ -95,13 +95,3 @@ fn base_run_findings(go: &GoChange, dir: &Path, packages: &Packages, budget: &Bu
     out
 }
 
-/// The `not-run` finding on the package at `package`, whose changed tests `budget` ran out before.
-fn not_reached(budget: &Budget, package: &Path) -> Finding {
-    let message = format!(
-        "the run at the base used its {} seconds (`--base-run-budget`) before it reached {}, so its changed tests \
-         were not run there.",
-        budget.seconds,
-        gotest::label(package)
-    );
-    finding(None, None, "not-run", message)
-}

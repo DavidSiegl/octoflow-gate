@@ -19,6 +19,17 @@ pub fn budget_reached(budget: &Budget, runner: &str, when: &str) -> Finding {
     finding(None, None, "budget-reached", message)
 }
 
+/// The `not-run` finding on `place`, a Cargo target or a Go package as findings name it, whose changed tests `budget`
+/// ran out before. Python's names its tests' group instead (python_at_base.rs), which reads as the tests themselves.
+pub fn not_reached(budget: &Budget, place: &str) -> Finding {
+    let message = format!(
+        "the run at the base used its {} seconds (`--base-run-budget`) before it reached {place}, so its changed tests \
+         were not run there.",
+        budget.seconds
+    );
+    finding(None, None, "not-run", message)
+}
+
 /// The `not-run` finding on a file the change edits that could not be read, at `path`, for `unreadable`'s reason:
 /// the tests in it were not run.
 pub fn unread_not_run((path, unreadable): (&OsStr, &Unreadable)) -> Finding {

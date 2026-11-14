@@ -326,12 +326,13 @@ impl<'t> Walk<'t> {
         });
         let elements = node.child_by_field_name("body").filter(|_| listed).map(named).unwrap_or_default();
         let braced = |element: &Node| {
-            let value = match element.kind() {
+            // What the element writes: a keyed element's value, without its key.
+            let written = match element.kind() {
                 "literal_element" => Some(*element),
                 "keyed_element" => element.child_by_field_name("value"),
                 _ => None,
             };
-            value.and_then(|v| v.named_child(0)).is_some_and(|v| v.kind() == "literal_value")
+            written.and_then(|w| w.named_child(0)).is_some_and(|v| v.kind() == "literal_value")
         };
         let cases: Vec<Node> = elements.into_iter().filter(braced).collect();
         for case in &cases {

@@ -17,7 +17,8 @@
 //! missing; `cargo locate-project` for each Cargo.toml among the files it is given; and `cargo clippy` in each
 //! workspace, which builds what it needs to (target/ in the workspace) and may fetch the crates it uses. That last
 //! runs with `--locked` when git tracks the workspace's Cargo.lock, so that it judges the versions the change commits
-//! and never rewrites the file; without one, cargo writes an untracked Cargo.lock beside the manifest.
+//! and never rewrites the file; without one, cargo writes an untracked Cargo.lock beside the manifest (a workspace that
+//! commits no lock file has cargo resolve one afresh, which `--locked` refuses). passes-at-base follows the same rule.
 
 use std::collections::{BTreeSet, HashSet};
 use std::ffi::{OsStr, OsString};
@@ -86,20 +87,14 @@ pub(crate) fn workspaces(name: &str, root: &Path, files: &[OsString]) -> (Vec<Pa
     (roots.into_iter().collect(), problems)
 }
 
-/// Whether cargo builds the Cargo workspace whose root manifest is in `workspace`, a directory from the tree's top,
-/// `--locked`: when git tracks its Cargo.lock, as `tracked` tells of a path from the top. A workspace that commits no
-/// lock file has cargo resolve one afresh, which `--locked` refuses.
-pub(crate) fn locked(workspace: &Path, tracked: impl Fn(&OsStr) -> bool) -> bool {
-    tracked(workspace.join("Cargo.lock").as_os_str())
-}
-
 /// The lints clippy finds in the workspace whose root manifest is `manifest`, relative to `root`, and the failed
 /// condition, None when it compiled and clippy ran as it should.
 fn lint_workspace(name: &str, root: &Path, manifest: &Path, tracked: &Tracked) -> (Vec<Finding>, Option<String>) {
     let workspace = manifest.parent().unwrap_or(Path::new(""));
     let mut argv =
         ["cargo", "clippy", "--workspace", "--all-targets", "--message-format=json"].map(OsStr::new).to_vec();
-    if locked(workspace, |lock| tracked.listed.iter().any(|p| p == lock)) {
+    let lock = workspace.join("Cargo.lock");
+    if tracked.listed.iter().any(|p| p == lock.as_os_str()) {
         argv.push(OsStr::new("--locked"));
     }
     argv.extend(["--", "--cap-lints", "warn"].map(OsStr::new));

@@ -12,7 +12,6 @@ use checks::{ChangedFile, Finding, Side};
 use model::{Lines, Unreadable};
 use serde::Deserialize;
 
-use crate::clippy::locked;
 use crate::copies::{copy_base_with_tests, failed, finding, in_scratch_directory, sort_by_place, Budget};
 use crate::diff::removal_points;
 use crate::junit::{junit_outcomes, Outcome};
@@ -67,7 +66,7 @@ pub fn budget_reached(budget: &Budget, runner: &str, when: &str) -> Finding {
 /// tests ([`beside_tests`]) in place of the base's. A test in a file the change also edits outside its test code, its
 /// items marked `#[cfg(test)]`, cannot be separated from the code it tests: it is a `not-run` finding at its fn.
 /// Each Cargo target the tests are in ([`CrateLayout::targets`]) is built and run on its own, `cargo nextest run`
-/// filtered to its tests, `--locked` when the base tracks its workspace's Cargo.lock (clippy::locked), with a target
+/// filtered to its tests, `--locked` when the base tracks its workspace's Cargo.lock (the rule of crate::clippy), with a target
 /// directory of its own outside the copy; one whose tests do not compile there counts as failing, which is what the
 /// check expects of a test that needs the change, and gives nothing. A test the run did not report, as one a cfg
 /// leaves out at the base, gives nothing, and one built in several targets is reported only when it passed in each.
@@ -321,8 +320,7 @@ struct Target {
     package: OsString,
     /// cargo's target selection, as `["--test", "cli"]` or `["--lib"]`.
     args: Vec<String>,
-    /// Whether cargo builds it `--locked`: its workspace's Cargo.lock is in the copy of the base, as clippy::locked
-    /// says.
+    /// Whether cargo builds it `--locked`: its workspace's Cargo.lock is in the copy of the base.
     locked: bool,
 }
 
@@ -367,8 +365,8 @@ struct CrateLayout {
 struct Workspace {
     /// Its targets, each with its package's directory from the copy's top.
     targets: Vec<(OsString, CargoTarget)>,
-    /// Whether the copy of the base holds its Cargo.lock, as clippy::locked asks of git: the copy holds the files git
-    /// tracks at the base.
+    /// Whether the copy of the base holds its Cargo.lock, a link included: the copy holds the files git tracks at the
+    /// base, so this is crate::clippy's rule of building `--locked` when git tracks the lock file.
     locked: bool,
 }
 
@@ -513,9 +511,8 @@ impl CrateLayout {
             let Ok(from_top) = manifest_dir.strip_prefix(&self.tree) else { continue };
             out.extend(package.targets.into_iter().map(|t| (from_top.as_os_str().to_owned(), t)));
         }
-        let locked = read.workspace_root.strip_prefix(&self.tree).is_ok_and(|workspace| {
-            locked(workspace, |lock| self.tree.join(lock).symlink_metadata().is_ok())
-        });
+        let lock = read.workspace_root.join("Cargo.lock");
+        let locked = lock.starts_with(&self.tree) && lock.symlink_metadata().is_ok();
         Ok(Workspace { targets: out, locked })
     }
 }

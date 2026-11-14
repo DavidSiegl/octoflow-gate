@@ -86,13 +86,20 @@ pub(crate) fn workspaces(name: &str, root: &Path, files: &[OsString]) -> (Vec<Pa
     (roots.into_iter().collect(), problems)
 }
 
+/// Whether cargo builds the Cargo workspace whose root manifest is in `workspace`, a directory from the tree's top,
+/// `--locked`: when git tracks its Cargo.lock, as `tracked` tells of a path from the top. A workspace that commits no
+/// lock file has cargo resolve one afresh, which `--locked` refuses.
+pub(crate) fn locked(workspace: &Path, tracked: impl Fn(&OsStr) -> bool) -> bool {
+    tracked(workspace.join("Cargo.lock").as_os_str())
+}
+
 /// The lints clippy finds in the workspace whose root manifest is `manifest`, relative to `root`, and the failed
 /// condition, None when it compiled and clippy ran as it should.
 fn lint_workspace(name: &str, root: &Path, manifest: &Path, tracked: &Tracked) -> (Vec<Finding>, Option<String>) {
     let workspace = manifest.parent().unwrap_or(Path::new(""));
     let mut argv =
         ["cargo", "clippy", "--workspace", "--all-targets", "--message-format=json"].map(OsStr::new).to_vec();
-    if tracked.listed.contains(&workspace.join("Cargo.lock").into_os_string()) {
+    if locked(workspace, |lock| tracked.listed.iter().any(|p| p == lock)) {
         argv.push(OsStr::new("--locked"));
     }
     argv.extend(["--", "--cap-lints", "warn"].map(OsStr::new));

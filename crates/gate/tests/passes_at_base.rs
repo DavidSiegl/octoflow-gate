@@ -219,6 +219,15 @@ fn a_test_whose_first_attribute_the_change_removes_is_run() {
 }
 
 #[test]
+fn a_workspace_that_commits_no_lock_file_is_judged() {
+    let repo = calc(&[]);
+    repo.git(&["rm", "-q", "Cargo.lock"]);
+    repo.git(&["commit", "-q", "-m", "no lock file"]);
+    repo.put("tests/calc.rs", ADDS.as_bytes());
+    assert_eq!(found(&repo), vec![at("tests/calc.rs", fn_line(&repo, "tests/calc.rs", "adds"), "passes-at-base")]);
+}
+
+#[test]
 fn a_cargo_error_other_than_a_compile_error_is_not_run() {
     let repo = calc(&[]);
     rebase(&repo, &[("Cargo.lock", "version = 4\n")], "a lock file that --locked refuses");

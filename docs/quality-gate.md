@@ -659,8 +659,9 @@ base made as above, with these files taken from the working tree: Rust's test fi
 (by default any file under a `tests` directory), and a `.rs` file the change edits only inside its test code. A test in
 a file the change also edits outside its test code cannot be separated from the code it tests, and is a `not-run`
 finding at its `fn`. Each Cargo target the changed tests are in is built and run on its own, with `cargo nextest run
---locked --no-fail-fast`, filtered to its tests (`-E 'test(=path::name)'`), in the copy's package directory, with a
-target directory and a nextest store outside the copy and the gate's own nextest configuration in place of the copy's.
+--no-fail-fast`, and `--locked` where the base tracks the workspace's `Cargo.lock`, as clippy, filtered to its tests
+(`-E 'test(=path::name)'`), in the copy's package directory, with a target directory and a nextest store outside the
+copy and the gate's own nextest configuration in place of the copy's.
 The targets are found from the copy's module tree and `cargo metadata`: each crate root whose `mod name;` items, a
 `#[path]` on one included, reach the file (a crate root being a `.rs` file no such item reaches), matched to the target
 of the package nearest above it whose root file it is, so a `[[test]] path`, a module of `src/main.rs` beside a

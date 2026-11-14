@@ -245,13 +245,14 @@ fn a_call_of_a_helper_of_the_file_that_fails_the_test_it_is_passed_is_an_asserti
     assert_eq!(wheres(&found), [at(6, "expected-value-changed")]);
 }
 
-/// Examples: two with their output to check, and one with none, which `go test` compiles but does not run.
+/// Examples: two with their output to check, and one with none, which `go test` compiles but does not run. The
+/// trailing comment of `ExampleAdd` is a comment group of its own, as go/parser groups comments.
 const EXAMPLE_TEST: &str = r#"package calc
 
 import "fmt"
 
 func ExampleAdd() {
-	fmt.Println(Add(1, 2))
+	fmt.Println(Add(1, 2)) // prints the sum
 	// Output: 3
 }
 
@@ -280,7 +281,7 @@ fn an_example_with_its_output_is_a_test_whose_assertion_is_that_output() {
         (7, "// Output: 3", &["3".to_string()][..]),
         (13, "// Unordered output:\n\t// 4\n\t// 2", &["4\n2".to_string()][..]),
     ]);
-    let removed = edit(EXAMPLE_TEST, "func ExampleAdd() {\n\tfmt.Println(Add(1, 2))\n\t// Output: 3\n}\n\n", "");
+    let removed = edit(EXAMPLE_TEST, "func ExampleAdd() {\n\tfmt.Println(Add(1, 2)) // prints the sum\n\t// Output: 3\n}\n\n", "");
     assert_eq!(wheres(&check(&[edited(TEST_PATH, EXAMPLE_TEST, &removed)])), [at(5, "removed-test")]);
     let changed = edit(EXAMPLE_TEST, "// Output: 3", "// Output: 4");
     assert_eq!(check(&[edited(TEST_PATH, EXAMPLE_TEST, &changed)]), vec![], "an edit of the tests alone");

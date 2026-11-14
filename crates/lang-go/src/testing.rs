@@ -577,11 +577,11 @@ pub fn constants(root: Node, text: Text) -> Vec<Constant> {
 
 /// The output comment of the example `node` declares, as an assertion, where `go test` runs it: a function
 /// `ExampleX` with no parameters and no results, X empty or not starting with a lowercase letter, whose body's last
-/// comment group, its comments on lines with none between, starts with `Output:` or `Unordered output:`, either in any
-/// case, after the comment's `//` or `/*` and spaces (<https://pkg.go.dev/testing#hdr-Examples>). The assertion's text
-/// is the group as written; its shape which of the two it starts with, in lowercase; and its one literal the output:
-/// the text after that start, each line without its comment's `//` and the one space after, as go/doc reads a comment,
-/// and with the space around the whole taken off, as `go test` compares it. None for any other node.
+/// comment group ([`last_comment_group`]) starts with `Output:` or `Unordered output:`, either in any case, after the
+/// comment's `//` or `/*` and spaces (<https://pkg.go.dev/testing#hdr-Examples>). The assertion's text is the group as
+/// written; its shape which of the two it starts with, in lowercase; and its one literal the output: the text after
+/// that start, each line without its comment's `//` and the one space after, as go/doc reads a comment, and with the
+/// space around the whole taken off, as `go test` compares it. None for any other node.
 fn example_output(node: Node, text: Text) -> Option<Assertion> {
     let name = text.of(node.child_by_field_name("name")?);
     let suffix = name.strip_prefix("Example")?;
@@ -603,9 +603,8 @@ fn example_output(node: Node, text: Text) -> Option<Assertion> {
         pending.extend(named(n));
     }
     comments.sort_by_key(Node::start_byte);
-    let last = comments.last()?;
-    let before_last = comments.windows(2).rev().take_while(|w| line(w[1]) == end_line(w[0]) + 1).count();
-    let group = &comments[comments.len() - 1 - before_last..];
+    let group = last_comment_group(&comments, text);
+    let last = group.last()?;
     let uncommented = |c: &Node| {
         let written = text.of(*c);
         match written.strip_prefix("//") {
@@ -626,6 +625,27 @@ fn example_output(node: Node, text: Text) -> Option<Assertion> {
         literals: vec![output.trim().into()],
         reads: vec![],
     })
+}
+
+/// The last comment group of `comments`, a function body's in the order written, as go/parser groups them: a comment
+/// after code on its line starts a group that ends with the line its last comment ends on; any other runs on while
+/// each next comment starts on the line the one before ends on or the next, with nothing but space between them.
+fn last_comment_group<'t>(comments: &[Node<'t>], text: Text) -> Vec<Node<'t>> {
+    let mut group: Vec<Node> = vec![];
+    // Whether the group's first comment has code before it on its line.
+    let mut trailing = false;
+    for c in comments {
+        let gap = group.last().map(|p| &text.0[p.end_byte()..c.start_byte()]);
+        let newlines = gap.map(|g| g.matches('\n').count());
+        let adjacent = newlines.is_some_and(|n| n == 0 || (n == 1 && !trailing));
+        let joins = adjacent && gap.is_some_and(|g| g.trim().is_empty());
+        if !joins {
+            group.clear();
+            trailing = !text.0[..c.start_byte()].rsplit('\n').next().unwrap_or_default().trim().is_empty();
+        }
+        group.push(*c);
+    }
+    group
 }
 
 /// Whether `element`, of a composite literal's body, is a case of a table: written in braces of its own, its value's

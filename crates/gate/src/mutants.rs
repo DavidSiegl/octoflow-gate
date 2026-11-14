@@ -446,18 +446,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-
-    /// A directory under the system's temporary one, empty, named for `name` and the process.
-    fn empty_dir(name: &str) -> PathBuf {
-        // cargo test runs a binary's tests on threads of one process, so the process id alone would not tell apart
-        // two tests' directories.
-        static MADE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-        let n = MADE.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("gate-mutants-{name}-{}-{n}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
+    use crate::scratch::ScratchDir;
 
     /// One outcome as cargo-mutants 27 writes it to outcomes.json, of a mutant at `line` of src/lib.rs of `function`,
     /// whose fn starts at `fn_line`, named `name` after its place.
@@ -484,11 +473,9 @@ mod tests {
 
     /// `values` as [`outcomes`] reads them.
     fn read(values: &[Value]) -> Vec<Outcome> {
-        let dir = empty_dir("read");
+        let dir = ScratchDir::new();
         write_outcomes(&dir, values);
-        let read = outcomes(&dir).unwrap();
-        std::fs::remove_dir_all(dir).unwrap();
-        read
+        outcomes(&dir).unwrap()
     }
 
     fn write_outcomes(dir: &Path, values: &[Value]) {
@@ -546,7 +533,7 @@ mod tests {
 
     #[test]
     fn unreadable_outcomes_are_a_problem() {
-        let dir = empty_dir("unreadable");
+        let dir = ScratchDir::new();
         assert!(outcomes(&dir).unwrap_err().contains("outcomes.json: No such file"));
         write_outcomes(&dir, &[json!({"scenario": "Baseline"})]);
         let problem = outcomes(&dir).unwrap_err();
@@ -555,7 +542,6 @@ mod tests {
         assert!(outcomes(&dir).unwrap_err().ends_with("outcomes.json holds no list of outcomes"));
         write_outcomes(&dir, &[baseline("Success")]);
         assert_eq!(outcomes(&dir), Ok(vec![Outcome { scenario: json!("Baseline"), summary: json!("Success") }]));
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// A function of `path` from the line of its `fn` to `last`.
@@ -581,7 +567,7 @@ mod tests {
 
     #[test]
     fn the_workspace_is_the_one_cargo_tells() {
-        let dir = empty_dir("workspaces");
+        let dir = ScratchDir::new();
         let package = "\nversion = '0.1.0'\nedition = '2021'\n";
         for (path, text) in [
             ("Cargo.toml", "[workspace]\nmembers = ['engine']\nexclude = ['tools/x']\n".to_string()),
@@ -599,7 +585,6 @@ mod tests {
         assert_eq!(root("engine/src/lib.rs"), Ok("engine".into()));
         assert_eq!(root("tools/x/src/main.rs"), Ok("tools/x".into()));
         assert_eq!(root("src/lib.rs"), Err("no Cargo.toml lies above it".into()));
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// A run that exited with `exit_code`, stopped by the deadline or not, having said "it said so".
@@ -610,12 +595,11 @@ mod tests {
     /// [`run_findings`] of `done` in the workspace at engine, under a budget of 30 seconds, having written
     /// `outcomes`, when given, to its mutants.out.
     fn engine_findings(done: &Finished, outcomes: Option<&[Value]>) -> Vec<Finding> {
-        let dir = empty_dir("run");
+        let dir = ScratchDir::new();
         if let Some(outcomes) = outcomes {
             write_outcomes(&dir, outcomes);
         }
         let found = run_findings(done, &dir, OsStr::new("engine"), 30);
-        std::fs::remove_dir_all(dir).unwrap();
         found
     }
 
@@ -694,7 +678,7 @@ mod tests {
     #[test]
     fn a_run_past_its_deadline_starts_nothing() {
         // The tree is missing, so a cargo-mutants started there would be a could-not-start finding.
-        let dir = empty_dir("unstarted");
+        let dir = ScratchDir::new();
         let (tree, scratch) = (dir.join("missing"), dir.join("run"));
         let reached = |at: &str| {
             let message = format!("budget reached before cargo-mutants started on the workspace at `{at}`: the 30 \
@@ -706,12 +690,11 @@ mod tests {
         assert_eq!(workspace_run(&tree, &scratch, "engine", "engine/src/a.rs", 15), reached("engine"));
         assert_eq!(workspace_run(&tree, &scratch, "", "src/a.rs", 0), reached("."));
         assert!(!scratch.exists());
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn an_output_directory_that_cannot_be_made_or_a_cargo_mutants_that_cannot_start_is_not_run() {
-        let dir = empty_dir("unwritten");
+        let dir = ScratchDir::new();
         std::fs::write(dir.join("a-file"), "").unwrap();
         let (found, stopped) = workspace_run(&dir, &dir.join("a-file/run"), "engine", "engine/src/a.rs", 600);
         assert!(!stopped);
@@ -722,6 +705,5 @@ mod tests {
                            false));
         assert_eq!(not_run("it failed"), finding(None, None, "not-run",
                                                  "it failed; the change's Rust was not mutation-tested.".into()));
-        std::fs::remove_dir_all(dir).unwrap();
     }
 }

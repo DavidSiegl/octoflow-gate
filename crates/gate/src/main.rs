@@ -22,6 +22,9 @@ use gate::report::{Verdict, RULES_FILE};
 use gate::text::{self, series};
 use gate::Unjudged;
 
+#[cfg(test)]
+mod scratch;
+
 /// The exit status for a change the gate could not judge, and for bad arguments.
 const EXIT_UNJUDGED: u8 = 2;
 
@@ -365,8 +368,7 @@ mod tests {
     #[test]
     fn files_are_written_through_links_keeping_their_mode() {
         use std::os::unix::fs::{symlink, PermissionsExt};
-        let dir = std::env::temp_dir().join(format!("gate-main-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = scratch::ScratchDir::new();
         let target = dir.join("target.md");
         std::fs::write(&target, "old").unwrap();
         std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o640)).unwrap();
@@ -392,6 +394,5 @@ mod tests {
         let mut left: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name()).collect();
         left.sort();
         assert_eq!(left, ["link.md", "q.json", "target.md"]);
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

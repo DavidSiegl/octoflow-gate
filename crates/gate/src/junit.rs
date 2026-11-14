@@ -74,10 +74,12 @@ pub fn failing_tests(report: &Path) -> Result<Vec<(String, String)>, Unjudged> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scratch::ScratchDir;
 
     #[test]
     fn each_case_s_outcome() {
-        let path = std::env::temp_dir().join(format!("gate-junit-{}.xml", std::process::id()));
+        let dir = ScratchDir::new();
+        let path = dir.join("junit.xml");
         std::fs::write(
             &path,
             r#"<testsuites><testsuite>
@@ -103,12 +105,12 @@ mod tests {
         assert_eq!(failing_tests(&path).unwrap().len(), 2);
         std::fs::write(&path, "<testsuite>").unwrap();
         assert!(failing_tests(&path).unwrap_err().0.starts_with("cannot read the test report "));
-        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
     fn a_message_that_only_says_failed_gives_way_to_the_output_without_go_test_s_framing() {
-        let path = std::env::temp_dir().join(format!("gate-junit-go-{}.xml", std::process::id()));
+        let dir = ScratchDir::new();
+        let path = dir.join("junit.xml");
         std::fs::write(
             &path,
             "<testsuites><testsuite>\
@@ -124,7 +126,6 @@ mod tests {
         )
         .unwrap();
         let got = failing_tests(&path).unwrap();
-        std::fs::remove_file(path).unwrap();
         assert_eq!(
             got,
             [

@@ -24,6 +24,8 @@ pub mod pytest;
 pub mod python_at_base;
 pub mod python_mutants;
 pub mod report;
+#[cfg(test)]
+mod scratch;
 pub mod settings;
 pub mod suppressions;
 pub mod test_commands;

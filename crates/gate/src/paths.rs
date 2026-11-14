@@ -117,6 +117,7 @@ pub fn rel_path(path: &Path, start: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scratch::ScratchDir;
 
     #[test]
     fn rel_path_climbs_and_descends() {
@@ -128,40 +129,34 @@ mod tests {
 
     #[test]
     fn real_path_resolves_links_and_keeps_what_is_missing() {
-        let dir = std::env::temp_dir().join(format!("gate-paths-{}", std::process::id()));
+        let dir = ScratchDir::new();
         std::fs::create_dir_all(dir.join("real")).unwrap();
         let link = dir.join("link");
-        let _ = std::fs::remove_file(&link);
         std::os::unix::fs::symlink(dir.join("real"), &link).unwrap();
         let real = std::fs::canonicalize(dir.join("real")).unwrap();
         assert_eq!(real_path(&link.join("missing/../file")), real.join("file"));
         assert_eq!(real_path(&link.join("../real/./x")), real.join("x"));
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn real_path_follows_a_link_whose_target_is_missing_and_stops_at_a_loop() {
-        let dir = std::env::temp_dir().join(format!("gate-paths-dangling-{}", std::process::id()));
+        let dir = ScratchDir::new();
         std::fs::create_dir_all(dir.join("reports")).unwrap();
-        let dir = std::fs::canonicalize(&dir).unwrap();
         std::os::unix::fs::symlink("reports/q.md", dir.join("q.md")).unwrap();
         std::os::unix::fs::symlink("../nope/x.md", dir.join("reports/far")).unwrap();
         std::os::unix::fs::symlink("loop", dir.join("loop")).unwrap();
         assert_eq!(real_path(&dir.join("q.md")), dir.join("reports/q.md"));
         assert_eq!(real_path(&dir.join("reports/far")), dir.join("nope/x.md"));
         assert_eq!(real_path(&dir.join("loop/x")), dir.join("loop/x"));
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn real_path_climbs_out_of_a_link_s_target_not_its_name() {
-        let dir = std::env::temp_dir().join(format!("gate-paths-climb-{}", std::process::id()));
+        let dir = ScratchDir::new();
         std::fs::create_dir_all(dir.join("elsewhere/sub")).unwrap();
         std::fs::create_dir_all(dir.join("here")).unwrap();
-        let dir = std::fs::canonicalize(&dir).unwrap();
         std::os::unix::fs::symlink(dir.join("elsewhere/sub"), dir.join("here/link")).unwrap();
         assert_eq!(real_path(&dir.join("here/link/../x")), dir.join("elsewhere/x"));
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

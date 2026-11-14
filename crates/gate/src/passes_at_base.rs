@@ -557,18 +557,7 @@ fn run_target(run: &Run, target: &Target, tests: &[&ChangedTest], budget: &Budge
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A directory under the system's temporary one, empty, named for `name` and the process.
-    fn empty_dir(name: &str) -> PathBuf {
-        // cargo test runs a binary's tests on threads of one process, so the process id alone would not tell apart
-        // two tests' directories.
-        static MADE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-        let n = MADE.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("gate-{name}-{}-{n}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
+    use crate::scratch::ScratchDir;
 
     fn put(tree: &Path, path: &str) {
         let path = tree.join(path);
@@ -589,7 +578,7 @@ mod tests {
 
     #[test]
     fn the_targets_of_a_file_are_those_of_the_crate_roots_that_reach_it() {
-        let tree = empty_dir("targets");
+        let tree = ScratchDir::new();
         let manifest = "[package]\nname = \"calc\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
                         [[test]]\nname = \"cli\"\npath = \"checks/cli.rs\"\n";
         for (path, source) in [
@@ -650,12 +639,11 @@ mod tests {
         ] {
             assert_eq!(layout.targets(OsStr::new(path)), Err(why.into()), "{path}");
         }
-        std::fs::remove_dir_all(tree).unwrap();
     }
 
     #[test]
     fn a_crate_root_with_no_package_or_a_package_cargo_cannot_read_has_no_target() {
-        let tree = empty_dir("no-package");
+        let tree = ScratchDir::new();
         put(&tree, "loose/a.rs");
         put(&tree, "broken/Cargo.toml");
         put(&tree, "broken/src/lib.rs");
@@ -666,12 +654,11 @@ mod tests {
         assert_eq!(layout.targets(OsStr::new("loose/a.rs")), Err(why.into()));
         let why = layout.targets(OsStr::new("broken/src/lib.rs")).unwrap_err();
         assert!(why.starts_with("`cargo metadata` at `broken` exited with status 101 at the base: "), "{why}");
-        std::fs::remove_dir_all(tree).unwrap();
     }
 
     #[test]
     fn a_cargo_nextest_that_cannot_start_leaves_the_target_not_run() {
-        let dir = empty_dir("no-start");
+        let dir = ScratchDir::new();
         let missing = dir.join("missing");
         let run = Run { tree: &missing, target_dir: &dir, config: &dir, store: &dir };
         let target = Target { package: "".into(), args: vec!["--test".into(), "calc".into()], module: vec![] };
@@ -680,12 +667,11 @@ mod tests {
         let Ran::NotRun(found) = run_target(&run, &target, &[&test], &budget) else { panic!("the run started") };
         assert!(found.message.starts_with("could not start cargo nextest to run the changed Rust tests of `--test \
                                            calc` of the package at the top level at the base: "), "{}", found.message);
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn a_budget_spent_before_a_target_is_built_stops_the_runs() {
-        let dir = empty_dir("spent");
+        let dir = ScratchDir::new();
         let run = Run { tree: &dir, target_dir: &dir, config: &dir, store: &dir };
         let target = Target { package: "".into(), args: vec!["--test".into(), "calc".into()], module: vec![] };
         let budget = Budget { seconds: 1, deadline: Instant::now() };
@@ -694,6 +680,5 @@ mod tests {
         assert_eq!(found, finding(None, None, "budget-reached", "cargo nextest was stopped at 1 seconds \
             (`--base-run-budget`) before it built `--test calc` of the package at the top level, so none of them was \
             judged.".into()));
-        std::fs::remove_dir_all(dir).unwrap();
     }
 }

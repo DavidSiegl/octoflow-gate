@@ -227,7 +227,8 @@ fn run_module(run: &Run, module: &Path, functions: &[&Edited], budget: &Budget) 
     };
     // gremlins also takes these from a .gremlins.yaml in the module, which could silence the lines the gate reads, add
     // a threshold whose exit would read as a failure, or narrow the timeout: the command line pins them, every status
-    // printed.
+    // printed. --coverpkg and --integration measure coverage and try each mutant with the whole module's tests, not
+    // those of the mutant's package alone, so that a mutant only another package's tests catch counts as caught.
     let timeout = TIMEOUT_COEFFICIENT.to_string();
     let argv = [
         "gremlins",
@@ -243,6 +244,9 @@ fn run_module(run: &Run, module: &Path, functions: &[&Edited], budget: &Budget) 
         &timeout,
         "--diff",
         run.base,
+        "--coverpkg",
+        "./...",
+        "--integration",
     ]
     .map(OsStr::new);
     // gremlins colours its output only on a terminal, which a process the gate starts has none of; NO_COLOR makes

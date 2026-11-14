@@ -81,6 +81,20 @@ fn a_function_whose_mutants_survive_is_found_and_one_no_test_runs_is_untested() 
 }
 
 #[test]
+fn a_mutant_only_another_package_s_test_catches_is_caught() {
+    let repo = repo("");
+    // Only the package check's test calls Checked, and it notices each of Checked's mutants.
+    let check_test = "package check\n\nimport (\n\t\"testing\"\n\n\t\"example.com/calc\"\n)\n\n\
+                      func TestChecked(t *testing.T) {\n\tif calc.Checked(3) != 6 || calc.Checked(0) != 0 {\n\
+                      \t\tt.Fatal(\"wrong\")\n\t}\n}\n";
+    let checked = "\n// Checked doubles a.\nfunc Checked(a int) int {\n\treturn a * 2\n}\n";
+    repo.put("calc.go", format!("{CALC}{checked}").as_bytes());
+    repo.put("check/check_test.go", check_test.as_bytes());
+    let found = findings(&repo, None, &[]);
+    assert_eq!(found, [], "{found:?}");
+}
+
+#[test]
 fn a_gremlins_configuration_in_the_module_changes_neither_what_it_prints_nor_its_exit() {
     let repo = repo("");
     // Silent, Killed lines alone, a threshold that Unchecked's survivors fail, which would exit 10, and a timeout so
@@ -192,14 +206,14 @@ fn gremlins_runs_in_the_copy_on_the_gate_s_diff_and_is_stopped_with_sigint() {
     let base = repo.git(&["rev-parse", "HEAD"]);
     let argv = [
         "unleash", "--silent=false", "--output-statuses", "lctkvsr", "--threshold-efficacy", "0", "--threshold-mcover",
-        "0", "--timeout-coefficient", "10", "--diff", base.trim(),
+        "0", "--timeout-coefficient", "10", "--diff", base.trim(), "--coverpkg", "./...", "--integration",
     ];
-    assert_eq!(lines[1..13], argv);
-    assert!(lines[13].starts_with("color=1 token=unset goflags=") && lines[13].ends_with(" -count=1"), "{recorded}");
+    assert_eq!(lines[1..16], argv);
+    assert!(lines[16].starts_with("color=1 token=unset goflags=") && lines[16].ends_with(" -count=1"), "{recorded}");
     let diff = "diff --git a/calc.go b/calc.go\n--- a/calc.go\n+++ b/calc.go\n@@ -0,0 +9,3 @@\n+\n+\n+\n\
                 @@ -0,0 +14,3 @@\n+\n+\n+\n@@ -0,0 +19,3 @@\n+\n+\n+\n";
-    assert_eq!(lines[14..29].join("\n") + "\n", diff);
-    assert!(lines[29].starts_with("git version "), "{recorded}");
+    assert_eq!(lines[17..32].join("\n") + "\n", diff);
+    assert!(lines[32].starts_with("git version "), "{recorded}");
     assert_eq!(lines.last(), Some(&"interrupted"));
 }
 

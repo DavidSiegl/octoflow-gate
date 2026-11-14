@@ -80,7 +80,7 @@ pub(crate) fn remove_scratch_directories() {
 }
 
 /// Removes, from `parent`, the [`ScratchDirectory`]s of gates no longer running: a `gate-<pid>-<n>` that this account
-/// can open and lock, so that no gate holds it, and whose `<pid>` names no process, so that no gate before 0.14.0,
+/// can open and lock, so that no gate holds it, and whose `<pid>` names no process, so that no gate before 0.15.0,
 /// which locked none, is running in it. One that cannot be read, locked or removed stays: another account's, a running
 /// gate's, or one to try again next time.
 fn remove_abandoned(parent: &Path) {
@@ -153,7 +153,7 @@ mod tests {
             std::fs::create_dir(dir).unwrap();
             std::fs::write(dir.join("f"), "x").unwrap();
         }
-        // A gate of 0.14.0 or later, here this process, holds its own: its lock keeps it whatever its pid.
+        // A gate of 0.15.0 or later, here this process, holds its own: its lock keeps it whatever its pid.
         let held = ScratchDirectory::new(&parent).unwrap();
         let locked_gone = parent.join(format!("gate-{}-1", exited.id()));
         std::fs::rename(held.path(), &locked_gone).unwrap();

@@ -38,8 +38,12 @@ impl ScratchDirectory {
             }
             // Until it is locked, another gate's remove_abandoned may hold the lock a moment, which `lock` waits out,
             // or, when it runs in another pid namespace and finds no process of this pid, remove the directory: then
-            // the lock is of a directory no longer at `path`, and the next number is tried.
-            let locked = std::fs::File::open(&path).and_then(|dir| dir.lock().map(|()| dir));
+            // nothing is at `path` to open, or the lock is of a directory no longer there, and the next number is
+            // tried.
+            let locked = match std::fs::File::open(&path) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                opened => opened.and_then(|dir| dir.lock().map(|()| dir)),
+            };
             match locked.and_then(|dir| at(&dir, &path).map(|there| there.then_some(dir))) {
                 Ok(Some(dir)) => {
                     HELD.lock().unwrap_or_else(|e| e.into_inner()).push(path.clone());

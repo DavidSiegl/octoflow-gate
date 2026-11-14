@@ -114,7 +114,7 @@ fn header(source: &str) -> (Vec<(&str, u32)>, u32) {
     let mut ended = false;
     let mut in_block_comment = false;
     for (at, line) in (1..).zip(source.lines()) {
-        let mut rest = line.trim();
+        let rest = line.trim();
         if rest.is_empty() && !ended {
             last_blank = at;
             continue;
@@ -123,23 +123,30 @@ fn header(source: &str) -> (Vec<(&str, u32)>, u32) {
         if !in_block_comment && rest.starts_with("//") {
             comments.push((rest, at));
         }
-        // The rest of the line past its comments, ending the header where it holds code.
-        loop {
-            if in_block_comment {
-                let Some(i) = rest.find("*/") else { break };
-                in_block_comment = false;
-                rest = rest[i + 2..].trim();
-            } else if rest.is_empty() || rest.starts_with("//") {
-                break;
-            } else if let Some(after) = rest.strip_prefix("/*") {
-                in_block_comment = true;
-                rest = after.trim();
-            } else {
-                return (comments, last_blank);
-            }
+        if holds_code(rest, &mut in_block_comment) {
+            break;
         }
     }
     (comments, last_blank)
+}
+
+/// Whether `line`, trimmed, holds text outside its comments, `in_block_comment` saying whether a `/* */` comment is
+/// open at its start; where it holds none, sets `in_block_comment` to whether one is open at its end.
+fn holds_code(mut line: &str, in_block_comment: &mut bool) -> bool {
+    loop {
+        if *in_block_comment {
+            let Some(i) = line.find("*/") else { return false };
+            *in_block_comment = false;
+            line = line[i + 2..].trim();
+        } else if line.is_empty() || line.starts_with("//") {
+            return false;
+        } else if let Some(after) = line.strip_prefix("/*") {
+            *in_block_comment = true;
+            line = after.trim();
+        } else {
+            return true;
+        }
+    }
 }
 
 /// The suffix of the Go file name at `path`, from the tree's top level, that builds the file on one platform alone,

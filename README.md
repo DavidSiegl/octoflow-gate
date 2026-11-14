@@ -33,9 +33,8 @@ against it.
   together with the code), functions whose cognitive complexity it took over 15, imports it added that close a cycle
   between the project's Python or Rust modules, and, as findings to weigh that do not fail the gate, tests that are
   flaky, tests that pass without the change, surviving mutants of the functions it edits, vague names it binds, and
-  blocks of code it adds that the tree already holds, names and literals aside. Go gets all of these but three: tests
-  are rerun for flakiness in Python alone, and run without the change in Python and Rust, and Go's compiler refuses an
-  import cycle itself.
+  blocks of code it adds that the tree already holds, names and literals aside. Go gets all of these but the import
+  cycles, which Go's compiler refuses itself; Rust gets all but the reruns for flakiness.
 - **What to read**: the suppressions it added and the build configuration it edited.
 
 [docs/quality-gate.md](docs/quality-gate.md) says what each of these judges and why.
@@ -57,7 +56,7 @@ written whole or not at all. `gate --help` describes each option.
 | 0 | `GATE: OK` |
 | 1 | `GATE: ERROR` |
 | 2 | it could not judge the change, or its arguments were wrong; it wrote neither file |
-| 130 | Ctrl-C or SIGTERM stopped it; it wrote neither file |
+| 130 | Ctrl-C, SIGTERM or SIGHUP stopped it; it wrote neither file |
 
 ### Reading the report from a program
 
@@ -102,14 +101,14 @@ It runs the project's tests itself, with the commands its `gate.toml` lists as `
 JUnit and coverage reports they write. A CI that has already run the tests passes their reports instead, with
 `--tests` and `--coverage`, and then no command runs.
 
-It takes what it runs from the machine and the project: ruff, mypy and pymarkdown from `PATH`, which `uv run` points
-at a project's environment, and only for a project that tracks Python or Markdown files; shellcheck, actionlint and
-clippy likewise, for shell scripts, GitHub workflows and Rust files. The flaky-tests, passes-at-base and
-surviving-mutants checks of a change to Python run pytest, pytest-randomly and mutmut through the project's Python,
-which `gate.toml`'s `python` or `--python` names, `python3` without either; those of a change to Rust run
-cargo-nextest and cargo-mutants, and the surviving-mutants check of a change to Go runs gremlins. golangci-lint, and
-the go tool it and gremlins run, come from `PATH` for a project that tracks Go files; a Go project runs its tests with
-gotestsum ([Go tests and coverage](docs/quality-gate.md#go-tests-and-coverage)).
+It takes what it runs from the machine and the project: ruff, mypy and pymarkdown from `PATH`, which `uv run` points at
+a project's environment, and only for a project that tracks Python or Markdown files; shellcheck, actionlint and clippy
+likewise, for shell scripts, GitHub workflows and Rust files. The flaky-tests, passes-at-base and surviving-mutants
+checks of a change to Python run pytest, pytest-randomly and mutmut through the project's Python, which `gate.toml`'s
+`python` or `--python` names, `python3` without either; those of a change to Rust run cargo-nextest and cargo-mutants,
+and the flaky-tests, passes-at-base and surviving-mutants checks of a change to Go run go test and gremlins.
+golangci-lint, and the go tool it and gremlins run, come from `PATH` for a project that tracks Go files; a Go project
+runs its tests with gotestsum ([Go tests and coverage](docs/quality-gate.md#go-tests-and-coverage)).
 
 A linter that is missing is a failed condition naming it, and for clippy that is a `cargo clippy --version` that
 fails, as it does where rustup's `clippy` component is not installed; a check that cannot run is one of its own
@@ -122,10 +121,10 @@ change](docs/quality-gate.md#whose-rules-judge-a-change) says.
 Which files are tests, which go with them, which hold expected output, which the complexity check leaves alone, which
 take part in no dependency cycle, which duplicated-blocks leaves alone and the shortest block it reports, which further
 files are build configuration, which files each linter reads, the checks' time budgets and the commands that run the
-tests: a `gate.toml` at the project's top level says each, or the
-file `--config` names. Every key has a default, so a project without one is judged as the gate always judged; [the
-gate's settings](docs/quality-gate.md#the-gates-settings) lists them. An unknown key or a value of the wrong kind
-exits 2.
+tests: a `gate.toml` at the project's top level says each, or the file `--config` names. Every key has a default, so a
+project without one is judged as the gate always judged: expected output, for one, is a file under a `golden` directory
+inside `tests`, or a `.golden` file under `testdata`, as Go keeps it; [the gate's
+settings](docs/quality-gate.md#the-gates-settings) lists them. An unknown key or a value of the wrong kind exits 2.
 
 octoflow's, for example:
 

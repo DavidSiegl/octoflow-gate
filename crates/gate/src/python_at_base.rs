@@ -11,11 +11,11 @@ use std::time::Instant;
 
 use regex::bytes::Regex;
 
+use crate::base_findings::budget_reached;
 use crate::copies::{copy_base_with_tests, failed, finding, in_scratch_directory, Budget};
-use crate::judge::Change;
+use crate::change::Change;
 use crate::junit::{junit_outcomes, Outcome};
 use crate::parser_checks::{python_test, PythonChange};
-use crate::passes_at_base::budget_reached;
 use crate::paths::{real_path, rel_path};
 use crate::process::Finished;
 use crate::pytest::{self, changed_tests, junit_case, labels, listed_tests, node_parts, Group, Setup, Tests};
@@ -38,7 +38,7 @@ const COLLECTING: &str = "collecting the changed tests at the base";
 /// `passes-at-base`): it does not test the change. A change to tests alone has no "without the change" to run them
 /// in, and one to docs alone none that a test could see.
 ///
-/// The tests run with pytest, by the judged project's Python (judge::Change::python), in a copy of the base
+/// The tests run with pytest, by the judged project's Python (change::Change::python), in a copy of the base
 /// (copies::copy_base_with_tests) that holds every file of the tests the change touches ([`beside_tests`]), conftest.py
 /// and data included, as the working tree has it. pytest first collects the changed test files there, then runs
 /// those of the changed tests it collected. A test passes there when pytest passed each of its cases that it did not

@@ -8,26 +8,28 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use crate::judge::Change;
+use crate::change::Change;
 use crate::report::Finding;
+use crate::scratch_directory::ScratchDirectory;
 use crate::{git, text, Unjudged};
 
-/// The findings of `run(dir)`, `dir` a new empty directory only the gate's account can enter, which is removed
-/// afterwards whatever `run` finds; `purpose` says what it is for, as a clause such as "to run cargo-mutants in".
-/// When the directory cannot be made, `run` is not called, and the one finding is of `rule`, of the check whose run it
-/// is, saying so; when it cannot be removed, a `not-removed` finding naming it follows `run`'s. The findings' rules
-/// are the check's own, without its name.
+/// The findings of `run(dir)`, `dir` a [`ScratchDirectory`], which is removed afterwards whatever `run` finds, and when
+/// `run` panics or the gate is stopped meanwhile; `purpose` says what it is for, as a clause such as "to run
+/// cargo-mutants in". When the directory cannot be made, `run` is not called, and the one finding is of `rule`, of the
+/// check whose run it is, saying so; when it cannot be removed, a `not-removed` finding naming it follows `run`'s. The
+/// findings' rules are the check's own, without its name.
 pub fn in_scratch_directory(rule: &str, purpose: &str, run: impl FnOnce(&Path) -> Vec<Finding>) -> Vec<Finding> {
-    let dir = match scratch_directory(&std::env::temp_dir()) {
+    let dir = match ScratchDirectory::new(&std::env::temp_dir()) {
         Ok(dir) => dir,
         Err(e) => {
             let why = format!("could not make a directory {purpose}: {e}");
             return vec![finding(None, None, rule, format!("{why}; nothing ran, so the check judged nothing."))];
         }
     };
-    let mut out = run(&dir);
-    if let Err(e) = std::fs::remove_dir_all(&dir) {
-        let message = format!("could not remove the directory {purpose}, `{}`: {e}", dir.display());
+    let mut out = run(dir.path());
+    let path = dir.path().to_path_buf();
+    if let Err(e) = dir.remove() {
+        let message = format!("could not remove the directory {purpose}, `{}`: {e}", path.display());
         out.push(finding(None, None, "not-removed", message));
     }
     out
@@ -68,22 +70,6 @@ pub fn sort_by_place(findings: &mut [Finding]) {
 /// the gate puts before it, and its severity "warning", which the gate replaces with what it does with it.
 pub fn finding(path: Option<&OsStr>, line: Option<u32>, rule: &str, message: String) -> Finding {
     Finding { path: path.map(OsStr::to_os_string), line, severity: "warning".into(), rule: rule.into(), message }
-}
-
-/// A new directory, mode 0700, in `parent`, named for the gate's process. Whoever makes it removes it.
-pub(crate) fn scratch_directory(parent: &Path) -> std::io::Result<PathBuf> {
-    use std::os::unix::fs::DirBuilderExt;
-    use std::sync::atomic::{AtomicU32, Ordering};
-    static MADE: AtomicU32 = AtomicU32::new(0);
-    loop {
-        let name = format!("gate-{}-{}", std::process::id(), MADE.fetch_add(1, Ordering::SeqCst));
-        let dir = parent.join(name);
-        match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
-            // Left by an earlier gate of the same process id.
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            made => return made.map(|()| dir),
-        }
-    }
 }
 
 /// Copies the files git tracks in the working tree at `root`, as they are there, to the same paths under `dest`, a
@@ -318,15 +304,17 @@ mod tests {
     }
 
     #[test]
-    fn a_scratch_directory_passes_over_those_an_earlier_gate_of_the_process_id_left() {
-        // nextest runs each test in a process of its own, so this one's scratch directories are numbered from 0.
-        let parent = ScratchDir::new();
-        let left: Vec<PathBuf> = (0..8).map(|n| parent.join(format!("gate-{}-{n}", std::process::id()))).collect();
-        for dir in &left {
-            std::fs::create_dir_all(dir).unwrap();
-        }
-        let made = scratch_directory(&parent).unwrap();
-        assert!(made.starts_with(&parent) && !left.contains(&made), "{}", made.display());
+    fn a_scratch_directory_is_removed_when_its_check_panics() {
+        let mut seen = None;
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            in_scratch_directory("not-run", "to test in", |dir| {
+                std::fs::write(dir.join("f"), "x").unwrap();
+                seen = Some(dir.to_path_buf());
+                panic!("a check's bug")
+            })
+        }));
+        assert!(panicked.is_err());
+        assert!(!seen.unwrap().exists());
     }
 
     #[test]

@@ -1,13 +1,14 @@
 //! The gate's judgement of one change: what it reads of the change, and the report it gives on it, from the linters
-//! and the checks beside them, over Python and Rust, and Go for the checks that only read a change.
+//! and the checks beside them, over Python, Rust and Go.
 
-use std::ffi::{OsStr, OsString};
-use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use std::ffi::OsString;
+use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 
+use crate::change::{Change, MUTMUT_STATE};
 use crate::config_edits::{cargo_home_in, edited_config, tool_config, touched_paths};
 use crate::coverage::new_coverage;
-use crate::diff::{change_diff, changed_files, changed_lines, ChangedFile, ChangedLines};
+use crate::diff::ChangedLines;
 use crate::flaky_tests::flaky_tests;
 use crate::linters::{tracked_from, Linter, LINTERS};
 use crate::mutants::surviving_mutants;
@@ -18,19 +19,11 @@ use crate::passes_at_base::passes_at_base;
 use crate::process::tool_env;
 use crate::python_mutants::Mutmut;
 use crate::report::{Finding, QualityReport};
-use crate::settings::{JudgedBy, Settings};
+use crate::settings::JudgedBy;
 use crate::suppressions::{added_suppressions, stray_line_end_condition, stray_line_ends};
 use crate::test_commands::test_results;
 use crate::text::{self, series};
 use crate::{git, Unjudged};
-
-/// The directory in the tree mutmut runs in where it keeps its state: its copy of the code with the mutants, and each
-/// module's results in `<path>.meta` beside it. What a tree tracks there is no part of the change the gate reads
-/// ([`Change::from_tree`]), and a change that commits files there fails the gate ([`judge_change`]).
-pub const MUTMUT_STATE: &str = "mutants";
-/// The git pathspecs of every path outside [`MUTMUT_STATE`], and of the paths inside it (a test holds them to it).
-const OUTSIDE_MUTMUT_STATE: &str = ":(top,exclude,literal)mutants";
-const INSIDE_MUTMUT_STATE: &str = ":(top,literal)mutants";
 
 /// What the command line names for the judgement beside the base; each left empty means the tree's own, or none.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -53,75 +46,6 @@ pub struct Given {
     pub test_contexts: Option<PathBuf>,
 }
 
-/// The change the gate judges, as [`Change::from_tree`] reads it, and as each check is given it.
-pub struct Change {
-    /// The repository's top level; its working tree is the change's new side.
-    pub root: PathBuf,
-    /// The commit the change is judged against, a full sha.
-    pub base: String,
-    /// `git diff -U0` from base to the working tree (diff::change_diff), of the files the gate sees.
-    pub diff: Vec<u8>,
-    /// `changed_lines(diff)`.
-    pub changed: ChangedLines,
-    /// diff::changed_files from base, of the files the gate sees.
-    pub files: Vec<ChangedFile>,
-    /// The files the change adds or edits under [`MUTMUT_STATE`], the one part of it the fields above leave out, in
-    /// path order: a file it adds, renames into it or changes there in any way but deleting it.
-    pub mutmut_state: Vec<OsString>,
-    /// How the gate reads the project, as its gate.toml says.
-    pub settings: Settings,
-    /// The program that runs the judged project's Python, in which the checks expect its pytest, pytest-randomly and
-    /// mutmut: an absolute path, or a name without a slash, which PATH finds. Nothing has looked for it: one that is
-    /// missing, or lacks a module, is for the check that runs it to report.
-    pub python: PathBuf,
-}
-
-impl Change {
-    /// The change from `base`, a full sha, to the working tree of the repository whose top level is `root`, read by
-    /// `settings`, its Python the one `--python` names, `python`, else the settings', else `python3`.
-    ///
-    /// Its diff, changed and files show the change as if git tracked nothing under [`MUTMUT_STATE`] on either side,
-    /// so nothing that reads them selects a test, a function or a changed line there, or counts an edit there as a
-    /// change to the code. A file moved out of it is an added file, and one moved into it a deleted one, which
-    /// mutmut_state names instead. Errs when git cannot diff the tree against base.
-    pub fn from_tree(root: &Path, base: &str, settings: Settings, python: Option<&Path>) -> Result<Change, Unjudged> {
-        let diff = change_diff(root, base, &[OUTSIDE_MUTMUT_STATE])?;
-        let mut mutmut_state: Vec<OsString> =
-            changed_files(root, base, &[INSIDE_MUTMUT_STATE])?.into_iter().filter_map(|f| f.after).collect();
-        mutmut_state.sort();
-        Ok(Change {
-            root: root.to_path_buf(),
-            base: base.to_string(),
-            changed: changed_lines(&diff),
-            files: changed_files(root, base, &[OUTSIDE_MUTMUT_STATE])?,
-            diff,
-            mutmut_state,
-            python: match (python, &settings.python) {
-                (Some(given), _) => program(given, &crate::paths::abs_path(Path::new("."))),
-                (None, Some(own)) => program(Path::new(own), root),
-                (None, None) => PathBuf::from("python3"),
-            },
-            settings,
-        })
-    }
-}
-
-/// The program `named` as a process started in any directory finds it: a name without a slash as it is, for PATH to
-/// find, and a path made absolute from `start`, an absolute directory, and normalized (paths::normpath).
-fn program(named: &Path, start: &Path) -> PathBuf {
-    if named.as_os_str().as_bytes().contains(&b'/') {
-        crate::paths::normpath(&start.join(named))
-    } else {
-        named.to_path_buf()
-    }
-}
-
-/// Whether `path`, relative to the tree's top, is [`MUTMUT_STATE`] or under it.
-pub fn under_mutmut_state(path: &OsStr) -> bool {
-    let path = path.as_bytes();
-    path.strip_prefix(MUTMUT_STATE.as_bytes()).is_some_and(|rest| rest.is_empty() || rest.starts_with(b"/"))
-}
-
 /// The gate's report on the change from `base` to the working tree of the git repository at `cwd`.
 ///
 /// The change is [`Change::from_tree`]'s, read by the settings [`JudgedBy::for_tree`] gives for `given.settings`.
@@ -142,7 +66,7 @@ pub fn under_mutmut_state(path: &OsStr) -> bool {
 /// Errs when it cannot judge: `cwd` is not in a git work tree, `base` names no commit, the settings cannot be read
 /// or the rules are no file, a test or coverage report cannot be read, a report a test command names cannot be
 /// removed before it runs, a file the change adds lines to cannot be read, or a source file the parser checks read
-/// cannot be shown at the base or read in the working tree. Ctrl-C or SIGTERM during a process it runs ends the
+/// cannot be shown at the base or read in the working tree. Ctrl-C, SIGTERM or SIGHUP during a process it runs ends the
 /// gate (process::run).
 pub fn judge_change(cwd: &Path, base: &str, given: &Given) -> Result<QualityReport, Unjudged> {
     let done = git::run(cwd, &["rev-parse", "--show-toplevel"])?;
@@ -240,7 +164,7 @@ fn judge_checks(
         too_complex(sources),
         dependency_cycles(sources)?,
         duplicated_blocks(sources)?,
-        named("flaky-tests", flaky_tests(&sources.python)),
+        named("flaky-tests", flaky_tests(sources)),
         named("surviving-mutants", surviving_mutants(sources, mutmut, mutation_budget)),
         named("passes-at-base", passes_at_base(sources, base_run_budget)),
         vague_names(sources),
@@ -338,33 +262,6 @@ mod tests {
         ];
         let kept = on_changed_lines(found, &changed);
         assert_eq!(kept, vec![finding("a.sh", None), finding("a.sh", Some(3)), finding("b.sh", None)]);
-    }
-
-    #[test]
-    fn a_program_is_a_name_for_path_to_find_or_a_path_from_the_start() {
-        let start = Path::new("/tree");
-        for (named, found) in [
-            ("python3.13", "python3.13"),
-            (".venv/bin/python", "/tree/.venv/bin/python"),
-            ("./python", "/tree/python"),
-            ("../venv/bin/python", "/venv/bin/python"),
-            ("/usr/bin/python3", "/usr/bin/python3"),
-        ] {
-            assert_eq!(program(Path::new(named), start), PathBuf::from(found), "{named}");
-        }
-    }
-
-    #[test]
-    fn mutmut_s_state_is_the_directory_and_what_is_under_it() {
-        for (path, under) in [("mutants", true), ("mutants/a.py", true), ("mutants.py", false), ("a/mutants", false)] {
-            assert_eq!(under_mutmut_state(OsStr::new(path)), under, "{path}");
-        }
-    }
-
-    #[test]
-    fn the_mutmut_state_pathspecs_name_its_directory() {
-        assert_eq!(OUTSIDE_MUTMUT_STATE, format!(":(top,exclude,literal){MUTMUT_STATE}"));
-        assert_eq!(INSIDE_MUTMUT_STATE, format!(":(top,literal){MUTMUT_STATE}"));
     }
 
     #[test]

@@ -1,19 +1,20 @@
 //! The passes-at-base check: the tests a change adds or edits, run against the code the change started from. A test
-//! that passes there does not test the change. Python's tests run with pytest (python_at_base.rs), and Rust's, here,
-//! with cargo-nextest.
+//! that passes there does not test the change. Python's tests run with pytest (python_at_base.rs), Go's with go test
+//! (go_at_base.rs), and Rust's, here, with cargo-nextest.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use checks::{ChangedFile, Finding, Side};
-use model::{Lines, Unreadable};
+use checks::Finding;
 use serde::Deserialize;
 
+use crate::base_findings::{budget_reached, not_reached, submodules_left_empty, unread_not_run};
+use crate::changed_tests::{changed_tests, ChangedTest};
 use crate::copies::{copy_base_with_tests, failed, finding, in_scratch_directory, sort_by_place, Budget};
-use crate::diff::removal_points;
+use crate::go_at_base::go_at_base;
 use crate::junit::{junit_outcomes, Outcome};
 use crate::parser_checks::{project_dir, RustChange, Sources};
 use crate::process::{run_with, Extras};
@@ -34,33 +35,25 @@ const NEXTEST_BUILD_FAILED: i32 = 101;
 /// is the check's own, without its name, and each severity "warning".
 ///
 /// Runs the tests the change adds or edits against the base's code and reports each one that passed there (rule
-/// `passes-at-base`): Python's as python_at_base::python_at_base says, then Rust's as [`rust_at_base`] does. Each
-/// language's runs may take `budget` seconds, Python's counted from when its copy of the base is made and Rust's
-/// from the start of the check, so that Rust's have what Python's left of them.
+/// `passes-at-base`): Python's as python_at_base::python_at_base says, then Rust's as [`rust_at_base`] does, then Go's
+/// as go_at_base::go_at_base does. Each language's runs may take `budget` seconds, Python's counted from when its copy
+/// of the base is made, and Rust's and Go's from the start of the check, so that Rust's have what Python's left of
+/// them, and Go's what both left.
 pub fn passes_at_base(sources: &Sources, budget: u64) -> Vec<Finding> {
     let budget = Budget::starting_now(budget);
     let mut out = python_at_base(&sources.python, budget.seconds);
     out.extend(rust_at_base(&sources.rust, &budget));
+    out.extend(go_at_base(&sources.go, &budget));
     sort_by_place(&mut out);
     out
-}
-
-/// The check's finding that `budget` ran out `when`, a clause such as "while it collected the changed tests",
-/// stopping `runner`, the test runner as it is named, such as "cargo nextest".
-pub fn budget_reached(budget: &Budget, runner: &str, when: &str) -> Finding {
-    let message = format!(
-        "{runner} was stopped at {} seconds (`--base-run-budget`) {when}, so none of them was judged.",
-        budget.seconds
-    );
-    finding(None, None, "budget-reached", message)
 }
 
 /// Rust's findings of the check on `rust`, in no order.
 ///
 /// When the change edits Rust code under test ([`RustChange::edits_code`]), runs the Rust tests it adds or edits
-/// ([`changed_tests`]) against the base's code with cargo-nextest, by `budget`'s deadline, and reports at its fn
-/// each one that passed there (rule `passes-at-base`): it does not test the change. A change to the tests alone has
-/// no "without the change" to run them in.
+/// (changed_tests::changed_tests) against the base's code with cargo-nextest, by `budget`'s deadline, and reports at
+/// its fn each one that passed there (rule `passes-at-base`): it does not test the change. A change to the tests
+/// alone has no "without the change" to run them in.
 ///
 /// The tests run in a copy of the base (copies::copy_base_with_tests) with the change's files that go with the
 /// tests ([`beside_tests`]) in place of the base's. A test in a file the change also edits outside its test code, its
@@ -79,7 +72,8 @@ fn rust_at_base(rust: &RustChange, budget: &Budget) -> Vec<Finding> {
     if !rust.edits_code() {
         return vec![];
     }
-    let (tests, mut out) = changed_tests(rust);
+    let (tests, unread) = changed_tests(rust.change, &rust.files, |_| true);
+    let mut out: Vec<Finding> = unread.into_iter().map(unread_not_run).collect();
     let mut separable = vec![];
     for t in tests {
         if !rust.is_code(&t.path) {
@@ -99,61 +93,6 @@ fn rust_at_base(rust: &RustChange, budget: &Budget) -> Vec<Finding> {
         }));
     }
     out
-}
-
-/// A Rust test the change adds or edits, as [`changed_tests`] finds one, in the working tree.
-struct ChangedTest {
-    /// Its file's path in the working tree.
-    path: OsString,
-    /// Its name, the path from its file to it, as model::Test's.
-    name: String,
-    /// Its fn's line, where a finding on it goes.
-    line: u32,
-}
-
-/// The Rust tests that the change adds lines to or removes lines from, their outer attributes included, in the files
-/// it leaves in the working tree, in the change's order, then by where they start; and a `not-run` finding for each
-/// file the change edits that does not parse, when it holds tests by its place or its base held test code.
-fn changed_tests(rust: &RustChange) -> (Vec<ChangedTest>, Vec<Finding>) {
-    let removals = removal_points(&rust.change.diff);
-    let (mut tests, mut out) = (vec![], vec![]);
-    for file in &rust.files {
-        let Some(after) = &file.after else { continue };
-        let removed = removals.get(&after.path).cloned().unwrap_or_default();
-        if file.added.is_empty() && removed.is_empty() {
-            continue;
-        }
-        let source = match &after.source {
-            Ok(source) => source,
-            Err(unreadable) => {
-                out.extend(unreadable_tests(file, after, unreadable));
-                continue;
-            }
-        };
-        let touched = source.tests.iter().filter(|t| touches(t.lines, &file.added, &removed));
-        tests.extend(touched.map(|t| ChangedTest { path: after.path.clone(), name: t.name.clone(), line: t.line }));
-    }
-    (tests, out)
-}
-
-/// Whether the change touches a test that spans `lines` in the working tree, by adding one of them (`added`) or
-/// removing lines at one of the `removal_points` (diff::removal_points) from just above its first line, as an
-/// `#[ignore]` taken off its top, to just above its last. A removal after its last line, the `}`, is below the test,
-/// as a deleted neighbour's is, and does not count.
-fn touches(lines: Lines, added: &BTreeSet<u32>, removal_points: &BTreeSet<u32>) -> bool {
-    added.iter().any(|&n| lines.holds(n))
-        || removal_points.iter().any(|&n| lines.first.saturating_sub(1) <= n && n < lines.last)
-}
-
-/// The `not-run` finding on `file`, which the change edits and leaves as `after`, unreadable for `unreadable`'s
-/// reason; None when it neither holds tests by its place nor held test code at the base, so no test was lost.
-fn unreadable_tests(file: &ChangedFile, after: &Side, unreadable: &Unreadable) -> Option<Finding> {
-    let base_source = file.before.as_ref().and_then(|b| b.source.as_ref().ok());
-    if !after.among_tests && !base_source.is_some_and(|s| !s.test_lines.is_empty()) {
-        return None;
-    }
-    let message = format!("{}, so its tests were not run at the base.", unreadable.why);
-    Some(finding(Some(after.path.as_os_str()), unreadable.line, "not-run", message))
 }
 
 /// Whether a repository path belongs with Rust's tests rather than with the code they test, as the copy the tests run
@@ -182,16 +121,7 @@ fn base_run_findings(rust: &RustChange, dir: &Path, tests: &[ChangedTest], budge
             return vec![finding(None, None, "not-run", message)];
         }
     };
-    let mut out = vec![];
-    if !empty.is_empty() {
-        let named: Vec<String> = empty.iter().map(|(path, why)| format!("`{path}`, {why}")).collect();
-        let message = format!(
-            "the copy of the base leaves submodules empty, so a changed Rust test that needs one, if any does, was \
-             not judged: {}.",
-            named.join("; ")
-        );
-        out.push(finding(None, None, "not-run", message));
-    }
+    let mut out: Vec<Finding> = submodules_left_empty(&empty, "Rust").into_iter().collect();
     let layout = match CrateLayout::of(&tree, budget) {
         Ok(layout) => layout,
         Err(e) => {
@@ -228,7 +158,7 @@ fn group_by_target(mut layout: CrateLayout, tests: &[ChangedTest], budget: &Budg
             }
             Err(Unplaced::Stopped(at)) => {
                 out.push(budget_reached(budget, "cargo metadata", &format!("while it read the Cargo targets at {at}")));
-                out.extend(groups.iter().map(|(target, _)| not_reached(budget, target)));
+                out.extend(groups.iter().map(|(target, _)| not_reached(budget, &target.label())));
                 return (out, vec![]);
             }
         };
@@ -241,17 +171,6 @@ fn group_by_target(mut layout: CrateLayout, tests: &[ChangedTest], budget: &Budg
         }
     }
     (out, groups)
-}
-
-/// The `not-run` finding on `target`, whose changed tests `budget` ran out before.
-fn not_reached(budget: &Budget, target: &Target) -> Finding {
-    let message = format!(
-        "the run at the base used its {} seconds (`--base-run-budget`) before it reached {}, so its changed tests \
-         were not run there.",
-        budget.seconds,
-        target.label()
-    );
-    finding(None, None, "not-run", message)
 }
 
 /// The findings of running `groups`, [`group_by_target`]'s of `tests`, as [`run_target`] runs one, in turn, within
@@ -275,7 +194,7 @@ fn run_groups(run: &Run, groups: &[Group], tests: &[ChangedTest], budget: &Budge
             }
             Ran::Stopped(f) => {
                 out.push(f);
-                out.extend(groups[n + 1..].iter().map(|(later, _)| not_reached(budget, later)));
+                out.extend(groups[n + 1..].iter().map(|(later, _)| not_reached(budget, &later.label())));
                 groups[n..].iter().flat_map(|(_, theirs)| theirs).for_each(|&(i, _)| passed[i] = false);
                 break;
             }

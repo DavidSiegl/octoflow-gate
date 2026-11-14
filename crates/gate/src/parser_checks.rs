@@ -14,7 +14,7 @@ use lang_python::{Unit, FIRST_LINE_BYTES};
 use model::{CodeToken, Import, ImportGraph, SourceFile, Unreadable};
 
 use crate::diff::{removal_points, removed_lines, ChangedLines};
-use crate::judge::{under_mutmut_state, Change};
+use crate::change::{under_mutmut_state, Change};
 use crate::settings::Settings;
 use crate::{git, text, Unjudged};
 

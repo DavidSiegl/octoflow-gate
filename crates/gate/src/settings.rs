@@ -9,9 +9,14 @@ use serde::Deserialize;
 
 use crate::glob::Globs;
 use crate::paths::real_path;
-use crate::report::{BUILD_CONFIG_FILES, RULES_FILE, SETTINGS_FILE};
 use crate::Unjudged;
 
+/// The file at the top level of the judged tree that holds the gate's settings, unless `--config` names another.
+pub const SETTINGS_FILE: &str = "gate.toml";
+/// The file beside the settings' that holds the rules of the tools that take theirs from one ([`JudgedBy::rules`]).
+pub const RULES_FILE: &str = "pyproject.toml";
+/// Files a change may edit that alter how the gate judges it: its rules and the versions of the linters it runs.
+pub const BUILD_CONFIG_FILES: [&str; 2] = [RULES_FILE, "uv.lock"];
 /// The linters gate.toml may choose the files of, each a name its `[linters]` table may hold.
 pub const LINTER_NAMES: [&str; 7] =
     ["ruff", "mypy", "pymarkdown", "shellcheck", "actionlint", "clippy", "golangci-lint"];
@@ -70,7 +75,7 @@ impl Default for Settings {
             python_tests: Globs::new(&["**/tests/**/*.py", "**/test_*.py", "**/*_test.py"]),
             rust_tests: Globs::new(&["**/tests/**/*.rs", "**/tests.rs"]),
             test_support: Globs::new(&["**/conftest.py", "**/tests/**"]),
-            golden: Globs::new(&["**/tests/**/golden/**"]),
+            golden: Globs::new(&["**/tests/**/golden/**", "**/testdata/**/*.golden"]),
             complexity_exempt: Globs::new(&["tests/**", "**/tests/**/*.rs", "**/tests.rs"]),
             cycles_exempt: Globs::new(&[
                 "**/tests/**",

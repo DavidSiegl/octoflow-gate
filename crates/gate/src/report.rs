@@ -9,6 +9,7 @@ use serde::Serialize;
 
 use crate::config_edits::ToolConfig;
 use crate::coverage::NewCoverage;
+use crate::settings::{RULES_FILE, SETTINGS_FILE};
 use crate::text::{self, fingerprint, one_line, series};
 
 /// The version this binary carries into quality.json: its crate's.
@@ -19,14 +20,6 @@ pub const QUALITY_SCHEMA_VERSION: u32 = 1;
 /// The most findings the quality file lists, issues and findings to weigh numbered as one list, and the most failing
 /// tests; the rest are counted.
 pub const QUALITY_ISSUE_LIMIT: usize = 50;
-/// The file at the top level of the judged tree that holds the gate's settings (settings.rs), unless `--config`
-/// names another.
-pub const SETTINGS_FILE: &str = "gate.toml";
-/// The file beside the settings' that holds the rules of the tools that take theirs from one
-/// (settings::JudgedBy::rules).
-pub const RULES_FILE: &str = "pyproject.toml";
-/// Files a change may edit that alter how the gate judges it: its rules and the versions of the linters it runs.
-pub const BUILD_CONFIG_FILES: [&str; 2] = [RULES_FILE, "uv.lock"];
 
 /// The headings of the sections a reader of the quality file finds the failed conditions and failing tests under.
 const FAILED_CONDITIONS: &str = "## Failed conditions";

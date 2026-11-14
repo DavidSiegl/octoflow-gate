@@ -7,7 +7,7 @@
 //! ```
 //!
 //! Exit status 0 for GATE: OK, 1 for GATE: ERROR, 2 when it could not judge the change or the arguments are bad, and
-//! 130 for Ctrl-C or SIGTERM; with 2 or 130 it writes no report.
+//! 130 for Ctrl-C, SIGTERM or SIGHUP; with 2 or 130 it writes no report.
 
 use std::ffi::{OsStr, OsString};
 use std::io::Write;
@@ -18,7 +18,8 @@ use std::process::ExitCode;
 use gate::judge::{judge_change, Given};
 use gate::paths::real_path;
 use gate::process;
-use gate::report::{Verdict, RULES_FILE};
+use gate::report::Verdict;
+use gate::settings::RULES_FILE;
 use gate::text::{self, series};
 use gate::Unjudged;
 
@@ -35,13 +36,13 @@ const USAGE: &str = "usage: gate --base REV [--config FILE] [--coverage XML] [--
 const HELP: &str = "
 Judges the change the git working tree around the current directory makes since --base: by ruff, mypy, pymarkdown,
 shellcheck, actionlint, clippy and golangci-lint over the files the repository tracks, the checks test-integrity,
-cognitive-complexity, vague-names, duplicated-blocks and surviving-mutants over Python, Rust and Go, dependency-cycles,
-flaky-tests and passes-at-base over Python and Rust, gate.toml's [[test]] commands, the tests and coverage they report,
-files committed under mutmut's mutants/, stray line ends, suppressions added and edited build configuration. It writes
-the quality file: GATE: OK or GATE: ERROR on its first line, then the failed conditions, the findings on lines added
-since --base, failing tests, coverage of new code, suppressions added and edited build configuration. Exit status 0 for
-OK, 1 for ERROR, 2 when it could not judge, writing nothing. --out FILE also writes quality.json, the same report as
-data.
+cognitive-complexity, vague-names, duplicated-blocks, surviving-mutants and passes-at-base over Python, Rust and Go,
+flaky-tests over Python and Go, dependency-cycles over Python and Rust, gate.toml's [[test]] commands, the tests and
+coverage they report, files committed under mutmut's mutants/, stray line ends, suppressions added and edited build
+configuration. It writes the quality file: GATE: OK or GATE: ERROR on its first line, then the failed conditions, the
+findings on lines added since --base, failing tests, coverage of new code, suppressions added and edited build
+configuration. Exit status 0 for OK, 1 for ERROR, 2 when it could not judge, writing nothing. --out FILE also writes
+quality.json, the same report as data.
 
 options:
   --help                  show this help and exit
@@ -91,7 +92,7 @@ enum Asked {
 
 fn main() -> ExitCode {
     if let Err(e) = process::catch_interrupt() {
-        return unjudged(&format!("cannot catch Ctrl-C and SIGTERM: {e}"));
+        return unjudged(&format!("cannot catch Ctrl-C, SIGTERM and SIGHUP: {e}"));
     }
     match parse_args(std::env::args_os().skip(1)) {
         Ok(Asked::Run(args)) => gate_command(&args),
@@ -109,7 +110,7 @@ fn main() -> ExitCode {
 /// Writes the report judge_change gives for the current directory as `args` says: the quality file to `args.out`,
 /// else to standard output, and quality.json to `args.json`, if given. Returns 0 for GATE: OK and 1 for GATE: ERROR;
 /// [`EXIT_UNJUDGED`], having written nothing, when the change could not be judged or a file could not be written.
-/// Ctrl-C or SIGTERM ends the process (process::exit_interrupted), having written nothing.
+/// Ctrl-C, SIGTERM or SIGHUP ends the process (process::exit_interrupted), having written nothing.
 fn gate_command(args: &Args) -> ExitCode {
     let judged = std::env::current_dir()
         .map_err(|e| Unjudged(format!("cannot read the current directory: {e}")))
@@ -257,10 +258,10 @@ fn json_path_for(out: &Path) -> PathBuf {
 /// file is written whole or keeps what it held.
 ///
 /// Each is written aside, and only once every one is written are they renamed into place, so a file that cannot be
-/// written, or Ctrl-C or SIGTERM before the renames, leaves every file as it was; only a rename that fails after
-/// another succeeded leaves some new and some old. A symlink at a path is followed, so the link stays and its target
-/// changes, and an existing file keeps its permissions. Errs naming the file, as given, that cannot be written. Ctrl-C
-/// or SIGTERM ends the process (process::exit_interrupted) with every file as it was.
+/// written, or Ctrl-C, SIGTERM or SIGHUP before the renames, leaves every file as it was; only a rename that fails
+/// after another succeeded leaves some new and some old. A symlink at a path is followed, so the link stays and its
+/// target changes, and an existing file keeps its permissions. Errs naming the file, as given, that cannot be written.
+/// Ctrl-C, SIGTERM or SIGHUP ends the process (process::exit_interrupted) with every file as it was.
 fn write_files(contents: &[(&Path, String)]) -> Result<(), Unjudged> {
     // (path as given, its real path, the file written aside)
     let mut aside: Vec<(&Path, PathBuf, PathBuf)> = vec![];

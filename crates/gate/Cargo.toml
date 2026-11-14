@@ -1,6 +1,6 @@
 [package]
 name = "gate"
-version = "0.14.0"
+version = "0.15.0"
 description = "The quality gate as one binary (docs/quality-gate.md)"
 edition.workspace = true
 publish.workspace = true

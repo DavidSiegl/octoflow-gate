@@ -132,32 +132,31 @@ change cannot weaken its tests unseen. Each of these is a finding:
 - `fewer-assertions`: a test with fewer `assert` statements, `self.assert*` calls and `pytest.raises` calls than at
   the base. It is one to weigh, like `removed-test`: a test the spec reshapes may need fewer;
 - `swallowed-error`: a bare `except:`, or an `except Exception:` that does nothing, on an added line;
-- `expected-value-changed`: an assertion whose literals changed while the rest of it stayed, in a change that also
-  edits code outside the tests, which is Python source as **Passes at base** below counts it, on either side of the
-  change: the "update the expected value to match the output" move. A value written of literals alone is one
-  literal, its sign and its brackets with it, so `-5` becoming `5` and `("a",)` becoming `"a"` count; parentheses
-  around such a value change nothing. The finding names the assertion before and after. The two sides' assertions
-  are paired in order, each with one of its own shape, in every language: of the pairings that pair the most, the one
-  that leaves the most unchanged. So raising every value of a sequence by one is a finding at each, even where the
-  new values repeat old ones, and an assertion added or removed, of any shape, as a case appended to a table, leaves
-  the others paired with themselves. Where two pairings tie, the earlier assertions are paired first, so an edit
-  beside an added assertion of its shape is reported against whichever of the two comes first. An expected
-  value held in a constant counts too: when a kept test's assertions name a constant of its own file at the base and
-  still name it, bare or as `module.NAME` (the module by its dotted name or a module-level import alias of it), and
-  the constant's expression changed other than in layout, or it is no longer a
-  constant, that is one finding per constant and test, at the test's first assertion naming it, naming the constant
-  and its line. A constant whose name the test binds anywhere, even by a binding that does nothing (`global NAME`, a
-  comprehension target, a lambda parameter), is not checked, so such a line hides an edited constant; a reviewer
-  sees it in the diff. Neither is a `module.NAME` whose `module` the test binds. Only a top-level import statement's
-  alias counts as the module; one imported under a module-level `if` or `try` does not. A constant is a module-level
-  assignment of one name, bound nowhere else in the module's scope, to an expression with no call in it. One the
-  change adds, one imported from another module or computed by a call, one reached through a local or a helper, an
-  edit to another constant one is built from, and a fixture's return value do not count. It is one to weigh, like
+- `expected-value-changed`: an assertion whose literals changed while the rest of it stayed, in a change that also edits
+  code outside the tests, which is Python source as **Passes at base** below counts it, on either side of the change:
+  the "update the expected value to match the output" move. A value written of literals alone is one literal, its sign
+  and its brackets with it, so `-5` becoming `5` and `("a",)` becoming `"a"` count; parentheses around such a value
+  change nothing. The finding names the assertion before and after. The two sides' assertions are paired in order, each
+  with one of its own shape, in every language: of the pairings that pair the most, the one that leaves the most
+  unchanged. So raising every value of a sequence by one is a finding at each, even where the new values repeat old
+  ones, and an assertion added or removed, of any shape, as a case appended to a table, leaves the others paired with
+  themselves. Where two pairings tie, the earlier assertions are paired first, so an edit beside an added assertion of
+  its shape is reported against whichever of the two comes first. An expected value held in a constant counts too: when
+  a kept test's assertions name a constant of its own file at the base and still name it, bare or as `module.NAME` (the
+  module by its dotted name or a module-level import alias of it), and the constant's expression changed other than in
+  layout, or it is no longer a constant, that is one finding per constant and test, at the test's first assertion naming
+  it, naming the constant and its line. A constant whose name the test binds anywhere, even by a binding that does
+  nothing (`global NAME`, a comprehension target, a lambda parameter), is not checked, so such a line hides an edited
+  constant; a reviewer sees it in the diff. Neither is a `module.NAME` whose `module` the test binds. Only a top-level
+  import statement's alias counts as the module; one imported under a module-level `if` or `try` does not. A constant is
+  a module-level assignment of one name, bound nowhere else in the module's scope, to an expression with no call in it.
+  One the change adds, one imported from another module or computed by a call, one reached through a local or a helper,
+  an edit to another constant one is built from, and a fixture's return value do not count. It is one to weigh, like
   `removed-test`, since the spec may ask for the new value. A golden file, by default one under a `golden` directory
-  inside a `tests` directory, as this repository's `tests/golden/`, is an expected value too, one that a suite can
-  usually rewrite to whatever the code now writes: a change that edits or deletes one and also edits code outside the
-  tests gets one such finding per file, on the whole file, also to weigh. A golden file added, or renamed unedited,
-  is none.
+  inside a `tests` directory, as this repository's `tests/golden/`, or a `.golden` file under a `testdata` directory, as
+  Go's tests keep their expected output, is an expected value too, one that a suite can usually rewrite to whatever the
+  code now writes: a change that edits or deletes one and also edits code outside the tests gets one such finding per
+  file, on the whole file, also to weigh. A golden file added, or renamed unedited, is none.
 
 What weakens a test is on an added line when the change added any line of it, as the condition of a wrapped `skipif` or
 a mark added inside a case's wrapped `marks=[...]`, and the finding points at the first such line. A test kept, renamed
@@ -308,9 +307,10 @@ of Go:
   `map[string]int{keyA: 1}`, is read as any other name;
 - `unparsable`: as Rust's.
 
-Go's tests run through a `[[test]]` command, as [Go tests and coverage](#go-tests-and-coverage) says,
-golangci-lint lints Go as the table above says, and the surviving-mutants check mutation-tests the functions a change
-edits with gremlins (**Go's mutants**, below). The flaky-tests and passes-at-base checks do not judge Go (#82, #81).
+Go's tests run through a `[[test]]` command, as [Go tests and coverage](#go-tests-and-coverage) says, golangci-lint
+lints Go as the table above says, and the surviving-mutants check mutation-tests the functions a change edits with
+gremlins (**Go's mutants**, below). The flaky-tests check reruns the Go tests a change adds or edits, and passes-at-base
+runs them at the base (**Flaky tests** and **Passes at base**, below).
 
 **Cognitive complexity** scores the functions the change edits, so that a change cannot pile branches into the function
 it is editing rather than split it. A function counts when the change adds a line to it, decorators included, in a
@@ -482,6 +482,21 @@ A change to a helper or fixture outside the tests' `def`s reruns nothing. The ch
 installed in the project's Python, so every pytest run there shuffles the tests too, printing the seed it used;
 `-p no:randomly` turns it off, and `--randomly-seed=N` repeats an order.
 
+Go's changed tests are rerun the same way, with go's own shuffling. A test counts when the change adds or removes a line
+of it in a `_test.go` file, from the line above its `func` to the line before its closing brace: a top-level `TestX`,
+`FuzzX` or `ExampleX`, which `go test -run` selects, its subtests running with it. In the same temporary copy of the
+tracked files, each package's tests are first built, as `go test -c`, within five minutes, so that a run's time goes to
+the tests; then its changed tests run five times, alone and together, from the package's directory, as `go test -json
+-count=1 -shuffle=N -run '^(TestA|TestB)$' .` with N from 1 to 5, each run within 30 seconds; `-count=1` keeps go's test
+cache from answering in place of a run. A test that failed under some seeds and passed under others is `mixed-results`,
+one that failed under every seed that judged it `failed-every-run`, and one that fewer than two runs passed or failed
+`not-rerun`, as above; go reports no xfail. A run that cannot start, takes longer than 30 seconds, exits with a status
+other than 0 or 1, fails without a test failing (a `TestMain` that exits does), or finds that the package's tests do not
+build in the copy, ends that package's reruns with a `not-rerun` finding saying which earlier runs were judged; the
+other packages' tests are rerun still. A build that takes longer than five minutes is a `not-rerun` finding on the
+package's tests. The Go reruns add at most a build of five minutes and five runs of 30 seconds for each package the
+changed tests are in.
+
 **Surviving mutants** mutation-tests the functions the change edits, so that code its tests run without checking what
 it does is found; coverage counts such code as tested. A function counts when the change adds lines to it or removes
 lines from it, decorators included, since a deleted guard clause needs a test as much as an added one: a top-level
@@ -630,18 +645,19 @@ source](#reading-the-source)), so not a vendored, generated or symlinked one; bu
 function of its name with the same declaration, its receiver, parameters, results and body, whatever its comments and
 layout, as an edit to its comments or layout alone changes nothing to mutate; a signature edited alone is an edit.
 gremlins runs as `gremlins unleash --silent=false --output-statuses lctkvsr --threshold-efficacy 0 --threshold-mcover 0
---timeout-coefficient 10 --diff <base>`, with `-count=1` added to `GOFLAGS`, in the directory of the go.mod nearest
-above the functions' files, once per module, in the gate's copy of the files git tracks. It first runs the module's
-tests for their coverage, then each mutant against the tests of its package, and mutates only what it reads as changed
-from `git diff --merge-base <base>`: the gate puts a `git` first on its `PATH` that answers that one command with the
-edited functions' lines, and passes any other to git, so gremlins mutates the edited functions whole, though the copy
-has no repository. The flags pin what a module's `.gremlins.yaml` could otherwise change under the gate: every mutant's
-line printed, no threshold's exit status, and a timeout for each mutant's tests of ten times what gremlins' first run of
-the module's tests took, a run the test cache cannot shorten to milliseconds, which would time out every mutant and
-count it caught. Which mutators run stays the module's choice. gremlins writes its report only when it finishes, so the
-gate reads the line it prints for each mutant, which a run the budget stopped has printed for those it tried. A mutant
-that LIVED survived; a KILLED one, and one TIMED OUT, did not; one NOT COVERED is on a line no test runs; a NOT VIABLE
-one, which does not build, was not tried. The findings are mutmut's kinds:
+--timeout-coefficient 10 --diff <base> --coverpkg ./... --integration`, with `-count=1` added to `GOFLAGS`, in the
+directory of the go.mod nearest above the functions' files, once per module, in the gate's copy of the files git tracks.
+It first runs the module's tests for their coverage of the whole module, then each mutant against all of the module's
+tests, so a mutant only another package's tests catch is caught, at the cost of the budget; and mutates only what it
+reads as changed from `git diff --merge-base <base>`: the gate puts a `git` first on its `PATH` that answers that one
+command with the edited functions' lines, and passes any other to git, so gremlins mutates the edited functions whole,
+though the copy has no repository. The flags pin what a module's `.gremlins.yaml` could otherwise change under the gate:
+every mutant's line printed, no threshold's exit status, and a timeout for each mutant's tests of ten times what
+gremlins' first run of the module's tests took, a run the test cache cannot shorten to milliseconds, which would time
+out every mutant and count it caught. Which mutators run stays the module's choice. gremlins writes its report only when
+it finishes, so the gate reads the line it prints for each mutant, which a run the budget stopped has printed for those
+it tried. A mutant that LIVED survived; a KILLED one, and one TIMED OUT, did not; one NOT COVERED is on a line no test
+runs; a NOT VIABLE one, which does not build, was not tried. The findings are mutmut's kinds:
 
 - `survived`: a function with mutants that lived, at its `func` line, with how many of its tried mutants survived and
   the first three, each by its line, column and gremlins' kind, such as `line 13, column 11: CONDITIONALS_BOUNDARY`;
@@ -723,6 +739,19 @@ passes when every case nextest reports under its name passed, and a test it did 
 the base, gives nothing. A test edited by removing its first attribute, as an `#[ignore]`, counts as edited. The target
 directory is new for every run, so each run compiles the package's dependencies anew, within the budget (see `TODO.md`).
 
+Go's tests are judged after Rust's, with what is left of the same `--base-run-budget`, when the change edits Go code
+outside the tests: a `.go` file of a Go module that is not a `_test.go` file and lies in no `testdata` directory. The
+changed tests are those flaky-tests reruns: a top-level `TestX`, `FuzzX` or `ExampleX` of a `_test.go` file whose
+lines the change adds to or removes from. They run in a copy of the base made as above, with the change's `_test.go`
+files, the files under a `testdata` directory and the files that go with the tests taken from the working tree; Go has
+no test code inside a file of code, so no Go test is inseparable from what it tests. Each package's changed tests run
+together, once, from the package's directory, as `go test -json -count=1 -run '^(TestA|TestB)$' .`, killed when the
+budget runs out. A package whose tests do not build at the base counts as failing them, which is what the check
+expects of a test that needs the change, so a change that adds a function and a test calling it gives no finding; a
+test that fails or is skipped there, or that the run does not report, gives none either. The findings are those
+above, `go test` in place of pytest: a stop at the budget is `budget-reached`, and each package after it `not-run`; a
+go test that cannot start, exits with a status other than 0 or 1, or fails without a test failing, is `not-run`.
+
 **Vague names** lists the names a change binds that tell a reader nothing about what they hold: `data`, `info`, `value`,
 `status`, `handle` and `manager` (`VAGUE_WORDS` in `crates/checks`), or a name ending in one after an underscore, such
 as `raw_info`, in any case. A name counts where a line the change adds to a Python file, a `.py` file or a script whose
@@ -778,7 +807,10 @@ The gate is `GATE: ERROR` when any of these holds, and `GATE: OK` otherwise:
 
 Exit status 0 means `GATE: OK`, 1 `GATE: ERROR`, and 2 that the gate could not judge (a bad argument, `REV` names no
 commit, not a git tree, settings it cannot read, an unreadable report, a source file of the change it cannot read), in
-which case it writes nothing; 130 (`EXIT_INTERRUPTED`) means Ctrl-C or SIGTERM stopped it, and it wrote nothing either.
+which case it writes nothing; 130 (`EXIT_INTERRUPTED`) means Ctrl-C, SIGTERM or SIGHUP stopped it, and it wrote nothing
+either. Stopped so, or by a panic, it removes the directories it made in `TMPDIR` to run tools in, `gate-<pid>-<n>`,
+each holding a copy of the tree; a gate killed by a signal it cannot catch, as SIGKILL, leaves them, and the next gate
+to make one removes those whose gate no longer runs.
 
 A change to a file whose contents are not UTF-8, such as a Latin-1 line or a binary file that git diffs as text,
 is judged like any other. The gate reads the diff, git's file lists and the linters' output as they were printed,
@@ -995,7 +1027,7 @@ trailing `/**` for all below.
 | `test-files.python` | `**/tests/**/*.py`, `**/test_*.py`, `**/*_test.py` | Python's test files |
 | `test-files.rust` | `**/tests/**/*.rs`, `**/tests.rs` | Rust's test files by where they are; a file only `#[cfg(test)] mod name;` takes in is one too, and a `#[cfg(test)]` item holds tests wherever it is |
 | `test-files.support` | `**/conftest.py`, `**/tests/**` | files that go with the tests rather than the code, which the checks that run tests take from the working tree |
-| `test-files.golden` | `**/tests/**/golden/**` | golden files, which test integrity reads as expected values |
+| `test-files.golden` | `**/tests/**/golden/**`, `**/testdata/**/*.golden` | golden files, which test integrity reads as expected values |
 | `complexity.exempt` | `tests/**`, `**/tests/**/*.rs`, `**/tests.rs` | files whose functions cognitive complexity does not score |
 | `dependency-cycles.exempt` | `**/tests/**`, `**/tests.rs`, `**/test_*.py`, `**/*_test.py`, `**/conftest.py` | files that take part in no dependency cycle, their imports and the imports of them both left out |
 | `duplicated-blocks.exempt` | `**/tests/**`, `**/tests.rs`, `**/test_*.py`, `**/*_test.py`, `**/conftest.py`, `**/*_test.go`, `**/testdata/**`, `**/fixtures/**` | files duplicated-blocks neither judges nor matches a block against |
@@ -1032,7 +1064,8 @@ judged is a failed condition of its own, naming the command, and none of its rep
 
 A coverage report a command wrote that cannot be read stops the gate, which exits 2, as one `--coverage` names does.
 `--tests` or `--coverage`, given at all, replace every command: a CI that has already run the tests passes their
-reports, and no command runs. Ctrl-C or SIGTERM during a command kills its process group, and the gate exits 130.
+reports, and no command runs. Ctrl-C, SIGTERM or SIGHUP during a command kills its process group, and the gate exits
+130.
 
 A CI that judges a change by `main`'s settings, as below, runs `main`'s commands, so a change cannot alter which
 commands judge it.

@@ -8,6 +8,13 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
 
 ## Open issues
 
+- **A Python function a removed mutmut pragma frees is mutated only when the diff touches its lines.** As
+  cross-review 38 put it (round 3, 2026-11-14): "a pragma change only selects functions whose lines the diff
+  touches. Deleting a `start`/`end` pair around f2, f3, f4 puts removal points next to f2 and f4 but none in f3. f3
+  becomes mutable and is never tried. The same goes for a block pragma removed with a blank line between it and the
+  def, or an `end` moved up." Selection is the `touched` closure of `python_mutants` in
+  `crates/gate/src/python_mutants.rs`; it behaved so before todo/33 too. Closes with a function counted as touched
+  when the span of a pragma the change adds, removes or moves covers it.
 - **A Go test helper is followed only in the calling test's file.** As cross-review 37 put it (F5, 2026-11-14):
   "`Walk` is per file, and `keep_helper_calls` drops a test's call of a function not among this file's helpers.
   Base: calc_test.go holds `check` (with `t.Errorf`) and `TestAdd` calling `check(t, Add(1, 2), 3)`. The change moves
@@ -123,6 +130,10 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   would pass there. Accepted: the check reports only, and splitting the file's tests from its imports would mean
   rewriting them. Closes, if its run metrics show these files are common, by importing such names inside the tests that
   use them, or by running each test with the failing import stubbed. Moved from octoflow-ai on 2026-11-05.
+- **flaky-tests copies the tracked tree twice when a change touches both Python and Go tests.** As cross-review 39
+  put it (R1-11, 2026-11-14): "`crates/gate/src/flaky_tests.rs:228` (Go's `copy_tracked` at `:231`) beside Python's
+  own copy; one copy could serve both reruns." Costs a second copy of the tree's tracked files, and its time, on such
+  a change; nothing is judged wrongly. Closes with one copy that both halves rerun in.
 - **A test file whose name is not UTF-8 is never rerun by `flaky-tests`.** pytest-randomly 5.0.0 hashes each node id as
   strict UTF-8 (`pytest_randomly._crc32`, called from `pytest_runtest_setup` and its neighbours) and stops with an
   internal error, exit status 3. `run` in `crates/gate/src/pytest.rs` already lets pytest print such an id
@@ -174,14 +185,14 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   - F8, `crates/gate/src/parser_checks.rs`: "`changed_units` reads and parses each changed Python file again after
     `Sources::read` did, and is reached three times a run (flaky_tests, python_at_base, python_mutants); its "could not
     be read" branch is all but dead." Closes with the three checks given the units read once.
-  - F9, `crates/gate/src/python_at_base.rs`, `mutants.rs`: "The Python halves and the Rust halves' modules import each
-    other (`passes_at_base` <-> `python_at_base` for `budget_reached`; `mutants` <-> `python_mutants` for `KILL_WAIT`,
-    `STOP_GRACE`, `SURVIVOR_EXAMPLES`), consts widened to `pub(crate)` to cross the cycle." Closes with what both halves
-    of a check share in a module neither half is. The dependency-cycles check (structural-checks/01) fails a change
-    that closes such a cycle from now on, but not one the base has that the change adds no import of a new file to, so
-    these two stay until a change breaks them; an import a change adds between two files of such a cycle that were not
-    yet joined does fail it. The run over 50 commits found more such cycles in `crates/gate` (`judge` holds `Change`
-    and calls every check that imports it; `report` <-> `config_edits`, `golangci` <-> `linters`).
+  - F9, `crates/gate/src/mutants.rs`: "The Python halves and the Rust halves' modules import each other (...
+    `mutants` <-> `python_mutants` for `KILL_WAIT`, `STOP_GRACE`, `SURVIVOR_EXAMPLES`), consts widened to `pub(crate)`
+    to cross the cycle." Go's half, `go_mutants`, imports those and more from `mutants` the same way. Closes with what
+    the halves of a check share in a module none of them is, as passes-at-base's findings are in `base_findings.rs`.
+    The dependency-cycles check (structural-checks/01) fails a change that closes such a cycle from now on, but not one
+    the base has that the change adds no import of a new file to, so these stay until a change breaks them; an import
+    a change adds between two files of such a cycle that were not yet joined does fail it. The run over 50 commits
+    found one more such cycle in `crates/gate`, `golangci` <-> `linters`.
   - F12, `crates/gate/src/glob.rs`: "`fnmatch` arrives as an `across_slashes` flag through `translate_name` and
     `bracket` with two added match arms, the bolted-on flag the user's CLAUDE.md design rule names; it also compiles a
     Regex on each call." Closes with fnmatch's translation a function of its own, compiled once a pattern.

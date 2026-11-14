@@ -527,7 +527,8 @@ core, `sys.monitoring`, records each line for only the first few tests to run it
 its mutants and report them as survivors. Any of these makes a `not-narrowed` finding, and mutmut runs the whole
 selection: the file cannot be read, holds no test's context, names none of its tests from the tree's top, or does not
 measure a changed function's file; no line in it is recorded for at least a tenth of the tests it records, as that
-core writes it; or pytest's collection of the selection fails or does not finish. Without `--test-contexts`, as in a local run, mutmut runs the whole selection.
+core writes it; or pytest's collection of the selection fails or does not finish. Without `--test-contexts`, as in a
+local run, mutmut runs the whole selection.
 Tests that reach a function only in a subprocess count neither in mutmut's own record nor in the file.
 
 `--mutation-budget SECONDS`, else the settings' `budgets.mutation`, 600 by default, bounds mutmut's run. Stopping it

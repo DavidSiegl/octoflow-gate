@@ -72,21 +72,22 @@ const GOARCHES: &[&str] = &[
 ];
 
 /// The weakenings that the comments `header` of a `_test.go` file before its package clause, each with the line it
-/// starts on, in the order written, are as build constraints: each `//go:build` line; or, where there is none, each
-/// `// +build` line, which go 1.17 and later still obey then: its space-separated options or'd, each option's
-/// comma-separated tags and'd, a tag negated by `!`, and the lines and'd with one another. Each is a weakening at its
-/// line of the kind its file's whole constraint is: platform-only when the constraint names no custom tag, only
-/// platforms (`GOOS` and `GOARCH` values and `unix`), release tags (`go1.1` to the newest release the gate knows, each
-/// taken as set, as on the newest toolchain: [`release_tag`]) and the toolchain's tags (`cgo`, `gc`, `gccgo`), and
-/// holds on some platform and toolchain, since that leaves the tests out only where what they test may not be built,
-/// as Rust's `cfg(unix)` does; a skip otherwise, as for a custom tag such as `integration`, `ignore` or a release no
-/// toolchain sets yet, `go1.99`, a negated release tag such as `!go1.21`, or a constraint go cannot read.
+/// starts on, in the order written, are as build constraints: each `//go:build` line; or, where there is none, each `//
+/// +build` line, which go 1.17 and later still obey then: its space-separated options or'd, each option's
+/// comma-separated tags and'd, a tag negated by `!`, and the lines and'd with one another, a term that is no tag set by
+/// no build and a line too long for go none ([`plus_build`]). Each is a weakening at its line of the kind its file's
+/// whole constraint is: platform-only when the constraint names no custom tag, only platforms (`GOOS` and `GOARCH`
+/// values and `unix`), release tags (`go1.1` to the newest release the gate knows, each taken as set, as on the newest
+/// toolchain: [`release_tag`]) and the toolchain's tags (`cgo`, `gc`, `gccgo`), and holds on some platform and
+/// toolchain, since that leaves the tests out only where what they test may not be built, as Rust's `cfg(unix)` does; a
+/// skip otherwise, as for a custom tag such as `integration`, `ignore` or a release no toolchain sets yet, `go1.99`, a
+/// negated release tag such as `!go1.21`, or a `//go:build` line go cannot read.
 pub fn weakenings(header: &[(&str, u32)]) -> Vec<Weakening> {
     let read = |line: fn(&str) -> Option<Option<Expr>>| {
         header.iter().filter_map(|&(comment, at)| Some((comment, at, line(comment)?))).collect::<Vec<_>>()
     };
     let go_build = read(go_build);
-    let lines = if go_build.is_empty() { read(plus_build) } else { go_build };
+    let lines = if go_build.is_empty() { read(|c| plus_build(c).map(Some)) } else { go_build };
     let whole = lines.iter().try_fold(None, |whole: Option<Expr>, (_, _, expr)| {
         let expr = expr.clone()?;
         Some(Some(match whole {
@@ -127,25 +128,36 @@ fn go_build(comment: &str) -> Option<Option<Expr>> {
     Some(parse(expression))
 }
 
-/// The constraint a `// +build` line, `comment`, writes, as [`weakenings`] reads it; None inside for one go cannot
-/// read or with no option, and None for a comment that is no such line.
-fn plus_build(comment: &str) -> Option<Option<Expr>> {
+/// The constraint a `// +build` line, `comment`, writes, as [`weakenings`] reads it and go/build/constraint's
+/// `parsePlusBuildExpr` does: a term that is no tag, as `foo-bar`, an empty one, `!` or one starting `!!`, is
+/// [`Expr::Unset`], and so is a line with no option. None for a comment that is no such line, and for one of more than
+/// [`MOST_PLUS_BUILD_OPERATORS`], which go ignores.
+fn plus_build(comment: &str) -> Option<Expr> {
     let options = comment.strip_prefix("//")?.trim_start_matches([' ', '\t']).strip_prefix("+build")?;
     if !options.is_empty() && !options.starts_with([' ', '\t']) {
         return None;
     }
-    let tag = |term: &str| {
+    let operators = options.matches(',').count() + options.split_whitespace().count().saturating_sub(1);
+    if operators > MOST_PLUS_BUILD_OPERATORS {
+        return None;
+    }
+    let term = |term: &str| {
+        if term.starts_with("!!") || term == "!" {
+            return Expr::Unset;
+        }
         let (negated, tag) = term.strip_prefix('!').map_or((false, term), |t| (true, t));
         let readable = !tag.is_empty() && tag.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.');
-        readable.then(|| if negated { Expr::Not(Box::new(Expr::Tag(tag.into()))) } else { Expr::Tag(tag.into()) })
+        let tag = if readable { Expr::Tag(tag.into()) } else { Expr::Unset };
+        if negated { Expr::Not(Box::new(tag)) } else { tag }
     };
-    let option = |option: &str| {
-        let tags: Option<Vec<Expr>> = option.split(',').map(tag).collect();
-        tags?.into_iter().reduce(|a, b| Expr::And(Box::new(a), Box::new(b)))
-    };
-    let options: Option<Vec<Expr>> = options.split_whitespace().map(option).collect();
-    Some(options.and_then(|o| o.into_iter().reduce(|a, b| Expr::Or(Box::new(a), Box::new(b)))))
+    let option = |option: &str| option.split(',').map(term).reduce(|a, b| Expr::And(Box::new(a), Box::new(b)));
+    let options = options.split_whitespace().filter_map(option);
+    Some(options.reduce(|a, b| Expr::Or(Box::new(a), Box::new(b))).unwrap_or(Expr::Unset))
 }
+
+/// The most `,` and space-separated options a `// +build` line may join for go to read it (go/build/constraint's
+/// `maxOldSize`).
+const MOST_PLUS_BUILD_OPERATORS: usize = 100;
 
 /// The weakening a constraint line `comment`, on line `line`, is: platform-only or a skip ([`weakenings`]).
 fn weakening(comment: &str, line: u32, platform_only: bool) -> Weakening {
@@ -197,6 +209,8 @@ struct Build<'a> {
 #[derive(Clone, Debug)]
 enum Expr {
     Tag(String),
+    /// A `// +build` term go cannot read as a tag, which it reads as the tag `ignore`, taken as set by no build.
+    Unset,
     Not(Box<Expr>),
     And(Box<Expr>, Box<Expr>),
     Or(Box<Expr>, Box<Expr>),
@@ -216,6 +230,7 @@ impl Expr {
                     || COMPILERS.contains(&tag)
                     || release_tag(tag)
             }
+            Expr::Unset => true,
             Expr::Not(e) => e.names_no_custom_tag(),
             Expr::And(a, b) | Expr::Or(a, b) => a.names_no_custom_tag() && b.names_no_custom_tag(),
         }
@@ -251,6 +266,7 @@ impl Expr {
                     || (tag == "cgo" && build.cgo)
                     || release_tag(tag)
             }
+            Expr::Unset => false,
             Expr::Not(e) => !e.holds(build),
             Expr::And(a, b) => a.holds(build) && b.holds(build),
             Expr::Or(a, b) => a.holds(build) || b.holds(build),
@@ -398,6 +414,20 @@ mod tests {
         ] {
             assert_eq!(kind(comment), Some(WeakeningKind::Skip), "{comment}");
         }
+    }
+
+    #[test]
+    fn a_plus_build_term_go_cannot_read_is_a_tag_no_build_sets_and_a_line_too_long_for_go_is_none() {
+        for comment in ["// +build linux darwin foo-bar", "// +build !foo-bar", "// +build linux !"] {
+            assert_eq!(kind(comment), Some(WeakeningKind::PlatformOnly), "{comment}");
+        }
+        for comment in ["// +build foo-bar", "// +build linux,", "// +build !", "// +build !!linux", "// +build"] {
+            assert_eq!(kind(comment), Some(WeakeningKind::Skip), "{comment}");
+        }
+        let longest = format!("// +build {}", ["linux"; 101].join(","));
+        assert_eq!(kind(&longest), Some(WeakeningKind::PlatformOnly));
+        let too_long = format!("// +build {}", ["linux"; 102].join(","));
+        assert_eq!(kind(&too_long), None);
     }
 
     #[test]

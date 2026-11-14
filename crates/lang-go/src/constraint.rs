@@ -438,6 +438,22 @@ mod tests {
     }
 
     #[test]
+    fn a_suffix_narrows_where_it_names_a_platform_the_base_s_neither_names_nor_implies() {
+        for (base, path, narrowing) in [
+            (None, "calc_windows_test.go", Some("_windows")),
+            (Some("calc_test.go"), "calc_linux_amd64_test.go", Some("_linux_amd64")),
+            (Some("calc_linux_test.go"), "calc_linux_amd64_test.go", Some("_linux_amd64")),
+            (Some("calc_solaris_test.go"), "calc_illumos_test.go", Some("_illumos")),
+            (Some("calc_illumos_test.go"), "calc_solaris_test.go", None),
+            (Some("calc_linux_amd64_test.go"), "calc_amd64_test.go", None),
+            (Some("calc_windows_test.go"), "calc_test.go", None),
+        ] {
+            let found = narrowing_platform_suffix(base.map(str::as_bytes), path.as_bytes());
+            assert_eq!(found.as_deref(), narrowing, "{base:?} to {path}");
+        }
+    }
+
+    #[test]
     fn a_constraint_naming_only_platforms_that_holds_on_one_is_platform_only() {
         for comment in [
             "//go:build linux",

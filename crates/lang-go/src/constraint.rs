@@ -151,11 +151,13 @@ fn holds_code(mut line: &str, in_block_comment: &mut bool) -> bool {
     }
 }
 
-/// The platform suffix ([`platform_suffix`]) of the Go file name at `path` where it narrows the platforms the name at
-/// `base` builds the file on, as a name with none renamed to `calc_windows_test.go`, or `_linux` to `_linux_amd64`:
-/// where it names a `GOOS` or `GOARCH` that the suffix at `base` does not, by itself or as one it implies, as
-/// `android` implies `linux`. None where it does not narrow them, as `_linux_amd64` renamed to `_amd64`, or `_android`
-/// to `_linux`; `base` None for a file new at the change.
+/// The platform suffix of the Go file name at `path`, as written, as `_windows` of `calc_windows_test.go`, where it
+/// narrows the platforms the name at `base` builds the file on: where it names a `GOOS` or `GOARCH` that the suffix at
+/// `base` does not, by itself or as one it implies, as `android` implies `linux`. So a name with none renamed to
+/// `calc_windows_test.go`, or `_linux` to `_linux_amd64`, narrows; `_linux_amd64` to `_amd64`, or `_android` to
+/// `_linux`, does not, and gives None. A suffix is a name's last `_`-separated part before `.` but for a `_test`, a
+/// `GOOS` or `GOARCH` value, or its last two, a `GOOS` then a `GOARCH` value, as go/build reads a file name
+/// (<https://pkg.go.dev/go/build#hdr-Build_Constraints>). `base` is None for a file new at the change.
 pub fn narrowing_platform_suffix(base: Option<&[u8]>, path: &[u8]) -> Option<String> {
     let suffix = platform_suffix(path)?;
     let had = base.and_then(platform_suffix).unwrap_or_default();

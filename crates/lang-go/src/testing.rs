@@ -377,8 +377,9 @@ impl<'t> Walk<'t> {
     }
 
     /// Whether the result of a call, `node`, is not kept, as an assertion's is not: the call is a statement, deferred,
-    /// started by `go` or returned, or its result is only tested, a condition of an `if` or a `for`, through `!`,
-    /// `&&`, `||` and parentheses. Its result bound to a name or passed on as an argument is kept.
+    /// started by `go`, or returned outside any test, as a helper returns what another found, or its result is only
+    /// tested, a condition of an `if` or a `for`, through `!`, `&&`, `||` and parentheses. Its result bound to a name,
+    /// passed on as an argument, or returned in a test, as a closure there returns a fixture's, is kept.
     fn result_unkept(&self, node: Node) -> bool {
         let mut tested = node;
         while let Some(p) = tested.parent() {
@@ -397,9 +398,10 @@ impl<'t> Walk<'t> {
         let Some(p) = tested.parent() else { return false };
         match p.kind() {
             "expression_statement" | "defer_statement" | "go_statement" => true,
-            "expression_list" => p.parent().is_some_and(|r| r.kind() == "return_statement"),
+            "expression_list" => self.owner.is_none() && p.parent().is_some_and(|r| r.kind() == "return_statement"),
             "if_statement" | "for_clause" => p.child_by_field_name("condition") == Some(tested),
-            "for_statement" => p.child_by_field_name("body") != Some(tested),
+            // A `for` with a condition alone holds it as an unnamed child.
+            "for_statement" => true,
             _ => false,
         }
     }

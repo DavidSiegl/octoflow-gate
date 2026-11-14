@@ -485,8 +485,9 @@ call the function:
 mutmut runs in the project's Python, on a copy of the files git tracks, so the working tree stays as it was; its state,
 `mutants/`, goes into the copy too. Its own selector, mutant names such as `pkg.x_parse__mutmut_*`, picks which mutants
 run only after mutmut has made a mutant of every function, which took minutes for octoflow's Python engine. So in the
-copy, each function and class the change does not touch gets mutmut's `# pragma: no mutate block` at the end of its
-header, and mutmut skips it. The rules' `[tool.mutmut]` says what can be mutated (`source_paths`, `only_mutate`,
+copy, each function and class the change does not touch in the files mutmut mutates gets mutmut's `# pragma: no
+mutate block` at the end of its header, and mutmut skips it; the copy's other files, the tests among them, are neither
+read nor changed. The rules' `[tool.mutmut]` says what can be mutated (`source_paths`, `only_mutate`,
 `do_not_mutate`), which tests run (`pytest_add_cli_args_test_selection`), what the tests read beside the code
 (`also_copy`), and which lines are left alone (`do_not_mutate_patterns`); see [whose rules judge a
 change](#whose-rules-judge-a-change). Python files are decoded by a byte order mark or a coding cookie, as [reading the

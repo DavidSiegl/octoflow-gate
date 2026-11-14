@@ -2,11 +2,12 @@
 //! Python code under test, and a function whose mutants its tests do not notice is a finding.
 //!
 //! mutmut 3 (3.8.0 here) is bounded to the functions the change edits like this. Its own selector, `mutmut run` with
-//! mutant names, only picks which mutants run: it first makes a mutant of every function in its source_paths, which
-//! for a large module takes minutes. So mutmut runs on a copy of the tree, and in the copy every function and class
-//! that holds no changed function gets [`SKIP`] at the end of the line its header ends on. mutmut skips such a
-//! function whole: no mutants, and none of the call tracing that slows the tests. Appending a comment keeps every
-//! line where it was, and mutmut writes its state, mutants/, into the copy, so the working tree is never written to.
+//! mutant names, only picks which mutants run: it first makes a mutant of every function in its source_paths, which for
+//! a large module takes minutes. So mutmut runs on a copy of the tree, and in the copy every function and class of the
+//! files mutmut mutates that holds no changed function gets [`SKIP`] at the end of the line its header ends on; files
+//! it does not mutate are left as they are. mutmut skips such a function whole: no mutants, and none of the call
+//! tracing that slows the tests. Appending a comment keeps every line where it was, and mutmut writes its state,
+//! mutants/, into the copy, so the working tree is never written to.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ffi::{OsStr, OsString};
@@ -466,7 +467,7 @@ fn on_copy(
             Ok(_) => std::fs::remove_file(&state).map_err(not_started)?,
             Err(_) => {}
         }
-        mark_for_mutmut(copy.tree, functions).map_err(not_started)?;
+        mark_for_mutmut(copy.tree, table, functions).map_err(not_started)?;
         // One configuration for all of mutmut's pytest runs, as it takes one pytest_add_cli_args.
         let places = test_places(copy.tree, table, recorded);
         let groups = pytest::groups(copy.python, copy.tree, tmp, &places).map_err(not_started)?;
@@ -667,23 +668,25 @@ fn files_under(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
     Ok(out)
 }
 
-/// Marks for mutmut to skip ([`SKIP`]) each def and class in the regular files named *.py under `tree`, a copy of a
-/// tree, that holds none of `functions`, as lang_python::header_ends_outside chooses them. A Python file that
-/// cannot be decoded or parsed is left as it is. Errs, a clause, when a directory or a file cannot be read or a file
-/// cannot be written.
-fn mark_for_mutmut(tree: &Path, functions: &[&Function]) -> Result<(), String> {
+/// Marks for mutmut to skip ([`SKIP`]) each def and class that holds none of `functions`, as
+/// lang_python::header_ends_outside chooses them, in the regular files under `tree`, a copy of a tree, that mutmut
+/// set up by `table`, a `[tool.mutmut]` with source_paths, mutates ([`outside_mutmut`]); no other file is read. A
+/// Python file that cannot be decoded or parsed is left as it is. Errs, a clause, when a directory or one of those
+/// files cannot be read or written.
+fn mark_for_mutmut(tree: &Path, table: &Table, functions: &[&Function]) -> Result<(), String> {
     let mut kept: BTreeMap<&OsStr, BTreeSet<&str>> = BTreeMap::new();
     for f in functions {
         kept.entry(&f.path).or_default().insert(&f.unit.name);
     }
     let files = files_under(tree).map_err(|e| format!("cannot read the copy of the tree: {e}"))?;
     for path in files {
+        let Ok(rel) = path.strip_prefix(tree) else { continue };
         let regular = path.symlink_metadata().is_ok_and(|meta| meta.is_file());
-        if !regular || !path.as_os_str().as_bytes().ends_with(b".py") {
+        if !regular || outside_mutmut(rel.as_os_str(), table).is_some() {
             continue;
         }
         let source = std::fs::read(&path).map_err(|e| crate::copies::failed("read", &path, &e))?;
-        let mine = path.strip_prefix(tree).ok().and_then(|rel| kept.get(rel.as_os_str()));
+        let mine = kept.get(rel.as_os_str());
         let Ok(ends) = lang_python::header_ends_outside(&source, |name| mine.is_some_and(|mine| mine.contains(name)))
         else {
             continue;
@@ -1284,6 +1287,26 @@ mod tests {
         let rules = table("source_paths = [\"src\"]\n");
         let problem = with_table("tool.mutmut.debug = true\n", &rules).unwrap_err();
         assert_eq!(problem, "the rules' [tool.mutmut] could not be put in place of the tree's in its pyproject.toml");
+    }
+
+    #[test]
+    fn only_the_files_mutmut_mutates_are_read_and_marked() {
+        use std::os::unix::fs::PermissionsExt;
+        let tree = ScratchDir::new();
+        std::fs::create_dir_all(tree.join("src")).unwrap();
+        std::fs::create_dir_all(tree.join("tests")).unwrap();
+        let source = "def f():\n    pass\n";
+        for file in ["src/a.py", "src/generated.py", "tests/test_a.py", "tests/unreadable.py"] {
+            std::fs::write(tree.join(file), source).unwrap();
+        }
+        // Read, it would fail the run.
+        std::fs::set_permissions(tree.join("tests/unreadable.py"), std::fs::Permissions::from_mode(0o000)).unwrap();
+        let settings = table("source_paths = [\"src\"]\ndo_not_mutate = [\"src/generated.py\"]\n");
+        assert_eq!(mark_for_mutmut(&tree, &settings, &[]), Ok(()));
+        let read = |file: &str| std::fs::read_to_string(tree.join(file)).unwrap();
+        assert_eq!(read("src/a.py"), "def f():  # pragma: no mutate block\n    pass\n");
+        assert_eq!(read("src/generated.py"), source);
+        assert_eq!(read("tests/test_a.py"), source);
     }
 
     #[test]

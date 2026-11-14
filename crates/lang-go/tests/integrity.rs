@@ -314,6 +314,17 @@ fn a_case_of_a_table_and_a_constant_edited_with_the_code_are_changed_expected_va
 }
 
 #[test]
+fn a_case_added_to_or_removed_from_a_table_with_the_code_leaves_its_neighbours_unchanged() {
+    let base = format!("{CALC_TEST}{TABLE_TEST}");
+    let calc = edit(CALC, "a + b", "a + b + 1");
+    let changed = |test: &str| check(&[edited(CALC_PATH, CALC, &calc), edited(TEST_PATH, &base, test)]);
+    let test = edit(&base, "{in: 3, want: 6},", "{in: 3, want: 6},\n\t\t{in: 4, want: 9},");
+    assert_eq!(changed(&test), vec![]);
+    let test = edit(&base, "\t\t{in: 3, want: 6},\n", "");
+    assert_eq!(wheres(&changed(&test)), [at(41, "fewer-assertions")]);
+}
+
+#[test]
 fn errors_thrown_away_in_test_code_are_swallowed_errors() {
     let helper = "
 func mustAdd(t testing.TB) int {

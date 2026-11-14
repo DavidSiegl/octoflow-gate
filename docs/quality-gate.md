@@ -212,9 +212,10 @@ order. The findings are Python's, read of Rust:
   `catch_unwind`, which throws away the panic or the `Err` that would fail the test. A parser knows no types, so a
   `Result` thrown away that holds neither, as `let _ = check();` or `check().ok();`, is not seen, since that is
   also how a test's cleanup ignores a failure, nor a `catch_unwind` whose result is bound to a name and never read;
-- `expected-value-changed`: a kept test's assertion, its macro and its shape the same, whose literals changed, the
-  assertions of the two sides aligned by macro and shape, in a change that also edits Rust code outside the tests, on
-  either side. An expected value held in a constant counts too, as Python's does: when a kept test's assertions name a
+- `expected-value-changed`: a kept test's assertion, its macro and its shape the same, whose literals changed, in a
+  change that also edits Rust code outside the tests, on either side. The assertions of the two sides are aligned
+  first on those that stayed whole, then by macro and shape between them, so one added or removed beside others of its
+  shape leaves them unchanged, in every language. An expected value held in a constant counts too, as Python's does: when a kept test's assertions name a
   constant of its own file at the base and still name it, bare or by a path ending in it, as `super::EXPECTED`, and its
   value changed other than in layout or comments, or it is no longer a constant, that is one finding per constant and
   test, at the test's first assertion naming it. A constant is a `const` or `static` outside any `fn`, `impl`, `trait`

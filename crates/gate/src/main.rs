@@ -18,7 +18,8 @@ use std::process::ExitCode;
 use gate::judge::{judge_change, Given};
 use gate::paths::real_path;
 use gate::process;
-use gate::report::{Verdict, RULES_FILE};
+use gate::report::Verdict;
+use gate::settings::RULES_FILE;
 use gate::text::{self, series};
 use gate::Unjudged;
 

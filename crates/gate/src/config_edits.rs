@@ -10,8 +10,7 @@ use std::sync::LazyLock;
 use regex::bytes::Regex;
 
 use crate::diff::ChangedLines;
-use crate::report::{BUILD_CONFIG_FILES, SETTINGS_FILE};
-use crate::settings::Settings;
+use crate::settings::{Settings, BUILD_CONFIG_FILES, SETTINGS_FILE};
 
 /// The files clippy takes its rules or its toolchain from by name, wherever they are, and the names of cargo's
 /// configuration in a `.cargo` directory or in CARGO_HOME.

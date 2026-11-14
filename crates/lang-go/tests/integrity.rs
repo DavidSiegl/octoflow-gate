@@ -281,7 +281,8 @@ fn an_example_with_its_output_is_a_test_whose_assertion_is_that_output() {
         (7, "// Output: 3", &["3".to_string()][..]),
         (13, "// Unordered output:\n\t// 4\n\t// 2", &["4\n2".to_string()][..]),
     ]);
-    let removed = edit(EXAMPLE_TEST, "func ExampleAdd() {\n\tfmt.Println(Add(1, 2)) // prints the sum\n\t// Output: 3\n}\n\n", "");
+    let add = "func ExampleAdd() {\n\tfmt.Println(Add(1, 2)) // prints the sum\n\t// Output: 3\n}\n\n";
+    let removed = edit(EXAMPLE_TEST, add, "");
     assert_eq!(wheres(&check(&[edited(TEST_PATH, EXAMPLE_TEST, &removed)])), [at(5, "removed-test")]);
     let changed = edit(EXAMPLE_TEST, "// Output: 3", "// Output: 4");
     assert_eq!(check(&[edited(TEST_PATH, EXAMPLE_TEST, &changed)]), vec![], "an edit of the tests alone");
@@ -385,6 +386,16 @@ fn a_legacy_plus_build_line_is_read_where_the_file_has_no_go_build_line() {
     assert_eq!(wheres(&found("// +build linux,amd64 darwin,!cgo")), [at(1, "platform-only")]);
     assert_eq!(wheres(&found("// +build linux\n// +build windows")), [at(1, "skip"), at(2, "skip")]);
     assert_eq!(wheres(&found("//go:build linux\n// +build ignore")), [at(1, "platform-only")]);
+}
+
+#[test]
+fn a_plus_build_line_counts_only_above_a_blank_line_before_the_package_clause_and_a_go_build_line_anywhere_there() {
+    let found = |header: &str| check(&[edited(TEST_PATH, CALC_TEST, &edit(CALC_TEST, "package calc\n", header))]);
+    assert_eq!(found("// Package calc tests Add.\n// +build ignore\npackage calc\n"), vec![]);
+    assert_eq!(found("/*\n// +build ignore\n*/\n\npackage calc\n"), vec![]);
+    let doc_then_build = "// +build ignore\n\n// Package calc tests Add.\n// +build linux\npackage calc\n";
+    assert_eq!(wheres(&found(doc_then_build)), [at(1, "skip")]);
+    assert_eq!(wheres(&found("// Package calc tests Add.\n//go:build ignore\npackage calc\n")), [at(2, "skip")]);
 }
 
 #[test]

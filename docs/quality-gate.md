@@ -255,7 +255,8 @@ of Go:
   and later still obey it: its space-separated options or'd, each option's comma-separated tags and'd, a tag negated
   by `!`, and the file's `// +build` lines and'd, each line judged by the whole they make. A term that is no tag, as
   `foo-bar`, `!` or `!!linux`, is one no build sets, as go reads it, and a line of more than 100 operators, which go
-  ignores, is none;
+  ignores, is none. Go reads a `// +build` line only above a blank line before the `package` clause, so one in the
+  package's doc comment is none;
 - `platform-only`: such a constraint line whose expression names no custom tag, only platforms (`GOOS` and `GOARCH`
   values and `unix`), release tags (`go1.21`, written as go writes them) and the toolchain's tags (`cgo`, `gc`,
   `gccgo`), with `!`, `&&`, `||` and parentheses, and holds on at least one platform and toolchain, as

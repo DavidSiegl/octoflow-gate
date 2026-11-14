@@ -71,23 +71,27 @@ const GOARCHES: &[&str] = &[
     "wasm",
 ];
 
-/// The weakenings that the comments `header` of a `_test.go` file before its package clause, each with the line it
-/// starts on, in the order written, are as build constraints: each `//go:build` line; or, where there is none, each `//
-/// +build` line, which go 1.17 and later still obey then: its space-separated options or'd, each option's
-/// comma-separated tags and'd, a tag negated by `!`, and the lines and'd with one another, a term that is no tag set by
-/// no build and a line too long for go none ([`plus_build`]). Each is a weakening at its line of the kind its file's
-/// whole constraint is: platform-only when the constraint names no custom tag, only platforms (`GOOS` and `GOARCH`
-/// values and `unix`), release tags (`go1.1` to the newest release the gate knows, each taken as set, as on the newest
-/// toolchain: [`release_tag`]) and the toolchain's tags (`cgo`, `gc`, `gccgo`), and holds on some platform and
-/// toolchain, since that leaves the tests out only where what they test may not be built, as Rust's `cfg(unix)` does; a
-/// skip otherwise, as for a custom tag such as `integration`, `ignore` or a release no toolchain sets yet, `go1.99`, a
-/// negated release tag such as `!go1.21`, or a `//go:build` line go cannot read.
-pub fn weakenings(header: &[(&str, u32)]) -> Vec<Weakening> {
-    let read = |line: fn(&str) -> Option<Option<Expr>>| {
-        header.iter().filter_map(|&(comment, at)| Some((comment, at, line(comment)?))).collect::<Vec<_>>()
+/// The weakenings that the build constraint lines of `source`, a `_test.go` file's text, are, in the order written.
+/// They are its `//go:build` lines; or, where it has none, its `// +build` lines, which go 1.17 and later still obey
+/// then: its space-separated options or'd, each option's comma-separated tags and'd, a tag negated by `!`, and the
+/// lines and'd with one another, a term that is no tag set by no build and a line too long for go none
+/// ([`plus_build`]). Go reads them where go/build's `parseFileHeader` does ([`header`]): a `//go:build` line on any
+/// `//` line before the first code, a `// +build` line only above the last blank line before it, so not in a package's
+/// doc comment. Each is a weakening at its line of the kind its file's whole constraint is: platform-only when the
+/// constraint names no custom tag, only platforms (`GOOS` and `GOARCH` values and `unix`), release tags (`go1.1` to
+/// the newest release the gate knows, each taken as set, as on the newest toolchain: [`release_tag`]) and the
+/// toolchain's tags (`cgo`, `gc`, `gccgo`), and holds on some platform and toolchain, since that leaves the tests out
+/// only where what they test may not be built, as Rust's `cfg(unix)` does; a skip otherwise, as for a custom tag such
+/// as `integration`, `ignore` or a release no toolchain sets yet, `go1.99`, a negated release tag such as `!go1.21`,
+/// or a `//go:build` line go cannot read.
+pub fn weakenings(source: &str) -> Vec<Weakening> {
+    let (comments, plus_build_end) = header(source);
+    let read = |line: &dyn Fn(&str) -> Option<Option<Expr>>, end: u32| {
+        let above = comments.iter().filter(|&&(_, at)| at < end);
+        above.filter_map(|&(comment, at)| Some((comment, at, line(comment)?))).collect::<Vec<_>>()
     };
-    let go_build = read(go_build);
-    let lines = if go_build.is_empty() { read(|c| plus_build(c).map(Some)) } else { go_build };
+    let go_build = read(&go_build, u32::MAX);
+    let lines = if go_build.is_empty() { read(&|c| plus_build(c).map(Some), plus_build_end) } else { go_build };
     let whole = lines.iter().try_fold(None, |whole: Option<Expr>, (_, _, expr)| {
         let expr = expr.clone()?;
         Some(Some(match whole {
@@ -97,6 +101,45 @@ pub fn weakenings(header: &[(&str, u32)]) -> Vec<Weakening> {
     });
     let platform_only = whole.flatten().is_some_and(|e| e.names_no_custom_tag() && e.holds_on_some_build());
     lines.into_iter().map(|(comment, at, _)| weakening(comment, at, platform_only)).collect()
+}
+
+/// The header of `source`, a Go file's text, as go/build's `parseFileHeader` reads it: its lines up to the first that
+/// holds text outside a comment. Returns the `//` comments among them, but those inside a `/* */` comment, each
+/// trimmed and with its line, from 1; and the line of the last blank line before the first line that is neither blank
+/// nor a `//` comment, 0 where there is none.
+fn header(source: &str) -> (Vec<(&str, u32)>, u32) {
+    let mut comments = vec![];
+    let mut last_blank = 0;
+    // Whether a line neither blank nor a `//` comment has been met.
+    let mut ended = false;
+    let mut in_block_comment = false;
+    for (at, line) in (1..).zip(source.lines()) {
+        let mut rest = line.trim();
+        if rest.is_empty() && !ended {
+            last_blank = at;
+            continue;
+        }
+        ended |= !rest.starts_with("//");
+        if !in_block_comment && rest.starts_with("//") {
+            comments.push((rest, at));
+        }
+        // The rest of the line past its comments, ending the header where it holds code.
+        loop {
+            if in_block_comment {
+                let Some(i) = rest.find("*/") else { break };
+                in_block_comment = false;
+                rest = rest[i + 2..].trim();
+            } else if rest.is_empty() || rest.starts_with("//") {
+                break;
+            } else if let Some(after) = rest.strip_prefix("/*") {
+                in_block_comment = true;
+                rest = after.trim();
+            } else {
+                return (comments, last_blank);
+            }
+        }
+    }
+    (comments, last_blank)
 }
 
 /// The suffix of the Go file name at `path`, from the tree's top level, that builds the file on one platform alone,
@@ -128,10 +171,10 @@ fn go_build(comment: &str) -> Option<Option<Expr>> {
     Some(parse(expression))
 }
 
-/// The constraint a `// +build` line, `comment`, writes, as [`weakenings`] reads it and go/build/constraint's
-/// `parsePlusBuildExpr` does: a term that is no tag, as `foo-bar`, an empty one, `!` or one starting `!!`, is
-/// [`Expr::Unset`], and so is a line with no option. None for a comment that is no such line, and for one of more than
-/// [`MOST_PLUS_BUILD_OPERATORS`], which go ignores.
+/// The constraint a `// +build` line, `comment`, writes, as go/build/constraint's `parsePlusBuildExpr` does: a term
+/// that is no tag, as `foo-bar`, an empty one, `!` or one starting `!!`, is [`Expr::Unset`], and so is a line with no
+/// option. None for a comment that is no such line, and for one of more than [`MOST_PLUS_BUILD_OPERATORS`], which go
+/// ignores.
 fn plus_build(comment: &str) -> Option<Expr> {
     let options = comment.strip_prefix("//")?.trim_start_matches([' ', '\t']).strip_prefix("+build")?;
     if !options.is_empty() && !options.starts_with([' ', '\t']) {
@@ -349,7 +392,7 @@ mod tests {
     use super::*;
 
     fn kind(comment: &str) -> Option<WeakeningKind> {
-        weakenings(&[(comment, 1)]).first().map(|w| w.kind)
+        weakenings(&format!("{comment}\n\npackage calc\n")).first().map(|w| w.kind)
     }
 
     #[test]

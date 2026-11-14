@@ -48,10 +48,10 @@ const TESTIFY: &[&str] = &["github.com/stretchr/testify/assert", "github.com/str
 ///   ([`binds::bindings`]), but a field's name keying an element of a literal not of a map type, as `want` in
 ///   `{want: 4}`.
 /// - A weakening is a `Skip`, `Skipf` or `SkipNow` called on such a variable anywhere in the file; a build constraint
-///   line above its `package` clause ([`constraint::weakenings`]); and, anywhere in the file, an error thrown away by
-///   `_ = err` or by an `if err != nil {}` whose block holds no statement, `err` being any name of an error by Go's
-///   habit: `err`, `err` then a capital or a digit, as `errClose`, or a name ending in `Err`. A parser knows no types,
-///   so an error thrown away under any other name, or as `v, _ := f()`, is not seen.
+///   line in its header ([`constraint::weakenings`]); and, anywhere in the file, an error thrown away by `_ = err` or
+///   by an `if err != nil {}` whose block holds no statement, `err` being any name of an error by Go's habit: `err`,
+///   `err` then a capital or a digit, as `errClose`, or a name ending in `Err`. A parser knows no types, so an error
+///   thrown away under any other name, or as `v, _ := f()`, is not seen.
 pub fn read(root: Node, text: Text) -> (Vec<Test>, Vec<Weakening>) {
     let imports = Imports::of(root, text);
     let mut walk = Walk {
@@ -69,12 +69,7 @@ pub fn read(root: Node, text: Text) -> (Vec<Test>, Vec<Weakening>) {
         helpers: HashSet::new(),
         helper_calls: vec![],
     };
-    let header: Vec<(&str, u32)> = named(root)
-        .into_iter()
-        .filter(|n| n.kind() == "comment" && n.end_byte() <= package_start(root))
-        .map(|n| (text.of(n), line(n)))
-        .collect();
-    walk.weakenings.extend(constraint::weakenings(&header));
+    walk.weakenings.extend(constraint::weakenings(text.0));
     for node in named(root) {
         if matches!(node.kind(), "function_declaration" | "method_declaration") {
             walk.function(node);
@@ -82,11 +77,6 @@ pub fn read(root: Node, text: Text) -> (Vec<Test>, Vec<Weakening>) {
     }
     walk.keep_helper_calls();
     (walk.tests, walk.weakenings)
-}
-
-/// Where the file's `package` clause starts; the file's end where it has none.
-fn package_start(root: Node) -> usize {
-    named(root).into_iter().find(|n| n.kind() == "package_clause").map_or(root.end_byte(), |p| p.start_byte())
 }
 
 /// The names a file imports the packages a test is written with under.

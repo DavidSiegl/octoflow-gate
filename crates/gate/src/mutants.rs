@@ -563,6 +563,9 @@ mod tests {
             assert_eq!(re.is_match(name), selected, "{name}");
         }
         assert_eq!(mutants_of(OsStr::new(""), &edited("src/lib.rs", 2, 2)), r"^src/lib\.rs:(?:2):");
+        // Only the path's start is the workspace's directory, which may recur below it.
+        let nested = edited("core/lib/core/src/x.rs", 4, 4);
+        assert_eq!(mutants_of(OsStr::new("core"), &nested), r"^lib/core/src/x\.rs:(?:4):");
     }
 
     #[test]

@@ -136,11 +136,11 @@ change cannot weaken its tests unseen. Each of these is a finding:
   change: the "update the expected value to match the output" move. A value written of literals alone is one
   literal, its sign and its brackets with it, so `-5` becoming `5` and `("a",)` becoming `"a"` count; parentheses
   around such a value change nothing. The finding names the assertion before and after. The two sides' assertions
-  are paired within runs of consecutive assertions of one shape, in every language: a run that kept its length is
-  paired in order, so raising every value of a sequence by one is a finding at each, even where the new values repeat
-  old ones; in a run that grew or shrank, those that stayed whole are matched first and the rest paired in order only
-  between two such matches with as many on each side, so a case appended to a table leaves the others unchanged, and
-  an edit beside an added assertion of its shape, which cannot be told from an added one, is not reported. An expected
+  are paired in order, each with one of its own shape, in every language: of the pairings that pair the most, the one
+  that leaves the most unchanged. So raising every value of a sequence by one is a finding at each, even where the
+  new values repeat old ones, and an assertion added or removed, of any shape, as a case appended to a table, leaves
+  the others paired with themselves. Where two pairings tie, the earlier assertions are paired first, so an edit
+  beside an added assertion of its shape is reported against whichever of the two comes first. An expected
   value held in a constant counts too: when a kept test's assertions name a constant of its own file at the base and
   still name it, bare or as `module.NAME` (the module by its dotted name or a module-level import alias of it), and
   the constant's expression changed other than in layout, or it is no longer a

@@ -279,8 +279,9 @@ of Go:
   (`s.Equal(3, got)`), are not followed. Such a call that is a statement of an `if`'s block makes that `if` one
   assertion, however many it holds, since the `if` holds the expected value: `if got := Add(1, 2); got != 3 {
   t.Errorf(...) }` is one. A call of a helper of the same file by its name, with a testing variable among its arguments,
-  is one too where it is a statement of its own, its literals the call's, as `check(t, Add(1, 2), 3)` where `check`
-  holds the `t.Errorf`, and not a fixture whose result is used, as `srv := newServer(t, ":8080")`: a helper is a
+  is one too where its result is not kept, its literals the call's, as `check(t, Add(1, 2), 3)` where `check` holds
+  the `t.Errorf`, `if !ok(t, got, 3) { return }` or `defer check(t)`, and not a fixture whose result is bound or
+  passed on, as `srv := newServer(t, ":8080")`: a helper is a
   top-level function that holds a failing call or a testify assertion outside any test, or calls another helper so. A
   helper of another file, a method, or a `func` value is not followed. Each case of a table of cases in the test's body
   is an assertion too (`expected-value-changed` below), so a case removed is one fewer;

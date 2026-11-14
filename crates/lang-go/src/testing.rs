@@ -37,8 +37,9 @@ const TESTIFY: &[&str] = &["github.com/stretchr/testify/assert", "github.com/str
 ///   it holds: its text the `if` to the end of its block, and its literals and shape those of its initializer and
 ///   condition and of those calls, so that `if got != 3 { t.Errorf(...) }` changing its 3 is a changed expected
 ///   value. A call, by its name, of a helper of the file, as `check(t, Add(1, 2), 3)`, with such a variable among its
-///   arguments, is one too where it is a statement of its own, its literals the call's, so not a fixture's whose
-///   result is used, as `srv := newServer(t, ":8080")`: a helper is a top-level function that holds such a failing
+///   arguments, is one too where its result is not kept ([`Walk::result_unkept`]), its literals the call's: a
+///   statement, `if !ok(t, got, 3) { return }` or `defer check(t)`, but not a fixture whose result is bound or passed
+///   on, as `srv := newServer(t, ":8080")`: a helper is a top-level function that holds such a failing
 ///   call or a testify assertion outside any test, or calls another helper so. A literal is a number, a rune or a
 ///   string.
 /// - A table of cases in its body, a composite literal that a `for … range` in the same top-level function ranges
@@ -362,15 +363,45 @@ impl<'t> Walk<'t> {
         }
     }
 
-    /// The name of the function a call, `node`, a statement of its own, calls by its name with a testing variable in
-    /// scope among its arguments, as a helper is called; None for any other call, as one whose result is used, as a
-    /// fixture's is.
+    /// The name of the function a call, `node`, whose result is not kept ([`Walk::result_unkept`]), calls by its name
+    /// with a testing variable in scope among its arguments, as a helper is called; None for any other call, as a
+    /// fixture's whose result is kept.
     fn passing_testing(&self, node: Node<'t>) -> Option<&'t str> {
-        node.parent().filter(|p| p.kind() == "expression_statement")?;
+        if !self.result_unkept(node) {
+            return None;
+        }
         let callee = node.child_by_field_name("function").filter(|f| f.kind() == "identifier")?;
         let args = node.child_by_field_name("arguments").map(named).unwrap_or_default();
         let passed = |a: &Node| a.kind() == "identifier" && self.scope.contains(&self.text.of(*a));
         args.iter().any(passed).then(|| self.text.of(callee))
+    }
+
+    /// Whether the result of a call, `node`, is not kept, as an assertion's is not: the call is a statement, deferred,
+    /// started by `go` or returned, or its result is only tested, a condition of an `if` or a `for`, through `!`,
+    /// `&&`, `||` and parentheses. Its result bound to a name or passed on as an argument is kept.
+    fn result_unkept(&self, node: Node) -> bool {
+        let mut tested = node;
+        while let Some(p) = tested.parent() {
+            let operator = p.child_by_field_name("operator").map(|o| self.text.of(o));
+            let combines = match p.kind() {
+                "parenthesized_expression" => true,
+                "unary_expression" => operator == Some("!"),
+                "binary_expression" => matches!(operator, Some("&&" | "||")),
+                _ => false,
+            };
+            if !combines {
+                break;
+            }
+            tested = p;
+        }
+        let Some(p) = tested.parent() else { return false };
+        match p.kind() {
+            "expression_statement" | "defer_statement" | "go_statement" => true,
+            "expression_list" => p.parent().is_some_and(|r| r.kind() == "return_statement"),
+            "if_statement" | "for_clause" => p.child_by_field_name("condition") == Some(tested),
+            "for_statement" => p.child_by_field_name("body") != Some(tested),
+            _ => false,
+        }
     }
 
     /// An assertion that fails the test it is in: the test's; outside any test, what makes the top-level function the

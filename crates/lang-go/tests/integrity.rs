@@ -186,7 +186,8 @@ func TestAdd(t *testing.T) {
 }
 
 /// Tests that assert through helpers of the file: `check` fails its test itself, `checkAll` through `check2`, `log`
-/// fails nothing, `t.Run`'s literal passes its own `t` on, and `newServer`, a fixture whose result is used, sets up.
+/// fails nothing, `t.Run`'s literal passes its own `t` on, `ok` and `both` are asserted through by their results
+/// tested or deferred, and `newServer`, a fixture whose result is kept, sets up.
 const HELPER_TEST: &str = r#"package calc
 
 import "testing"
@@ -199,8 +200,29 @@ func TestAdd(t *testing.T) {
 		check(t, Add(-1, -1), -2)
 	})
 	other(Add(1, 1), 2)
+	if !ok(t, Add(4, 4), 8) {
+		return
+	}
+	defer check(t, Add(0, 0), 0)
+	for !ok(t, Add(5, 5), 10) {
+		break
+	}
+	both(t, Add(0, 1), Add(1, 1))
 	srv := newServer(t, ":8080")
 	other(srv, 1)
+	other(ok(t, 1, 1), true)
+}
+
+func ok(t *testing.T, got, want int) bool {
+	if got != want {
+		t.Error("wrong")
+		return false
+	}
+	return true
+}
+
+func both(t *testing.T, a, b int) bool {
+	return ok(t, a, 1) && (ok(t, b, 2))
 }
 
 func newServer(t *testing.T, addr string) int {
@@ -243,7 +265,14 @@ fn a_call_of_a_helper_of_the_file_that_fails_the_test_it_is_passed_is_an_asserti
         .map(|t| (t.name.as_str(), t.assertions.iter().map(|a| a.text.as_str()).collect()))
         .collect();
     assert_eq!(asserted, [
-        ("TestAdd", vec!["check(t, Add(1, 2), 3)", "checkAll(t, Add(2, 2), 4)"]),
+        ("TestAdd", vec![
+            "check(t, Add(1, 2), 3)",
+            "checkAll(t, Add(2, 2), 4)",
+            "ok(t, Add(4, 4), 8)",
+            "check(t, Add(0, 0), 0)",
+            "ok(t, Add(5, 5), 10)",
+            "both(t, Add(0, 1), Add(1, 1))",
+        ]),
         ("TestAdd/negative", vec!["check(t, Add(-1, -1), -2)"]),
     ]);
     let fewer = edit(HELPER_TEST, "\tcheck(t, Add(1, 2), 3)\n", "");

@@ -8,7 +8,8 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::process::Command;
 use std::time::Duration;
 
-use gate::judge::{judge_change, Change, Given};
+use gate::change::Change;
+use gate::judge::{judge_change, Given};
 use gate::parser_checks::{
     dependency_cycles, duplicated_blocks, too_complex, vague_names, weakened_tests, Sources,
 };

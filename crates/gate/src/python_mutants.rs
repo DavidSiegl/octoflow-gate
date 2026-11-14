@@ -23,7 +23,7 @@ use toml::Table;
 
 use crate::copies::{copy_tracked, finding, in_scratch_directory};
 use crate::glob::fnmatch;
-use crate::judge::MUTMUT_STATE;
+use crate::change::MUTMUT_STATE;
 use crate::mutants::{KILL_WAIT, STOP_GRACE, SURVIVOR_EXAMPLES};
 use crate::parser_checks::{python_test, regular_files_at_base, PythonChange};
 use crate::paths::{normpath, real_path};
@@ -93,7 +93,7 @@ pub struct Mutmut<'a> {
 /// function with mutants its tests did not notice (`survived`), with how many of the mutants tried they were and what the first
 /// mutants::SURVIVOR_EXAMPLES change, as a line before and after; and each one no test calls (`untested`).
 ///
-/// mutmut runs by the project's Python (judge::Change::python) on a copy of the files git tracks, without what the
+/// mutmut runs by the project's Python (change::Change::python) on a copy of the files git tracks, without what the
 /// tree tracks under mutmut's state, so it starts without a cache. It runs there by the `[tool.mutmut]` of
 /// `mutmut.rules`, whatever the copy's says: its source_paths, only_mutate and do_not_mutate decide which files can
 /// be mutated, and a changed function outside them, or one mutmut never mutates, is a `not-mutated` finding saying
@@ -441,7 +441,7 @@ struct Recorded {
 
 /// A copy of the tree that mutmut runs in.
 struct TreeCopy<'a> {
-    /// The program that runs Python, as judge::Change::python names it.
+    /// The program that runs Python, as change::Change::python names it.
     python: &'a Path,
     /// The copy's top.
     tree: &'a Path,

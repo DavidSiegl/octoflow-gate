@@ -12,7 +12,7 @@ use regex::bytes::Regex;
 
 use crate::glob::Globs;
 use crate::scratch_directory::ScratchDirectory;
-use crate::judge::under_mutmut_state;
+use crate::change::under_mutmut_state;
 use crate::paths::{normpath, rel_path};
 use crate::process;
 use crate::report::Finding;

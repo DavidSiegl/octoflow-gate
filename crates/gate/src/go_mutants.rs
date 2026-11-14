@@ -15,7 +15,7 @@ use regex::bytes::Regex;
 use crate::copies::{copy_tracked, finding, in_scratch_directory, Budget};
 use crate::diff::removal_points;
 use crate::git::{self, shell_quote_bytes};
-use crate::judge::Change;
+use crate::change::Change;
 use crate::mutants::{dir_name, edits, Edited, KILL_WAIT, STOP_GRACE, SURVIVOR_EXAMPLES};
 use crate::parser_checks::{project_dir, GoChange, GO_MANIFEST};
 use crate::paths::rel_path;

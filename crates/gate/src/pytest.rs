@@ -1,6 +1,6 @@
 //! Running pytest in a copy of a tree, for the checks that run a change's Python tests: which configuration each
 //! test file takes, the run itself, and how pytest names a test in what it prints and in its JUnit report. The
-//! Python is the judged project's (judge::Change::python).
+//! Python is the judged project's (change::Change::python).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ffi::{OsStr, OsString};
@@ -42,7 +42,7 @@ pub fn changed_tests(python: &PythonChange) -> (Tests, UnreadFiles) {
 /// How the gate runs pytest in a copy of a tree: with which Python, where, and by what configuration.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Setup {
-    /// The program that runs Python, as judge::Change::python names it.
+    /// The program that runs Python, as change::Change::python names it.
     pub python: PathBuf,
     /// pytest's rootdir, the configuration's directory, from which its node ids and reports name paths. Absolute.
     pub root: PathBuf,

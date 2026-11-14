@@ -8,7 +8,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use crate::judge::Change;
+use crate::change::Change;
 use crate::report::Finding;
 use crate::scratch_directory::ScratchDirectory;
 use crate::{git, text, Unjudged};

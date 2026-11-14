@@ -69,7 +69,7 @@ impl Finished {
 /// golden test that rewrites its file under UPDATE_GOLDEN=1 instead of comparing with it could not fail in the
 /// flaky-tests reruns, the passes-at-base run or a mutation run. And the gate's pathspecs are written in git's default
 /// syntax, which each switch breaks without an error: under GIT_LITERAL_PATHSPECS the linters' globs and
-/// judge::Change::from_tree's exclude match nothing, under GIT_NOGLOB_PATHSPECS the globs match nothing, under
+/// change::Change::from_tree's exclude match nothing, under GIT_NOGLOB_PATHSPECS the globs match nothing, under
 /// GIT_GLOB_PATHSPECS `*.py` matches only the top level's files, and under GIT_ICASE_PATHSPECS the exclude leaves out
 /// a `Mutants/` that is not mutmut's.
 pub fn tool_env() -> Vec<(OsString, OsString)> {

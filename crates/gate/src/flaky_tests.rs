@@ -51,7 +51,7 @@ pub fn flaky_tests(sources: &Sources) -> Vec<Finding> {
 /// all.
 ///
 /// pytest decides which of those defs are tests, so a helper named `test_*` that it does not collect is not rerun.
-/// pytest and pytest-randomly must be importable by the judged project's Python (judge::Change::python). A pytest run
+/// pytest and pytest-randomly must be importable by the judged project's Python (change::Change::python). A pytest run
 /// that cannot start, takes longer than [`RUN_TIMEOUT`], ends in a usage or collection error or writes no readable
 /// report ends the reruns of the tests under its configuration (pytest::groups) with a `not-rerun` finding saying
 /// so, after what the runs before it showed, and the tests under other configurations are rerun still; a changed

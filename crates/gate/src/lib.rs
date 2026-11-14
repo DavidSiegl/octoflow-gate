@@ -2,6 +2,7 @@
 //! makes since a base commit and reports on it twice, as the quality file and quality.json (report.rs).
 //! docs/port-differences.md lists where its reports differ from those of the gate up to 0.6.0.
 
+pub mod change;
 pub mod changed_tests;
 pub mod clippy;
 pub mod config_edits;

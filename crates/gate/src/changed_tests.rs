@@ -8,7 +8,7 @@ use checks::ChangedFile;
 use model::{Lines, Test, Unreadable};
 
 use crate::diff::removal_points;
-use crate::judge::Change;
+use crate::change::Change;
 
 /// A test the change adds or edits, as [`changed_tests`] finds one, in the working tree.
 pub struct ChangedTest {

@@ -278,6 +278,16 @@ fn a_function_whose_edit_only_touches_its_comments_and_layout_is_not_mutated() {
 }
 
 #[test]
+fn a_function_whose_edit_only_removes_a_mutmut_pragma_is_mutated() {
+    let repo = calc();
+    repo.commit(&[("calc.py", BASE.replace("b * a\n", "b * a  # pragma: no mutate\n").as_bytes())], "a pragma");
+    repo.put("calc.py", BASE.as_bytes());
+    let (found, made) = found_and_made(&repo);
+    assert_eq!(made, functions(&["calc.x_unchecked"]));
+    assert_eq!(places(&found), at(&[("calc.py", 5, "survived")]));
+}
+
+#[test]
 fn a_function_whose_default_alone_changes_is_mutated() {
     let repo = calc();
     let defaulted = |b: &str| BASE.replace("def unchecked(a, b):", &format!("def unchecked(a, b={b}):"));
@@ -732,7 +742,7 @@ const BLOCK_PRAGMA: &str =
 fn a_block_pragma_where_a_long_header_ends_is_given_as_the_cause() {
     let repo = calc();
     let header = "def unchecked(\n        a, b):  # pragma: no mutate block";
-    repo.put("calc.py", changed(&["unchecked"]).replace("def unchecked(a, b):", header).as_bytes());
+    repo.put("calc.py", BASE.replace("def unchecked(a, b):", header).as_bytes());
     let found = findings(&repo, Gate::default());
     assert_eq!(places(&found), at(&[("calc.py", 5, "not-mutated")]));
     assert!(found[0].3.ends_with(BLOCK_PRAGMA), "{}", found[0].3);
@@ -743,7 +753,8 @@ fn a_function_in_a_file_mutmut_listed_mutants_of_keeps_its_cause_after_a_budget_
     // The fake saves mutants/calc.py.meta, as mutmut does once it has made calc.py's mutants, which is how the gate
     // knows calc.py was reached.
     let repo = calc();
-    let text = changed(&["checked", "unchecked"])
+    let text = BASE
+        .replace("b + a", "a + b")
         .replace("def unchecked(a, b):", "def unchecked(a, b):  # pragma: no mutate block");
     repo.put("calc.py", text.as_bytes());
     let run = "mkdir -p mutants; echo {} > mutants/calc.py.meta; exec sleep 30";
@@ -994,7 +1005,7 @@ fn a_change_to_a_parser_s_description_alone_makes_no_mutant() {
 fn a_function_a_mutmut_pragma_opts_out_is_said_so() {
     let repo = calc();
     let header = "def unchecked(a, b):  # pragma: no mutate block";
-    repo.put("calc.py", changed(&["unchecked"]).replace("def unchecked(a, b):", header).as_bytes());
+    repo.put("calc.py", BASE.replace("def unchecked(a, b):", header).as_bytes());
     let (found, made) = found_and_made(&repo);
     assert_eq!(made, functions(&[]));
     assert_eq!(places(&found), at(&[("calc.py", 5, "not-mutated")]));

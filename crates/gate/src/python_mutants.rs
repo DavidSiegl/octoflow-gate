@@ -88,9 +88,9 @@ pub struct Mutmut<'a> {
 /// leaves a regular file in the working tree. Lines removed right after a function's last line count too, though
 /// they may have been the blank lines below it; comments and blank lines above its first decorator do not, since
 /// they change nothing mutmut mutates. Nor does a function whose file's base has one of its name with the same code,
-/// its decorators, parameters, defaults, annotations and body, whatever its comments and layout ([`edited`]): an
-/// edit to its comments or layout alone changes nothing mutmut mutates, while one to its signature alone can change
-/// what its body does. Reports at its def each such function with mutants its tests did not notice
+/// its decorators, parameters, defaults, annotations and body, and the same mutmut pragmas, whatever its other
+/// comments and layout ([`edited`]): an edit to those alone changes nothing mutmut mutates, while one to its
+/// signature alone can change what its body does, and one to a pragma which of its lines mutmut mutates. Reports at its def each such function with mutants its tests did not notice
 /// (`survived`), with how many of the mutants tried they were and what the first mutants::SURVIVOR_EXAMPLES change,
 /// as a line before and after; and each one no test calls (`untested`).
 ///
@@ -132,18 +132,25 @@ pub fn python_mutants(python: &PythonChange, mutmut: &Mutmut, seconds: u64) -> V
 
 /// Those of `units`, each with its file's path as PythonChange::changed_units gives them, whose code the change
 /// edited, in the same order: all but a unit whose file's base has a unit of its name with the same code
-/// (lang_python::Unit::code), which only the unit's comments and layout can have changed, as nothing mutmut mutates
-/// does. A file whose base cannot be read or parsed, or that has none, has every unit edited.
+/// (lang_python::Unit::code) and the same [`pragma_lines`], which only the unit's other comments and its layout can
+/// have changed, as nothing mutmut mutates does. A file whose base cannot be read or parsed, or that has none, has every unit edited.
 fn edited(python: &PythonChange, units: Vec<(OsString, Unit)>) -> Vec<Function> {
     let mut bases: HashMap<OsString, Vec<Unit>> = HashMap::new();
     let mut out = vec![];
     for (path, unit) in units {
         let base = bases.entry(path.clone()).or_insert_with(|| base_units(python, &path));
-        if !base.iter().any(|b| b.name == unit.name && b.code == unit.code) {
+        let same = |b: &Unit| b.name == unit.name && b.code == unit.code && pragma_lines(b) == pragma_lines(&unit);
+        if !base.iter().any(same) {
             out.push(Function { path, unit });
         }
     }
     out
+}
+
+/// Each line of `unit` that holds a mutmut pragma ([`mutmut_pragma`]), trimmed, in order: the comments that decide
+/// which of its lines mutmut mutates. A pragma moved to another line, or its line edited, changes them.
+fn pragma_lines(unit: &Unit) -> Vec<&str> {
+    unit.source.iter().map(|line| line.trim()).filter(|line| mutmut_pragma(line).is_some()).collect()
 }
 
 /// The units of the base side of the file whose working-tree path is `path` in `python`'s change, read from git;

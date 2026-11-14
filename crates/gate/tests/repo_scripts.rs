@@ -169,9 +169,17 @@ fn the_release_is_fetched_by_the_judge_s_script_not_the_change_s() {
 fn a_workspace_outside_a_jenkins_build_changes_nothing() {
     let repo = script_repo();
     commit_judge(&repo, "0.7.0", &fetching());
-    let workspace = repo.outside.join("workspace");
+    let (workspace, workspace_tmp) = (repo.outside.join("workspace"), repo.outside.join("workspace@tmp"));
     let judged = run_gate_with(&repo, 0, &[("WORKSPACE", &workspace)]);
     assert_eq!(judged.status, Some(0), "{}", judged.stderr);
+    // A Jenkins build empties $WORKSPACE_TMP/tmp first; outside one, it is someone else's to keep.
+    let kept = workspace_tmp.join("tmp/kept");
+    std::fs::create_dir_all(kept.parent().unwrap()).unwrap();
+    std::fs::write(&kept, b"").unwrap();
+    let judged = run_gate_with(&repo, 0, &[("WORKSPACE", &workspace), ("WORKSPACE_TMP", &workspace_tmp)]);
+    assert_eq!(judged.status, Some(0), "{}", judged.stderr);
+    assert!(kept.exists());
+    assert!(!workspace.join(".cargo-home").exists());
 }
 
 #[test]

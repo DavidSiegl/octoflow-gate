@@ -56,6 +56,20 @@ pub fn test_modules(files: &[(OsString, Vec<u8>)]) -> HashSet<OsString> {
     (0..files.len()).filter(only_tests).map(|i| files[i].0.clone()).collect()
 }
 
+/// The modules of `files`, each Rust file of one tree as [`imports`] takes them, by the module tree [`imports`]
+/// describes: every file of `files` keyed, with each crate root's file it is reached from, by its path in `files`,
+/// and its module path from that root, outermost first; a crate root's file is its own, by the empty path. A file
+/// declared only by test code is a module all the same, as a test build has it, and a file reached by two paths from
+/// one root is placed by one of them.
+pub fn modules(files: &[(OsString, Vec<u8>)]) -> HashMap<OsString, Vec<(OsString, Vec<String>)>> {
+    let parsed: Vec<Option<Parsed>> = files.iter().map(|(_, source)| parse(source)).collect();
+    let paths: Vec<PathBuf> = files.iter().map(|(path, _)| normal(Path::new(path))).collect();
+    let tree = ModuleTree::of(&paths, &parsed);
+    let root_file = |root: usize| &files[tree.files[&(root, vec![])]].0;
+    let places = |i: usize| tree.of_file[i].iter().map(|((root, path), _)| (root_file(*root).clone(), path.clone()));
+    (0..files.len()).map(|i| (files[i].0.clone(), places(i).collect())).collect()
+}
+
 /// What [`imports`] reads of one file.
 #[derive(Default)]
 struct Parsed {

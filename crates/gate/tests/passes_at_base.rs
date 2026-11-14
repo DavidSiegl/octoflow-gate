@@ -246,7 +246,7 @@ fn a_run_stopped_by_the_budget_is_a_finding() {
 }
 
 #[test]
-fn a_cargo_nextest_that_cannot_start_is_a_finding_for_each_target() {
+fn a_cargo_that_cannot_start_is_a_finding_for_each_test() {
     let repo = calc(&[]);
     two_targets(&repo);
     // PATH holds what the gate itself runs, git and tar, and no cargo.
@@ -258,14 +258,14 @@ fn a_cargo_nextest_that_cannot_start_is_a_finding_for_each_target() {
         std::os::unix::fs::symlink(at, bin.join(tool)).unwrap();
     }
     let how = Gate { env: vec![("PATH", bin.into())], ..Gate::default() };
-    let expected: Vec<Found> = ["calc", "more"]
+    let expected: Vec<Found> = [("calc", "adds"), ("more", "adds_more")]
         .iter()
-        .map(|name| {
+        .map(|(file, name)| {
             let message = format!(
-                "could not start cargo nextest to run the changed Rust tests of `--test {name}` of the package at \
-                 the top level at the base: No such file or directory (os error 2)"
+                "`{name}` was not run at the base: `cargo metadata` could not start at the top level at the base: No \
+                 such file or directory (os error 2)."
             );
-            (None, None, "not-run".into(), message)
+            (Some(format!("tests/{file}.rs")), Some(2), "not-run".into(), message)
         })
         .collect();
     assert_eq!(findings(&repo, how), expected);
@@ -422,15 +422,52 @@ fn a_directory_of_the_tests_the_change_makes_a_file_is_replaced_in_the_copy() {
 }
 
 #[test]
-fn a_test_cargo_builds_no_target_of_is_not_run() {
+fn a_test_no_cargo_target_builds_is_not_run() {
     let repo = calc(&[]);
     repo.put("tests/common/mod.rs", ADDS.replace("fn adds", "fn shared").as_bytes());
     assert_eq!(findings(&repo, Gate::default()), vec![(
         Some("tests/common/mod.rs".into()),
         Some(2),
         "not-run".into(),
-        "`shared` was not run at the base: no `tests/common/main.rs` makes a target of its directory.".into(),
+        "`shared` was not run at the base: no Cargo target at the base is built from its crate root \
+         `tests/common/mod.rs`."
+            .into(),
     )]);
+}
+
+#[test]
+fn a_test_in_a_module_two_targets_share_passes_at_the_base_only_if_it_passes_in_both() {
+    let repo = calc(&[]);
+    repo.put("tests/a.rs", b"mod common;\n\nfn limit() -> u32 {\n    4\n}\n");
+    repo.put("tests/b.rs", b"mod common;\n\nfn limit() -> u32 {\n    2\n}\n");
+    let within = "#[test]\nfn adds_within() {\n    assert!(calc::add(1, 2) <= super::limit());\n}\n";
+    let common = format!("{ADDS}\n{within}");
+    repo.put("tests/common/mod.rs", common.as_bytes());
+    assert_eq!(found(&repo), vec![at("tests/common/mod.rs", 2, "passes-at-base")]);
+}
+
+#[test]
+fn a_test_target_a_manifest_places_and_a_module_of_the_binary_are_run_in_their_targets() {
+    let repo = calc(&[]);
+    let manifest = "[package]\nname = \"calc\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+                    [[test]]\nname = \"cli\"\npath = \"checks/cli.rs\"\n";
+    let base = [
+        ("Cargo.toml", manifest),
+        ("gate.toml", "[linters]\nclippy = []\n\n[test-files]\nrust = [\"checks/*.rs\"]\n"),
+        ("src/main.rs", "mod cli;\n\nfn main() {\n    println!(\"{}\", cli::name());\n}\n"),
+        ("src/cli.rs", "pub fn name() -> &'static str {\n    \"calc\"\n}\n"),
+        ("checks/cli.rs", "fn unused() {}\n"),
+    ];
+    rebase(&repo, &base, "a binary and a test target of its own");
+    repo.put("checks/cli.rs", ADDS.as_bytes());
+    // No blank line before the module: an added line outside it would edit the file's code.
+    let tests = "#[cfg(test)]\nmod tests {\n    #[test]\n    fn names() {\n\
+                 \x20       assert_eq!(super::name(), \"calc\");\n    }\n}\n";
+    repo.put("src/cli.rs", format!("pub fn name() -> &'static str {{\n    \"calc\"\n}}\n{tests}").as_bytes());
+    assert_eq!(found(&repo), vec![
+        at("checks/cli.rs", 2, "passes-at-base"),
+        at("src/cli.rs", fn_line(&repo, "src/cli.rs", "names"), "passes-at-base"),
+    ]);
 }
 
 #[test]

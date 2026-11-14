@@ -657,11 +657,13 @@ a file the change also edits outside its test code cannot be separated from the 
 finding at its `fn`. Each Cargo target the changed tests are in is built and run on its own, with `cargo nextest run
 --locked --no-fail-fast`, filtered to its tests (`-E 'test(=path::name)'`), in the copy's package directory, with a
 target directory and a nextest store outside the copy and the gate's own nextest configuration in place of the copy's.
-The target is found by Cargo's default places: the package is the nearest `Cargo.toml` above the file; `tests/x.rs`, and
-a file under a `tests/x/` that holds a `main.rs`, are the integration test `x`; `src/bin/x.rs` and a file under
-`src/bin/x/` likewise the binary `x`; `src/main.rs` the package's binary; any other file under `src/` a module of the
-library where `src/lib.rs` exists, else of the binaries. A file elsewhere, as a shared `tests/common/mod.rs`, is a
-`not-run` finding. A target whose tests do not compile at the base (rustc's `could not compile`) counts as failing
+The targets are found from the copy's module tree and `cargo metadata`: each crate root whose `mod name;` items, a
+`#[path]` on one included, reach the file (a crate root being a `.rs` file no such item reaches), matched to the target
+of the package nearest above it whose root file it is, so a `[[test]] path`, a module of `src/main.rs` beside a
+`src/lib.rs`, benches and examples are each run in their own target. A test in a module several targets share, as a
+`tests/common/mod.rs` two integration tests declare, is run in each, and passes at the base only if it passes in every
+one. A test no target builds, or whose package `cargo metadata` cannot read, is a `not-run` finding. A target whose
+tests do not compile at the base (rustc's `could not compile`) counts as failing
 there, which is what the check expects of a test that needs the change, and gives no finding: so a change that adds a
 function and a test file calling it is judged as one whose tests fail at the base. Any other cargo error, as a lock file
 `--locked` refuses, is a `not-run` finding. The findings are those above, `cargo nextest` in place of pytest; a test

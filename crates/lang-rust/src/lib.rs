@@ -13,7 +13,7 @@ mod skips;
 mod syntax;
 
 pub use code_tokens::code_tokens;
-pub use imports::{imports, test_modules};
+pub use imports::{imports, modules, test_modules};
 
 use syntax::{Fn, Holder, Items, Text};
 

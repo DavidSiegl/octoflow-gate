@@ -58,7 +58,7 @@ pub fn surviving_mutants(sources: &Sources, mutmut: &Mutmut, budget: u64) -> Vec
     out.extend(unread);
     let share = |later: &[bool]| budget.share(1 + later.iter().map(|&has| u32::from(has)).sum::<u32>());
     let python = share(&[!rust.is_empty(), !go.is_empty()]);
-    out.extend(python_mutants(&sources.python, mutmut, python.seconds as f64));
+    out.extend(python_mutants(&sources.python, mutmut, python.seconds));
     out.extend(rust_mutants(&sources.rust, &rust, &share(&[!go.is_empty()])));
     out.extend(go_mutants(&sources.go, &go, &share(&[])));
     sort_by_place(&mut out);

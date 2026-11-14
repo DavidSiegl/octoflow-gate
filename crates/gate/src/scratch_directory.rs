@@ -28,25 +28,29 @@ impl ScratchDirectory {
         use std::sync::atomic::{AtomicU32, Ordering};
         static MADE: AtomicU32 = AtomicU32::new(0);
         remove_abandoned(parent);
-        let path = loop {
+        loop {
             let path = parent.join(format!("gate-{}-{}", std::process::id(), MADE.fetch_add(1, Ordering::SeqCst)));
             match std::fs::DirBuilder::new().mode(0o700).create(&path) {
                 // Left by an earlier gate of the same process id that still runs, or ran in another pid namespace.
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(e) => return Err(e),
-                Ok(()) => break path,
+                Ok(()) => {}
             }
-        };
-        let lock = std::fs::File::open(&path);
-        match lock.and_then(|lock| lock.try_lock().map(|()| lock).map_err(std::io::Error::from)) {
-            Ok(lock) => {
-                HELD.lock().unwrap_or_else(|e| e.into_inner()).push(path.clone());
-                Ok(ScratchDirectory { path, _lock: lock })
-            }
-            Err(e) => {
-                // An empty directory of the gate's own: nothing to lose when it cannot be removed either.
-                let _ = std::fs::remove_dir(&path);
-                Err(e)
+            // Until it is locked, another gate's remove_abandoned may hold the lock a moment, which `lock` waits out,
+            // or, when it runs in another pid namespace and finds no process of this pid, remove the directory: then
+            // the lock is of a directory no longer at `path`, and the next number is tried.
+            let locked = std::fs::File::open(&path).and_then(|dir| dir.lock().map(|()| dir));
+            match locked.and_then(|dir| at(&dir, &path).map(|there| there.then_some(dir))) {
+                Ok(Some(dir)) => {
+                    HELD.lock().unwrap_or_else(|e| e.into_inner()).push(path.clone());
+                    return Ok(ScratchDirectory { path, _lock: dir });
+                }
+                Ok(None) => continue,
+                Err(e) => {
+                    // An empty directory of the gate's own: nothing to lose when it cannot be removed either.
+                    let _ = std::fs::remove_dir(&path);
+                    return Err(e);
+                }
             }
         }
     }
@@ -96,6 +100,18 @@ fn remove_abandoned(parent: &Path) {
     }
 }
 
+/// Whether `path` names `dir`, an open directory: false when nothing is at `path`, or another file is. Errs when what
+/// is at `path` cannot be read.
+fn at(dir: &std::fs::File, path: &Path) -> std::io::Result<bool> {
+    use std::os::unix::fs::MetadataExt;
+    let open = dir.metadata()?;
+    match std::fs::symlink_metadata(path) {
+        Ok(there) => Ok(there.dev() == open.dev() && there.ino() == open.ino()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
 /// The process id in `name` when it is a [`ScratchDirectory`]'s, `gate-<pid>-<n>`.
 fn scratch_pid(name: &OsStr) -> Option<u32> {
     let (pid, n) = name.to_str()?.strip_prefix("gate-")?.split_once('-')?;
@@ -129,6 +145,19 @@ mod tests {
         let made = ScratchDirectory::new(&parent).unwrap();
         assert!(made.path().starts_with(&parent) && !left.contains(&made.path().to_path_buf()));
         assert!(left.iter().all(|dir| dir.exists()), "a running gate's directory went");
+    }
+
+    #[test]
+    fn an_open_directory_is_at_its_path_until_that_names_another_or_nothing() {
+        let parent = ScratchDir::new();
+        let path = parent.join("d");
+        std::fs::create_dir(&path).unwrap();
+        let dir = std::fs::File::open(&path).unwrap();
+        assert!(at(&dir, &path).unwrap());
+        std::fs::remove_dir(&path).unwrap();
+        assert!(!at(&dir, &path).unwrap());
+        std::fs::create_dir(&path).unwrap();
+        assert!(!at(&dir, &path).unwrap());
     }
 
     #[test]

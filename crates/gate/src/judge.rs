@@ -240,7 +240,7 @@ fn judge_checks(
         too_complex(sources),
         dependency_cycles(sources)?,
         duplicated_blocks(sources)?,
-        named("flaky-tests", flaky_tests(&sources.python)),
+        named("flaky-tests", flaky_tests(sources)),
         named("surviving-mutants", surviving_mutants(sources, mutmut, mutation_budget)),
         named("passes-at-base", passes_at_base(sources, base_run_budget)),
         vague_names(sources),

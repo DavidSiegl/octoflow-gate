@@ -1,27 +1,39 @@
-//! The flaky-tests check: the Python tests a change adds or edits, rerun with pytest-randomly under several seeds.
-//! A test that passes in one order and fails in another is one the build's single green run does not show.
+//! The flaky-tests check: the Python and Go tests a change adds or edits, rerun in several orders, with
+//! pytest-randomly's seeds and `go test -shuffle`'s. A test that passes in one order and fails in another is one the
+//! build's single green run does not show.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ffi::{OsStr, OsString};
+use std::hash::Hash;
 use std::path::Path;
 use std::time::Duration;
 
 use crate::copies::{copy_tracked, finding, in_scratch_directory, sort_by_place};
+use crate::gotest::{self, Packages, Ran};
 use crate::junit::{junit_outcomes, Outcome};
-use crate::parser_checks::PythonChange;
+use crate::parser_checks::{GoChange, PythonChange, Sources};
 use crate::pytest::{self, changed_tests, junit_case, labels, listed_tests, node_parts, Group, Setup, Tests};
 use crate::report::Finding;
 use crate::text::series;
 use crate::Unjudged;
 
-/// The pytest-randomly seeds the changed tests are rerun under, once each, in this order.
+/// The seeds the changed tests are rerun under, once each, in this order: pytest-randomly's, and `go test -shuffle`'s.
 const SEEDS: [u32; 5] = [1, 2, 3, 4, 5];
 
-/// How long one pytest run of the check may take: the collection, and each rerun.
+/// How long one pytest or go test run of the check may take: pytest's collection, and each rerun.
 const RUN_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// The flaky-tests check's findings on `python`, by path and line, a finding on no path or line first; each rule is
-/// the check's own, without its name, and each severity "warning".
+/// The flaky-tests check's findings on the Python and Go tests of `sources`, by path and line, a finding on no path or
+/// line first; each rule is the check's own, without its name, and each severity "warning". Python's are as
+/// [`python_findings`] says, Go's as [`go_findings`] does.
+pub fn flaky_tests(sources: &Sources) -> Vec<Finding> {
+    let mut out = python_findings(&sources.python);
+    out.extend(go_findings(&sources.go));
+    sort_by_place(&mut out);
+    out
+}
+
+/// The check's findings on `python`, in no order.
 ///
 /// Reruns the Python tests the change touched (pytest::changed_tests) once under each of [`SEEDS`] with
 /// pytest-randomly, and reports at its def each test whose outcome, failed, xfailed (failed as its xfail mark
@@ -46,7 +58,7 @@ const RUN_TIMEOUT: Duration = Duration::from_secs(30);
 /// test file that cannot be read or parsed, and a copy that cannot be made, are `not-rerun` findings too; a copy
 /// that cannot be removed afterwards is a `not-removed` one, beside the results. Each run has [`RUN_TIMEOUT`] of its
 /// own, so each configuration the changed tests fall under adds its runs to the check's time.
-pub fn flaky_tests(python: &PythonChange) -> Vec<Finding> {
+fn python_findings(python: &PythonChange) -> Vec<Finding> {
     let (tests, unreadable) = changed_tests(python);
     let not_rerun = |(path, why): (OsString, String)| {
         finding(Some(&path), None, "not-rerun", format!("{why}, so its tests were not rerun."))
@@ -57,11 +69,10 @@ pub fn flaky_tests(python: &PythonChange) -> Vec<Finding> {
             rerun_findings(python, tmp, &tests)
         }));
     }
-    sort_by_place(&mut out);
     out
 }
 
-/// [`flaky_tests`]' findings on `tests`, rerun in a copy of the tracked files of `python`'s tree that it makes in
+/// [`python_findings`]' findings on `tests`, rerun in a copy of the tracked files of `python`'s tree that it makes in
 /// `tmp`, an empty directory, beside the runs' reports: once for each pytest configuration the changed test files
 /// take, so that a group that cannot run leaves the others' findings.
 fn rerun_findings(python: &PythonChange, tmp: &Path, tests: &Tests) -> Vec<Finding> {
@@ -105,11 +116,16 @@ fn group_rerun_findings(group: &Group, tests: &Tests, reports: &Path, label: Opt
         Ok(ids) => (ids, None),
         Err(problem) => (vec![], Some(problem)),
     };
-    let reruns = Reruns::run(&group.setup, &ids, reports);
+    let reruns = if ids.is_empty() {
+        Reruns::default()
+    } else {
+        Reruns::run(|seed| rerun(&group.setup, &ids, seed, &reports.join(format!("seed-{seed}.xml"))))
+    };
     let mut out = vec![];
     for id in &ids {
-        let (path, name, _) = node_parts(id);
-        if let (Some((rule, message)), Some(line)) = (reruns.judge(id), tests.get(&(path.clone(), name))) {
+        let (path, name, params) = node_parts(id);
+        let judged = reruns.judge(&id.as_os_str(), &format!("{name}{params}"));
+        if let (Some((rule, message)), Some(line)) = (judged, tests.get(&(path.clone(), name))) {
             out.push(finding(Some(&path), Some(*line), rule, message));
         }
     }
@@ -178,11 +194,80 @@ fn rerun<'a>(
     Ok(out)
 }
 
-/// What the reruns of a set of tests, one under each of [`SEEDS`] in turn, told of each test.
-struct Reruns<'a> {
-    /// Each test's outcome, by its node id and then by the seed of each run that reported it failed, xfailed or
-    /// passed.
-    outcomes: HashMap<&'a OsStr, BTreeMap<u32, Outcome>>,
+/// The check's findings on `go`, in no order.
+///
+/// Reruns the Go tests the change touched (gotest::changed_tests) once under each of [`SEEDS`], each package's
+/// together, as `go test -shuffle=<seed>` orders them, and reports at its func each test whose outcome, failed or
+/// passed, differs between seeds (`mixed-results`), one that failed under every seed that judged it, at least two
+/// (`failed-every-run`), and one that fewer than two runs passed or failed (`not-rerun`), as [`python_findings`] does
+/// and for the same reasons. The other tests of the package are not run, so only the changed tests' order varies.
+///
+/// The tests run in a copy of the files git tracks, as Python's do. A go test run that cannot start, takes longer
+/// than [`RUN_TIMEOUT`] or tells nothing (gotest::run), or finds that the package's tests do not build in the copy,
+/// ends the reruns of that package's tests with a `not-rerun` finding saying so, after what the runs before it showed;
+/// the other packages' tests are rerun still. A changed test file that cannot be read or parsed, and a copy that
+/// cannot be made, are `not-rerun` findings too, and a copy that cannot be removed afterwards a `not-removed` one.
+fn go_findings(go: &GoChange) -> Vec<Finding> {
+    let (packages, unreadable) = gotest::changed_tests(go);
+    let not_rerun = |(path, unreadable): (&OsStr, &model::Unreadable)| {
+        let message = format!("{}, so its tests were not rerun.", unreadable.why);
+        finding(Some(path), unreadable.line, "not-rerun", message)
+    };
+    let mut out: Vec<Finding> = unreadable.into_iter().map(not_rerun).collect();
+    if !packages.is_empty() {
+        out.extend(in_scratch_directory("not-rerun", "to rerun the changed Go tests in", |tmp| {
+            go_rerun_findings(go, &tmp.join("tree"), &packages)
+        }));
+    }
+    out
+}
+
+/// [`go_findings`]' findings on `packages`, the changed tests by their package's directory, rerun in a copy of the
+/// tracked files of `go`'s tree that it makes at `tree`, a path that does not exist yet.
+fn go_rerun_findings(go: &GoChange, tree: &Path, packages: &Packages) -> Vec<Finding> {
+    if let Err(e) = copy_tracked(&go.change.root, tree) {
+        let message = format!(
+            "could not copy the tracked files to rerun the changed Go tests in: {e}; the changed Go tests were not \
+             rerun."
+        );
+        return vec![finding(None, None, "not-rerun", message)];
+    }
+    let mut out = vec![];
+    for (package, tests) in packages {
+        let names: Vec<&str> = tests.iter().map(|t| t.name.as_str()).collect();
+        let dir = tree.join(package);
+        let reruns = Reruns::run(|seed| {
+            let doing = format!("rerunning them under seed {seed}");
+            match gotest::run(&dir, &names, &[&format!("-shuffle={seed}")], RUN_TIMEOUT, &doing) {
+                Ok(Ran::Outcomes(outcomes)) => Ok(outcomes),
+                Ok(Ran::Unbuilt) => Err(format!("go test, {doing}, could not build the package's tests in the copy \
+                                                 of the tracked files")),
+                Err(problem) => Err(problem.clause),
+            }
+        });
+        for t in tests {
+            if let Some((rule, message)) = reruns.judge(&t.name, &t.name) {
+                out.push(finding(Some(&t.path), Some(t.line), rule, message));
+            }
+        }
+        if let Some((_, problem)) = &reruns.stopped {
+            let which = format!("the changed tests of the package at `{}`", package.display());
+            let judged = match reruns.seeds.as_slice() {
+                [] => format!("{which} were not rerun."),
+                ran => format!("only the reruns of {which} under {} were judged.", seeds(ran)),
+            };
+            out.push(finding(None, None, "not-rerun", format!("{problem}; {judged}")));
+        }
+    }
+    out
+}
+
+/// What the reruns of a set of tests, one under each of [`SEEDS`] in turn, told of each test, a test known by a key
+/// `K`: its pytest node id, or its Go test name.
+#[derive(Default)]
+struct Reruns<K> {
+    /// Each test's outcome, by its key and then by the seed of each run that reported it failed, xfailed or passed.
+    outcomes: HashMap<K, BTreeMap<u32, Outcome>>,
     /// The seeds of the runs that told something, in the order they ran.
     seeds: Vec<u32>,
     /// The seed whose run went wrong and ended the reruns, and what went wrong with it, a clause; None when every
@@ -190,13 +275,13 @@ struct Reruns<'a> {
     stopped: Option<(u32, String)>,
 }
 
-impl<'a> Reruns<'a> {
-    /// Reruns the tests of node ids `ids` by `setup`, once under each of [`SEEDS`], until a run goes wrong, writing
-    /// the runs' reports in `reports`. For no ids, no run.
-    fn run(setup: &Setup, ids: &'a [OsString], reports: &Path) -> Reruns<'a> {
+impl<K: Eq + Hash> Reruns<K> {
+    /// What `rerun(seed)` tells for each of [`SEEDS`] in turn, until it errs: the outcome of each test it reran, by
+    /// its key, or the problem, a clause, that left the run telling nothing.
+    fn run(mut rerun: impl FnMut(u32) -> Result<HashMap<K, Outcome>, String>) -> Reruns<K> {
         let mut reruns = Reruns { outcomes: HashMap::new(), seeds: vec![], stopped: None };
-        for seed in SEEDS.into_iter().take(if ids.is_empty() { 0 } else { SEEDS.len() }) {
-            match rerun(setup, ids, seed, &reports.join(format!("seed-{seed}.xml"))) {
+        for seed in SEEDS {
+            match rerun(seed) {
                 Ok(reported) => {
                     reruns.seeds.push(seed);
                     for (id, outcome) in reported.into_iter().filter(|(_, outcome)| *outcome != Outcome::Skipped) {
@@ -212,13 +297,11 @@ impl<'a> Reruns<'a> {
         reruns
     }
 
-    /// The rule and message of the check's finding on the test of node id `id`, one of those rerun, by what the
-    /// reruns told of it; None when they show nothing to report.
-    fn judge(&self, id: &OsStr) -> Option<(&'static str, String)> {
-        let (_, name, params) = node_parts(id);
-        let name = format!("{name}{params}");
+    /// The rule and message of the check's finding on the test of key `key`, one of those rerun, by what the reruns
+    /// told of it, the message calling it `name`, as "test_reads[1]"; None when they show nothing to report.
+    fn judge(&self, key: &K, name: &str) -> Option<(&'static str, String)> {
         let none = BTreeMap::new();
-        let by_seed = self.outcomes.get(id).unwrap_or(&none);
+        let by_seed = self.outcomes.get(key).unwrap_or(&none);
         let under = |outcome: Outcome| -> Vec<u32> {
             self.seeds.iter().copied().filter(|seed| by_seed.get(seed) == Some(&outcome)).collect()
         };

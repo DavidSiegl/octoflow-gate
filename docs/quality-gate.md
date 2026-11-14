@@ -309,7 +309,8 @@ of Go:
 
 Go's tests run through a `[[test]]` command, as [Go tests and coverage](#go-tests-and-coverage) says,
 golangci-lint lints Go as the table above says, and the surviving-mutants check mutation-tests the functions a change
-edits with gremlins (**Go's mutants**, below). The flaky-tests and passes-at-base checks do not judge Go (#82, #81).
+edits with gremlins (**Go's mutants**, below). The flaky-tests check reruns the Go tests a change adds or edits
+(**Flaky tests**, below); the passes-at-base check does not judge Go (#81).
 
 **Cognitive complexity** scores the functions the change edits, so that a change cannot pile branches into the function
 it is editing rather than split it. A function counts when the change adds a line to it, decorators included, in a
@@ -480,6 +481,19 @@ A change to a helper or fixture outside the tests' `def`s reruns nothing. The ch
 30 seconds to the gate, the collection included, and only when the change touches a test. pytest-randomly must be
 installed in the project's Python, so every pytest run there shuffles the tests too, printing the seed it used;
 `-p no:randomly` turns it off, and `--randomly-seed=N` repeats an order.
+
+Go's changed tests are rerun the same way, with go's own shuffling. A test counts when the change adds or removes a
+line of it in a `_test.go` file, from the line above its `func` to the line before its closing brace: a top-level
+`TestX`, `FuzzX` or `ExampleX`, which `go test -run` selects, its subtests running with it. In the same temporary
+copy of the tracked files, each package's changed tests run five times, alone and together, from the package's
+directory, as `go test -json -count=1 -shuffle=N -run '^(TestA|TestB)$' .` with N from 1 to 5, each run within 30
+seconds; `-count=1` keeps go's test cache from answering in place of a run. A test that failed under some seeds and
+passed under others is `mixed-results`, one that failed under every seed that judged it `failed-every-run`, and one
+that fewer than two runs passed or failed `not-rerun`, as above; go reports no xfail. A run that cannot start, takes
+longer than 30 seconds, exits with a status other than 0 or 1, fails without a test failing (a `TestMain` that exits
+does), or finds that the package's tests do not build in the copy, ends that package's reruns with a `not-rerun`
+finding saying which earlier runs were judged; the other packages' tests are rerun still. The Go reruns add at most
+five runs of 30 seconds for each package the changed tests are in.
 
 **Surviving mutants** mutation-tests the functions the change edits, so that code its tests run without checking what
 it does is found; coverage counts such code as tested. A function counts when the change adds lines to it or removes

@@ -102,13 +102,13 @@ It runs the project's tests itself, with the commands its `gate.toml` lists as `
 JUnit and coverage reports they write. A CI that has already run the tests passes their reports instead, with
 `--tests` and `--coverage`, and then no command runs.
 
-It takes what it runs from the machine and the project: ruff, mypy and pymarkdown from `PATH`, which `uv run` points
-at a project's environment, and only for a project that tracks Python or Markdown files; shellcheck, actionlint and
-clippy likewise, for shell scripts, GitHub workflows and Rust files. The flaky-tests, passes-at-base and
-surviving-mutants checks of a change to Python run pytest, pytest-randomly and mutmut through the project's Python,
-which `gate.toml`'s `python` or `--python` names, `python3` without either; those of a change to Rust run
-cargo-nextest and cargo-mutants, and the surviving-mutants check of a change to Go runs gremlins. golangci-lint, and
-the go tool it and gremlins run, come from `PATH` for a project that tracks Go files; a Go project runs its tests with
+It takes what it runs from the machine and the project: ruff, mypy and pymarkdown from `PATH`, which `uv run` points at
+a project's environment, and only for a project that tracks Python or Markdown files; shellcheck, actionlint and clippy
+likewise, for shell scripts, GitHub workflows and Rust files. The flaky-tests, passes-at-base and surviving-mutants
+checks of a change to Python run pytest, pytest-randomly and mutmut through the project's Python, which `gate.toml`'s
+`python` or `--python` names, `python3` without either; those of a change to Rust run cargo-nextest and cargo-mutants,
+and the flaky-tests and surviving-mutants checks of a change to Go run go test and gremlins. golangci-lint, and the go
+tool it and gremlins run, come from `PATH` for a project that tracks Go files; a Go project runs its tests with
 gotestsum ([Go tests and coverage](docs/quality-gate.md#go-tests-and-coverage)).
 
 A linter that is missing is a failed condition naming it, and for clippy that is a `cargo clippy --version` that

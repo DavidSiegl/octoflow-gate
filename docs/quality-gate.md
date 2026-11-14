@@ -487,9 +487,10 @@ it does is found; coverage counts such code as tested. A function counts when th
 lines from it, decorators included, since a deleted guard clause needs a test as much as an added one: a top-level
 function, or a method of a top-level class, in a Python file outside the test files and, as above, `mutants/`; but
 not one whose file's base has a function of its name with the same code, its decorators, parameters, defaults,
-annotations and body, and the same lines holding a `# pragma: no mutate`, whatever its other comments and layout, as
-an edit to those alone changes nothing mutmut mutates; a signature edited alone is an edit, and so is a pragma added,
-removed or moved. mutmut, installed in the project's Python, makes small changes to each, one at a time - an operator
+annotations and body, whatever its comments and layout, as an edit to those alone changes nothing mutmut mutates; a
+signature edited alone is an edit. A file that holds a `# pragma: no mutate` at the base or in the working tree has
+each function the change touches mutation-tested, since where such a comment sits decides which lines mutmut mutates.
+mutmut, installed in the project's Python, makes small changes to each, one at a time - an operator
 swapped, a number or a string altered, an argument dropped - and runs each of these mutants against the tests that
 call the function:
 

@@ -614,7 +614,7 @@ fn in_its_project(change: &Change, gone: &HashSet<PathBuf>, path: &OsStr, langua
 /// (path, bytes) of each of `paths`, each a path of the tree at `change`'s base, that is a regular file there, as
 /// git's tree records it: not a symlink or a submodule. Errs when git cannot list the base's tree or show one of the
 /// files.
-pub fn regular_files_at_base(change: &Change, paths: &[OsString]) -> Result<HashMap<OsString, Vec<u8>>, Unjudged> {
+pub(crate) fn regular_files_at_base(change: &Change, paths: &[OsString]) -> Result<HashMap<OsString, Vec<u8>>, Unjudged> {
     if paths.is_empty() {
         return Ok(HashMap::new());
     }

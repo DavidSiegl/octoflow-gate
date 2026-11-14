@@ -87,10 +87,10 @@ pub struct Mutmut<'a> {
 /// a regular file in the working tree. Lines removed right after a function's last line count too, though they may have
 /// been the blank lines below it; comments and blank lines above its first decorator do not, since they change nothing
 /// mutmut mutates. Nor does a function whose file's base has one of its name with the same code, its decorators,
-/// parameters, defaults, annotations and body, and the same mutmut pragmas, whatever its other comments and layout
-/// ([`edited`]): an edit to those alone changes nothing mutmut mutates, while one to its signature alone can change
-/// what its body does, and one to a pragma which of its lines mutmut mutates. Reports at its def each such function
-/// with mutants its tests did not notice (`survived`), with how many of the mutants tried they were and what the first
+/// parameters, defaults, annotations and body, whatever its comments and layout, in a file that holds no mutmut pragma
+/// on either side ([`edited`]): an edit to those alone changes nothing mutmut mutates, while one to its signature alone
+/// can change what its body does, and one to a pragma which of its lines mutmut mutates. Reports at its def each such
+/// function with mutants its tests did not notice (`survived`), with how many of the mutants tried they were and what the first
 /// mutants::SURVIVOR_EXAMPLES change, as a line before and after; and each one no test calls (`untested`).
 ///
 /// mutmut runs by the project's Python (judge::Change::python) on a copy of the files git tracks, without what the
@@ -131,37 +131,45 @@ pub fn python_mutants(python: &PythonChange, mutmut: &Mutmut, seconds: u64) -> V
 
 /// Those of `units`, each with its file's path as PythonChange::changed_units gives them, whose code the change
 /// edited, in the same order: all but a unit whose file's base has a unit of its name with the same code
-/// (lang_python::Unit::code) and the same [`pragma_lines`], which only the unit's other comments and its layout can
-/// have changed, as nothing mutmut mutates does. A file whose base is no regular file, or cannot be read or parsed, or
-/// that has none, has every unit edited.
+/// (lang_python::Unit::code), which only the unit's comments and layout can have changed, as nothing mutmut mutates
+/// does. Every unit of a file counts as edited where the file holds a mutmut pragma ([`mutmut_pragma`]) at the base or
+/// in the working tree, since a pragma is a comment that decides which lines mutmut mutates, by where it sits; and
+/// where its base is no regular file, cannot be read or parsed, or is none.
 fn edited(python: &PythonChange, units: Vec<(OsString, Unit)>) -> Vec<Function> {
-    let before = |path: &OsStr| {
-        let file = python.files.iter().find(|f| f.after.as_ref().is_some_and(|after| after.path == path));
-        file.and_then(|f| f.before.as_ref()).map(|before| before.path.clone())
+    // The base path of each file the units are in that has one.
+    let mut befores: HashMap<OsString, OsString> = HashMap::new();
+    for (path, _) in &units {
+        let file = python.files.iter().find(|f| f.after.as_ref().is_some_and(|after| &after.path == path));
+        if let Some(before) = file.and_then(|f| f.before.as_ref()) {
+            befores.insert(path.clone(), before.path.clone());
+        }
+    }
+    let wanted: Vec<OsString> = befores.values().cloned().collect();
+    let sources = regular_files_at_base(python.change, &wanted).unwrap_or_default();
+    // The units to compare a file's with: its base's, or None where each of its units counts as edited.
+    let comparable = |path: &OsStr| -> Option<Vec<Unit>> {
+        let base = sources.get(befores.get(path)?)?;
+        let now = std::fs::read(python.change.root.join(path)).ok()?;
+        if holds_pragma(base) || holds_pragma(&now) {
+            return None;
+        }
+        lang_python::units(base).ok()
     };
-    let befores: BTreeSet<OsString> = units.iter().filter_map(|(path, _)| before(path)).collect();
-    let befores: Vec<OsString> = befores.into_iter().collect();
-    let sources = regular_files_at_base(python.change, &befores).unwrap_or_default();
-    let base_units = |path: &OsStr| {
-        let source = before(path).and_then(|before| sources.get(&before));
-        source.and_then(|source| lang_python::units(source).ok()).unwrap_or_default()
-    };
-    let mut bases: HashMap<OsString, Vec<Unit>> = HashMap::new();
+    let mut bases: HashMap<OsString, Option<Vec<Unit>>> = HashMap::new();
     let mut out = vec![];
     for (path, unit) in units {
-        let base = bases.entry(path.clone()).or_insert_with(|| base_units(&path));
-        let same = |b: &Unit| b.name == unit.name && b.code == unit.code && pragma_lines(b) == pragma_lines(&unit);
-        if !base.iter().any(same) {
+        let base = bases.entry(path.clone()).or_insert_with(|| comparable(&path));
+        let same = |b: &Unit| b.name == unit.name && b.code == unit.code;
+        if !base.as_ref().is_some_and(|base| base.iter().any(same)) {
             out.push(Function { path, unit });
         }
     }
     out
 }
 
-/// Each line of `unit` that holds a mutmut pragma ([`mutmut_pragma`]), trimmed, in order: the comments that decide
-/// which of its lines mutmut mutates. A pragma moved to another line, or its line edited, changes them.
-fn pragma_lines(unit: &Unit) -> Vec<&str> {
-    unit.source.iter().map(|line| line.trim()).filter(|line| mutmut_pragma(line).is_some()).collect()
+/// Whether a line of the Python source `source` holds a mutmut pragma ([`mutmut_pragma`]), in a comment or not.
+fn holds_pragma(source: &[u8]) -> bool {
+    source.split(|&b| b == b'\n').any(|line| mutmut_pragma(&String::from_utf8_lossy(line)).is_some())
 }
 
 /// A function the change touched, the unit mutmut mutates.

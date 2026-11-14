@@ -288,6 +288,32 @@ fn a_function_whose_edit_only_removes_a_mutmut_pragma_is_mutated() {
 }
 
 #[test]
+fn a_function_whose_edit_only_moves_a_pair_of_mutmut_pragmas_is_mutated() {
+    let repo = calc();
+    let (start, end) = ("    # pragma: no mutate start\n", "    # pragma: no mutate end\n");
+    let wrapping = |line: &str| {
+        let body = "    x = b * a\n    y = x + 1\n    return y\n".replace(line, &format!("{start}{line}{end}"));
+        BASE.replace("    return b * a\n", &body)
+    };
+    repo.commit(&[("calc.py", wrapping("    x = b * a\n").as_bytes())], "a pair of pragmas");
+    repo.put("calc.py", wrapping("    y = x + 1\n").as_bytes());
+    let (found, made) = found_and_made(&repo);
+    assert_eq!(made, functions(&["calc.x_unchecked"]));
+    assert_eq!(places(&found), at(&[("calc.py", 5, "survived")]));
+}
+
+#[test]
+fn a_function_whose_block_pragma_above_it_is_removed_is_mutated() {
+    let repo = calc();
+    let pragma = BASE.replace("def unchecked(a, b):", "# pragma: no mutate block\ndef unchecked(a, b):");
+    repo.commit(&[("calc.py", pragma.as_bytes())], "a pragma above");
+    repo.put("calc.py", BASE.as_bytes());
+    let (found, made) = found_and_made(&repo);
+    assert_eq!(made, functions(&["calc.x_unchecked"]));
+    assert_eq!(places(&found), at(&[("calc.py", 5, "survived")]));
+}
+
+#[test]
 fn a_function_whose_default_alone_changes_is_mutated() {
     let repo = calc();
     let defaulted = |b: &str| BASE.replace("def unchecked(a, b):", &format!("def unchecked(a, b={b}):"));

@@ -1047,3 +1047,56 @@ fn a_tracked_symlink_to_a_fifo_is_not_opened() {
     let found = rx.recv_timeout(Duration::from_secs(60)).expect("duplicated-blocks blocked on the FIFO");
     assert_eq!(found, [("weights.py".into(), 1, "prices.py:1".into())]);
 }
+
+/// The lines of Rust test code run whenever its tests pass, so counting them would cover a new function's lack of
+/// tests with its tests' own lines. Each case adds a 15-line function no test runs, and test code beside it.
+#[test]
+fn the_coverage_of_new_rust_code_leaves_out_the_lines_of_its_test_code() {
+    let lets: String = (1..=12).map(|k| format!("    let x = x + {k};\n")).collect();
+    let scale = format!("\npub fn scale(x: i32) -> i32 {{\n{lets}    x\n}}\n");
+    let module = "\n#[cfg(test)]\nmod scale_tests {\n    use super::*;\n\n    #[test]\n    fn scales() {\n        \
+                  let s = scale(0);\n        assert_ne!(s, -1);\n    }\n}\n";
+    let helper = "\n#[cfg(test)]\nfn twice(x: i32) -> i32 {\n    let y = x + x;\n    y\n}\n";
+    let file = "use tiny::scale;\n\n#[test]\nfn scales() {\n    let s = scale(0);\n    assert_ne!(s, -1);\n}\n";
+    let lib = |test_code: &str| format!("{LIB}{scale}{test_code}");
+    let cases = [
+        ("an inline module", vec![("crate/src/lib.rs", lib(module))]),
+        ("a #[cfg(test)] fn", vec![("crate/src/lib.rs", lib(helper))]),
+        ("a file among the tests", vec![("crate/src/lib.rs", lib("")), ("crate/tests/scale.rs", file.into())]),
+        // Its lines are left out unread, as test-files.rust places it among the tests.
+        (
+            "a test file that does not parse",
+            vec![("crate/src/lib.rs", lib("")), ("crate/tests/broken.rs", "fn broken( {\n    1\n".into())],
+        ),
+    ];
+    // As cargo-llvm-cov reports it: the function's lines never ran, every other line of the changed files that maps
+    // to code did; blank lines, attributes and `use` map to none.
+    let untested = LIB.lines().count() as u32 + 2..LIB.lines().count() as u32 + 17;
+    let maps_to_code = |line: &str| !(line.is_empty() || ["#[", "use "].iter().any(|s| line.trim_start().starts_with(s)));
+    for (case, files) in cases {
+        let repo = package(&[("pyproject.toml", "[tool.ruff]\n"), ("gate.toml", "[linters]\nclippy = []\n")]);
+        let mut lcov = String::new();
+        for (path, text) in &files {
+            repo.put(path, text.as_bytes());
+            lcov += &format!("SF:{}\n", repo.repo.join(path).display());
+            for (n, _) in (1..).zip(text.lines()).filter(|(_, line)| maps_to_code(line)) {
+                let hit = !(*path == "crate/src/lib.rs" && untested.contains(&n));
+                lcov += &format!("DA:{n},{}\n", u32::from(hit));
+            }
+            lcov += "end_of_record\n";
+        }
+        repo.git(&["add", "-A"]);
+        repo.put("results.xml", b"<?xml version=\"1.0\"?><testsuites><testsuite name=\"t\"/></testsuites>");
+        repo.put("lcov.info", lcov.as_bytes());
+        let given = Given {
+            tests: vec![repo.repo.join("results.xml")],
+            coverage: vec![repo.repo.join("lcov.info")],
+            mutation_budget: Some(0),
+            base_run_budget: Some(0),
+            ..Given::default()
+        };
+        let report = judge_change(&repo.repo, "HEAD", &given).unwrap();
+        let coverage = report.coverage.unwrap();
+        assert_eq!((coverage.lines, coverage.covered_lines), (15, 0), "{case}");
+    }
+}

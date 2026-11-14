@@ -134,7 +134,8 @@ tree-sitter-rust, into the model of `crates/model`, and runs the checks of `crat
   are different values, where gate.py compares what they evaluate to. Adjacent strings of different prefixes, as `"a"
   f"b"`, are not joined.
 - **Redundant parentheses are part of an expression**, so adding or removing them changes an assertion's shape, a
-  function's body and a constant's value; `ast` drops them.
+  function's body and a constant's value; `ast` drops them. Around a value an assertion writes of literals alone,
+  such as `(-5)`, they are left out, as `ast` leaves them.
 - **`unparsable` is reported only for a file whose base held tests**, as for Rust; gate.py reports it for any Python
   test file that does not parse.
 - **A `Test*` class with no test methods** that the change removes is not reported, nor is a deleted file that held

@@ -106,6 +106,25 @@ impl Door {
 }
 
 #[test]
+fn a_trait_impl_s_types_and_constants_take_their_names_from_the_trait() {
+    let added = "struct V;
+impl Visitor for V {
+    type Value = u8;
+    const STATUS: u8 = 0;
+    fn visit(&self) {
+        type Info = u8;
+    }
+}
+impl V {
+    const STATUS: u8 = 0;
+    type Data = u8;
+}
+";
+    // An item in a trait impl's fn is the fn's, not the trait's; an inherent impl's are the author's.
+    assert_eq!(names(&(BASE.to_string() + added)), pairs(&[(6, "Info"), (10, "STATUS"), (11, "Data")]));
+}
+
+#[test]
 fn a_binding_on_a_line_the_change_left_alone_is_not_found() {
     let after = BASE.replace("    value\n", "    value + 1\n");
     assert_eq!(found(&[common::edited("src/lib.rs", BASE, &after)]), vec![]);

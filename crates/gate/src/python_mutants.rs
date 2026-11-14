@@ -103,10 +103,11 @@ pub struct Mutmut<'a> {
 /// and each mutated function is an `untested` finding. A file unfit to tell them, or a collection that fails, is a
 /// `not-narrowed` finding saying why, and mutmut runs the whole selection.
 ///
-/// A mutmut that cannot start, fails, or whose results cannot be listed, rules that name no source_paths or no rules
-/// at all, a changed
-/// file that cannot be read or parsed, and a copy that cannot be made are `not-run` findings saying so; a copy that
-/// cannot be removed afterwards is a `not-removed` one.
+/// mutmut's pytest runs take the configuration pytest finds for the tests they run (pytest::groups), which must be
+/// one: tests under more than one are a `not-run` finding naming them. A mutmut that cannot start, fails, or whose
+/// results cannot be listed, rules that name no source_paths or no rules at all, a changed file that cannot be read
+/// or parsed, and a copy that cannot be made are `not-run` findings too, saying so; a copy that cannot be removed
+/// afterwards is a `not-removed` one.
 pub fn python_mutants(python: &PythonChange, mutmut: &Mutmut, seconds: f64) -> Vec<Finding> {
     let in_scope = |path: &OsStr| !python_test(&python.change.settings, path);
     let (units, unreadable) = python.changed_units(in_scope, |unit, added, removal_points| {
@@ -323,9 +324,10 @@ fn unmutatable(unit: &Unit) -> Option<String> {
 /// function's own line counts as its body. coverage.py reads the file, in `python`.
 ///
 /// Errs with why the file cannot tell them, a clause: coverage.py cannot read it, it holds no test's context, it
-/// records too few tests on each line ([`UNDER_RECORDED_SHARE`]), or it did not measure the file of one of
-/// `functions`, which it never does for a path that is not UTF-8. The node ids are as pytest names the tests from
-/// the rootdir of the run that wrote the file, which must be `root`, as mutmut runs them in its copy of `root`.
+/// records too few tests on each line ([`UNDER_RECORDED_SHARE`]), it did not measure the file of one of
+/// `functions`, which it never does for a path that is not UTF-8, or it names none of the tests from `root`
+/// ([`rooted_elsewhere`]). The node ids are as pytest names the tests from the rootdir of the run that wrote the file,
+/// which must be `root`, as mutmut runs them in its copy of `root`.
 fn recorded_tests(
     python: &Path,
     root: &Path,
@@ -374,7 +376,8 @@ fn recorded_tests(
     if let Some((f, _)) = functions.iter().zip(&found.reached).find(|(_, tests)| tests.is_none()) {
         return Err(format!("`{named}` did not measure `{}`", text::one_line(&text::path(&f.path))));
     }
-    Ok(found.reached.into_iter().flatten().flatten().collect())
+    let tests: BTreeSet<String> = found.reached.into_iter().flatten().flatten().collect();
+    rooted_elsewhere(root, &tests).map_or(Ok(tests), Err)
 }
 
 /// What [`TEST_CONTEXTS_PROGRAM`] prints.
@@ -437,7 +440,8 @@ fn time_left(deadline: Instant) -> Option<Duration> {
 /// The findings of mutmut run on `functions` for `seconds` in `copy`, which this makes in `tmp`, an empty private
 /// directory, of the files git tracks in `root`'s working tree (copies::copy_tracked), but for what it tracks under
 /// mutmut's state; marked for mutmut to skip all but `functions`, with `table`, the rules' `[tool.mutmut]`, in
-/// place of its own, and its pytest runs taking no configuration or conftest.py from above the copy. `recorded`,
+/// place of its own, and its pytest runs taking the configuration of the tests they run ([`test_places`]) and no
+/// configuration or conftest.py from above the copy; tests under more than one are a `not-run` finding. `recorded`,
 /// when given, are the node ids of the tests `--test-contexts` records reaching `functions`: mutmut is then given
 /// those of them its selection collects ([`narrowed_table`]).
 fn on_copy(
@@ -451,27 +455,28 @@ fn on_copy(
 ) -> Vec<Finding> {
     let mut out = vec![];
     let set_up = (|| -> Result<Option<Table>, String> {
-        let start = |e: &dyn std::fmt::Display| format!("could not start mutmut: {e}");
-        copy_tracked(root, copy.tree).map_err(|e| start(&e))?;
+        copy_tracked(root, copy.tree).map_err(not_started)?;
         // Before anything reads the copy's pyproject.toml, pytest's configuration among it.
         own_pyproject(root, copy.tree)?;
         // mutmut takes what it finds under its state for its own cache, results included, so it starts without
         // what the tree tracks there.
         let state = copy.state();
         match state.symlink_metadata() {
-            Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(&state).map_err(|e| start(&e))?,
-            Ok(_) => std::fs::remove_file(&state).map_err(|e| start(&e))?,
+            Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(&state).map_err(not_started)?,
+            Ok(_) => std::fs::remove_file(&state).map_err(not_started)?,
             Err(_) => {}
         }
-        mark_for_mutmut(copy.tree, functions).map_err(|e| start(&e))?;
-        // mutmut runs pytest in the copy's mutants/, with --rootdir=. and these after its own arguments. Without
-        // -c, pytest looks for its configuration in each directory above, up to one that another account may write
-        // to when the project has none; --confcutdir keeps it from importing a conftest.py from above mutants/. The
-        // project's own configuration is read from mutmut's copy of it in mutants/, which also_copy makes, since
-        // pytest takes paths in it, such as pythonpath, from where it is: there they name the mutated code.
-        let mut config = pytest::config(copy.tree, tmp).map_err(|e| start(&e))?;
+        mark_for_mutmut(copy.tree, functions).map_err(not_started)?;
+        // One configuration for all of mutmut's pytest runs, as it takes one pytest_add_cli_args.
+        let places = test_places(copy.tree, table, recorded);
+        let groups = pytest::groups(copy.python, copy.tree, tmp, &places).map_err(not_started)?;
+        let config = match &groups[..] {
+            [group] => group.setup.inifile.clone(),
+            _ => return Err(several_configurations(&groups)),
+        };
         let mut table = table.clone();
         if let Some(recorded) = recorded {
+            // Rooted at the top, not the configuration's directory, as mutmut's --rootdir=. roots its runs.
             let setup = Setup {
                 python: copy.python.to_path_buf(),
                 root: copy.tree.to_path_buf(),
@@ -484,18 +489,7 @@ fn on_copy(
                 Narrowed::Not(why) => out.push(not_narrowed(&why)),
             }
         }
-        let mut given = table.clone();
-        if let (Some(name), true) = (config.file_name(), config.parent() == Some(copy.tree)) {
-            let mut also_copy = strings(&table, "also_copy");
-            also_copy.push(utf8(name.as_ref()).map_err(|e| start(&e))?);
-            set_strings(&mut given, "also_copy", also_copy);
-            config = state.join(name);
-        }
-        let mut args = strings(&table, "pytest_add_cli_args");
-        args.extend(["-c".to_string(), utf8(&config).map_err(|e| start(&e))?]);
-        args.extend(["--confcutdir".to_string(), utf8(&state).map_err(|e| start(&e))?]);
-        set_strings(&mut given, "pytest_add_cli_args", args);
-        use_mutmut_table(copy.tree, &given)?;
+        give_mutmut(copy, &table, &config)?;
         Ok(Some(table))
     })();
     let ran = set_up.and_then(|table| match table {
@@ -511,6 +505,98 @@ fn on_copy(
         Err(problem) => out.push(not_run(&problem)),
     }
     out
+}
+
+/// Puts `table`, a `[tool.mutmut]`, in place of the one in the pyproject.toml of `copy`, with what makes mutmut's
+/// pytest runs take `config`, a configuration file in the copy or beside it, with `-c`, and no conftest.py from above
+/// its state, mutants/, with `--confcutdir`. A `config` in the copy goes into mutmut's state by also_copy, and is
+/// given from there, so that paths in it, such as pythonpath, name the mutated code. Errs with the problem, a
+/// clause, when a path is not UTF-8, the directory for `config` in the state cannot be made, or the table cannot be
+/// put in place ([`use_mutmut_table`]).
+fn give_mutmut(copy: &TreeCopy, table: &Table, config: &Path) -> Result<(), String> {
+    let state = copy.state();
+    let mut given = table.clone();
+    let mut config = config.to_path_buf();
+    if let Ok(in_tree) = config.strip_prefix(copy.tree).map(Path::to_path_buf) {
+        let mut also_copy = strings(table, "also_copy");
+        also_copy.push(utf8(&in_tree).map_err(not_started)?);
+        set_strings(&mut given, "also_copy", also_copy);
+        // mutmut copies also_copy's files before the directories it copies by default, tests/ among them, and makes
+        // no directory for a file.
+        if let Some(dir) = in_tree.parent() {
+            std::fs::create_dir_all(state.join(dir)).map_err(not_started)?;
+        }
+        config = state.join(in_tree);
+    }
+    // mutmut runs pytest in mutants/ with --rootdir=. and these after its own arguments. Without -c, pytest looks
+    // for its configuration in each directory above, up to one that another account may write to when the project
+    // has none.
+    let mut args = strings(table, "pytest_add_cli_args");
+    args.extend(["-c".to_string(), utf8(&config).map_err(not_started)?]);
+    args.extend(["--confcutdir".to_string(), utf8(&state).map_err(not_started)?]);
+    set_strings(&mut given, "pytest_add_cli_args", args);
+    use_mutmut_table(copy.tree, &given)
+}
+
+/// The paths in `tree`, a copy of a tree, that pytest under mutmut starts from to find its configuration, for
+/// pytest::groups, each normalized below the top, "" for the top itself. They are the arguments of `table`'s test
+/// selection, tests_dir's among them, that name a file, a directory or a node id in the copy, else the top alone,
+/// where pytest given no path starts from; when `recorded` node ids are given, the files of those of them that lie
+/// in one of those paths take their place. An option's value that names a file, as `--ignore`'s given apart from
+/// it, cannot be told from a path, and counts as one.
+fn test_places(tree: &Path, table: &Table, recorded: Option<&BTreeSet<String>>) -> BTreeSet<OsString> {
+    let mut selected = BTreeSet::new();
+    let selection = ["pytest_add_cli_args_test_selection", "tests_dir"].map(|key| strings(table, key));
+    for arg in selection.iter().flatten().filter(|arg| !arg.starts_with('-')) {
+        let path = normpath(Path::new(arg.split("::").next().unwrap_or_default()));
+        let below = path.components().all(|part| matches!(part, std::path::Component::Normal(_)));
+        if below && tree.join(&path).exists() {
+            selected.insert(path.into_os_string());
+        } else if path == Path::new(".") {
+            selected.insert(OsString::new());
+        }
+    }
+    if selected.is_empty() {
+        selected.insert(OsString::new());
+    }
+    let Some(recorded) = recorded else { return selected };
+    let files = recorded.iter().map(|id| pytest::node_parts(OsStr::new(id)).0);
+    let mut out: BTreeSet<OsString> =
+        files.filter(|file| selected.iter().any(|place| Path::new(file).starts_with(place))).collect();
+    if out.is_empty() {
+        out.insert(OsString::new());
+    }
+    out
+}
+
+/// Why `recorded`, pytest node ids, cannot name tests as mutmut's runs in a copy of `root`, the tree, name them, from
+/// its top, a clause; None when there are none or one of them names a file of `root`. pytest names tests from its
+/// rootdir, which, unless `--rootdir` sets it, is the directory of the configuration it finds, so a run started as
+/// `pytest tests/` with a tests/pytest.ini records `test_calc.py::test_x`.
+fn rooted_elsewhere(root: &Path, recorded: &BTreeSet<String>) -> Option<String> {
+    let file = |id: &String| root.join(pytest::node_parts(OsStr::new(id)).0);
+    if recorded.is_empty() || recorded.iter().any(|id| file(id).is_file()) {
+        return None;
+    }
+    let first = recorded.first().map(|id| text::one_line(id)).unwrap_or_default();
+    Some(format!(
+        "none of the tests it records is named from the tree's top, as `{first}` is not: the pytest run that recorded \
+         them had its rootdir elsewhere, which `--rootdir` at the top avoids"
+    ))
+}
+
+/// The problem, a clause, of tests that pytest::groups puts under more than one configuration, `groups`, when mutmut
+/// runs all its tests under one.
+fn several_configurations(groups: &[pytest::Group]) -> String {
+    let named = |group: &pytest::Group| match group.inifile_in_tree() {
+        Some(inifile) => format!("`{}`", text::one_line(&text::path(inifile.as_os_str()))),
+        None => "the empty one of tests with none".into(),
+    };
+    let names: Vec<String> = groups.iter().map(named).collect();
+    format!(
+        "the tests mutmut runs take more than one pytest configuration, {}, where mutmut runs them all under one",
+        text::series(&names, None)
+    )
 }
 
 /// `path` as a `[tool.mutmut]` setting can hold it; errs, saying so, when it is not UTF-8.
@@ -621,6 +707,11 @@ fn marked(source: &[u8], ends: &[u32]) -> Vec<u8> {
     lines.join(&b'\n')
 }
 
+/// The problem, a clause, of mutmut that could not be started because of `e`, a failure to set up its run.
+fn not_started(e: impl std::fmt::Display) -> String {
+    format!("could not start mutmut: {e}")
+}
+
 /// Makes the pyproject.toml of `copy`, a copy of the tree `root` (copies::copy_tracked), a file of the copy's own
 /// where `root`'s is a symbolic link, which the copy holds as the same link: the file holds what the link names
 /// from `root`, since from the copy's place a relative link names another file or none, and written through, a link
@@ -631,12 +722,10 @@ fn own_pyproject(root: &Path, copy: &Path) -> Result<(), String> {
     if !path.is_symlink() {
         return Ok(());
     }
-    let linked = std::fs::read(root.join("pyproject.toml")).map_err(|e| {
-        format!("could not start mutmut: `pyproject.toml` is a symbolic link, and what it names cannot be read: {e}")
-    })?;
-    let start = |e: std::io::Error| format!("could not start mutmut: {e}");
-    std::fs::remove_file(&path).map_err(start)?;
-    std::fs::write(&path, linked).map_err(start)
+    let linked = std::fs::read(root.join("pyproject.toml"))
+        .map_err(|e| not_started(format!("`pyproject.toml` is a symbolic link, and what it names cannot be read: {e}")))?;
+    std::fs::remove_file(&path).map_err(not_started)?;
+    std::fs::write(&path, linked).map_err(not_started)
 }
 
 /// Puts `table` in place of the `[tool.mutmut]` of `tree`'s pyproject.toml, a file or missing ([`own_pyproject`]),
@@ -644,14 +733,13 @@ fn own_pyproject(root: &Path, copy: &Path) -> Result<(), String> {
 /// clause, when the file cannot be read or written, or the result does not read back as `table` ([`with_table`]).
 fn use_mutmut_table(tree: &Path, table: &Table) -> Result<(), String> {
     let path = tree.join("pyproject.toml");
-    let start = |e: std::io::Error| format!("could not start mutmut: {e}");
     let own = match std::fs::read_to_string(&path) {
         Ok(own) => own,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(start(e)),
+        Err(e) => return Err(not_started(e)),
     };
     let replaced = with_table(&own, table)?;
-    std::fs::write(&path, replaced).map_err(start)
+    std::fs::write(&path, replaced).map_err(not_started)
 }
 
 /// `own`, a pyproject.toml's text, with `table` as its `[tool.mutmut]`: the lines under each `[tool.mutmut]`
@@ -1093,6 +1181,32 @@ mod tests {
         assert_eq!(time_left(Instant::now()), None);
         let left = time_left(Instant::now() + stop + Duration::from_secs(20)).unwrap();
         assert!(Duration::from_secs(19) < left && left <= Duration::from_secs(20), "{left:?}");
+    }
+
+    #[test]
+    fn pytest_starts_from_the_paths_the_selection_names_in_the_copy_else_from_the_top() {
+        let tree = std::env::temp_dir().join(format!("gate-test-places-{}", std::process::id()));
+        std::fs::create_dir_all(tree.join("tests/unit")).unwrap();
+        std::fs::write(tree.join("tests/unit/test_u.py"), "").unwrap();
+        let places = |selection: &str, recorded: Option<&[&str]>| -> Vec<String> {
+            let recorded: Option<BTreeSet<String>> = recorded.map(|ids| ids.iter().map(|id| id.to_string()).collect());
+            let found = test_places(&tree, &table(selection), recorded.as_ref());
+            found.iter().map(|path| text::path(path)).collect()
+        };
+        // An option, its value, and a path outside the copy or missing from it are not among them.
+        let selection = r#"pytest_add_cli_args_test_selection = ["-m", "slow", "./tests/", "/abs", "../up", "gone"]"#;
+        assert_eq!(places(selection, None), ["tests"]);
+        let selection = r#"pytest_add_cli_args_test_selection = ["tests/unit/test_u.py::test_x"]
+                           tests_dir = ["."]"#;
+        assert_eq!(places(selection, None), ["", "tests/unit/test_u.py"]);
+        assert_eq!(places("", None), [""]);
+        // Recorded tests stand in for the selection, but for those outside the paths it names.
+        assert_eq!(places(selection, Some(&["t/test_a.py::test_x", "t/test_a.py::T::test_y"])), ["t/test_a.py"]);
+        let selection = r#"pytest_add_cli_args_test_selection = ["tests/unit"]"#;
+        let recorded = ["tests/unit/test_u.py::test_x", "tests/integration/test_i.py::test_y"];
+        assert_eq!(places(selection, Some(&recorded)), ["tests/unit/test_u.py"]);
+        assert_eq!(places(selection, Some(&recorded[1..])), [""]);
+        std::fs::remove_dir_all(&tree).unwrap();
     }
 
     #[test]

@@ -86,25 +86,99 @@ fn assertions(test: Node, spellings: &HashSet<String>, text: Text) -> Vec<Assert
     found
         .into_iter()
         .map(|node| {
-            let (mut shape, mut literals) = (vec![], vec![]);
-            tokens(node, text, &mut |token| match token {
-                Token::Open(kind) => shape.push(format!("({kind}")),
-                Token::Close => shape.push(")".into()),
-                Token::Word(word) => shape.push(word.into()),
-                Token::Literal(literal) => {
-                    shape.push("$lit".into());
-                    literals.push(literal);
-                }
-            });
+            let (shape, literals) = shape_and_literals(node, text);
             Assertion {
                 line: line(node),
                 text: on_one_line(text.of(node)),
-                shape: shape.join(" "),
+                shape,
                 literals,
                 reads: reads(node, &own, spellings, text),
             }
         })
         .collect()
+}
+
+/// The kinds of node that [`shape_and_literals`] takes for one literal when every token in them is a literal or one
+/// of [`CONSTANT_WORDS`]: a unary operator's, a parenthesized expression's, and those of a tuple, list, set or dict
+/// display.
+const CONSTANT_KINDS: [&str; 7] =
+    ["unary_operator", "parenthesized_expression", "tuple", "list", "set", "dictionary", "pair"];
+
+/// The words a node of [`CONSTANT_KINDS`] can hold and still be one literal: brackets, separators and the unary
+/// operators. Within those kinds a word is one of a unary operator's, or punctuation; a binary operator is a node of
+/// its own kind.
+const CONSTANT_WORDS: [&str; 11] = ["(", ")", "[", "]", "{", "}", ",", ":", "-", "+", "~"];
+
+/// A node whose tokens [`shape_and_literals`] is reading.
+struct Open<'t> {
+    kind: &'t str,
+    /// Where its tokens start in the shape and in the literals.
+    from: (usize, usize),
+    /// Whether all its tokens so far may make it one literal; never for a kind outside [`CONSTANT_KINDS`].
+    constant: bool,
+    /// Its tokens so far, words and literals as written, each folded node among them as its one literal; only while
+    /// `constant` holds, as they are read only then.
+    written: Vec<String>,
+}
+
+impl Open<'_> {
+    /// Adds `token`, as written, to the node's tokens, unless it can no longer be one literal.
+    fn write(&mut self, token: &str) {
+        if self.constant {
+            self.written.push(token.into());
+        }
+    }
+}
+
+/// `assertion`'s shape and its literals, as model::Assertion holds them: [`tokens`], each literal `$lit` in the shape.
+/// A value written as a constant expression is one literal, so that a change to its sign or to what holds it keeps
+/// the shape: `-5`, `("a",)`, `{"k": [1, 2]}`, each a literal of its tokens as written, spaced, but for parentheses
+/// around such a value, which change nothing and are left out of it. A node of [`CONSTANT_KINDS`] with a word other
+/// than [`CONSTANT_WORDS`] in it, or a node of another kind, such as a name or an f-string, is no such value.
+fn shape_and_literals(assertion: Node, text: Text) -> (String, Vec<String>) {
+    let (mut shape, mut literals) = (vec![], vec![]);
+    // The nodes opened and not yet closed, innermost last, below them the assertion's outside, never one literal.
+    let mut open = vec![Open { kind: "", from: (0, 0), constant: false, written: vec![] }];
+    tokens(assertion, text, &mut |token| {
+        let innermost = open.last_mut().expect("the outside is never closed");
+        match token {
+            Token::Open(kind) => {
+                let constant = CONSTANT_KINDS.contains(&kind);
+                shape.push(format!("({kind}"));
+                open.push(Open { kind, from: (shape.len() - 1, literals.len()), constant, written: vec![] });
+            }
+            Token::Word(word) => {
+                shape.push(word.into());
+                innermost.constant &= CONSTANT_WORDS.contains(&word);
+                innermost.write(word);
+            }
+            Token::Literal(literal) => {
+                shape.push("$lit".into());
+                innermost.write(&literal);
+                literals.push(literal);
+            }
+            Token::Close => {
+                shape.push(")".into());
+                let node = open.pop().expect("tokens closes only what it opened");
+                let outer = open.last_mut().expect("the outside is never closed");
+                if !node.constant {
+                    outer.constant = false;
+                    return;
+                }
+                let mut written = node.written;
+                if node.kind == "parenthesized_expression" {
+                    written.retain(|w| w != "(" && w != ")");
+                }
+                let literal = written.join(" ");
+                shape.truncate(node.from.0);
+                shape.push("$lit".into());
+                literals.truncate(node.from.1);
+                outer.write(&literal);
+                literals.push(literal);
+            }
+        }
+    });
+    (shape.join(" "), literals)
 }
 
 /// (`a`, `b`) when `node` is the attribute `a.b` of a bare name.

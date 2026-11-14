@@ -236,7 +236,7 @@ impl Walk<'_> {
             }
             "const_item" | "static_item" => self.const_or_static(node, text, assoc),
             "struct_item" | "enum_item" | "union_item" | "type_item" | "associated_type" => {
-                self.bind_name(node, text, false);
+                self.bind_name(node, text, self.trait_fixes_names());
                 self.children(node, text);
             }
             "use_as_clause" => {
@@ -295,7 +295,7 @@ impl Walk<'_> {
 
     /// Walks a `const` or `static` item, `node`, inside a holder of its name; `assoc` as [`Walk::node`] says.
     fn const_or_static(&mut self, node: Node, text: Text, assoc: bool) {
-        let name = self.bind_name(node, text, false);
+        let name = self.bind_name(node, text, self.trait_fixes_names());
         if !assoc && self.holders.iter().all(|h| matches!(h, Holder::Mod(_))) {
             let spelled = node.child_by_field_name("value").filter(|v| !has_call(*v, text));
             let constant = spelled.map(|v| Constant {
@@ -348,6 +348,12 @@ impl Walk<'_> {
         }
     }
 
+    /// Whether a trait fixes the names of the items the walk meets now ([`Binding::fixed`]): those an
+    /// `impl Trait for T` holds directly, a `fn` with its parameters, a `type` and a `const`, which the trait names.
+    fn trait_fixes_names(&self) -> bool {
+        matches!(self.holders.last(), Some(Holder::Impl { trait_: Some(_), .. }))
+    }
+
     fn inside(&mut self, holder: Holder, walk: impl FnOnce(&mut Self)) {
         self.holders.push(holder);
         walk(self);
@@ -396,8 +402,7 @@ impl Walk<'_> {
         let (attrs_line, attrs) = outer_attributes(node, text, self.lines);
         let top = !self.holders.iter().any(|h| matches!(h, Holder::Fn(_)));
         let flow = body.filter(|_| top).map(|b| flow(b, text, self.parser));
-        // A trait fixes the name and the parameters of the fns implementing it.
-        let fixed = matches!(self.holders.last(), Some(Holder::Impl { trait_: Some(_), .. }));
+        let fixed = self.trait_fixes_names();
         let name = self.bind_name(node, text, fixed);
         if let Some(params) = node.child_by_field_name("parameters") {
             for param in named(params).into_iter().filter(|p| p.kind() == "parameter") {

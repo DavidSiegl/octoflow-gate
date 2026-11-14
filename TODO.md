@@ -8,6 +8,18 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
 
 ## Open issues
 
+- **surviving-mutants takes an option's value given apart from it for a path of the test selection.** As
+  cross-review 33 put it (F3, 2026-11-13): "an option's value counts as a path:
+  `pytest_add_cli_args_test_selection = ["tests/", "--ignore", "tests/legacy"]` with `tests/legacy/pytest.ini` gives
+  two groups and `not-run`." `test_places` (`crates/gate/src/python_mutants.rs`) cannot tell which of pytest's
+  options take a value. docs/quality-gate.md says so. Closes by asking pytest for the paths it starts from, or by
+  skipping the value of the options that take one, as `--ignore`, `--deselect` and `-k`.
+- **Rust and Go `expected-value-changed` keep a literal's sign and brackets out of the literal.** As cross-review 33
+  put it (F6, 2026-11-13): "`blank_literals` pushes `-` as a token of the shape, so `assert_eq!(f(), -5)` becoming
+  `assert_eq!(f(), 5)` beside a code change changes the shape. The assertions do not pair, and there is no finding."
+  todo/10 closed this for Python alone (`shape_and_literals`, `crates/lang-python/src/testing.rs`). Closes by folding
+  a value of literals alone into one literal in `blank_literals` (`crates/lang-rust/src/syntax.rs`) and its Go
+  counterpart (`crates/lang-go/src/testing.rs`), as the Python front end does.
 - **The gate reads an XML report only in UTF-8, or in UTF-16 that opens with a byte-order mark.** As cross-review 09 put
   it (F21, 2026-11-07): "Without a UTF-16 byte-order mark, `report_format` takes every report as UTF-8: one that
   declares another encoding (`<?xml version='1.0' encoding='ISO-8859-1'?>` and a byte such as `E9` in a path) fails

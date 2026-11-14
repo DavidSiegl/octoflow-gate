@@ -12,7 +12,7 @@ use crate::flaky_tests::flaky_tests;
 use crate::linters::{tracked_from, Linter, LINTERS};
 use crate::mutants::surviving_mutants;
 use crate::parser_checks::{
-    dependency_cycles, duplicated_blocks, too_complex, vague_names, weakened_tests, Sources,
+    dependency_cycles, duplicated_blocks, too_complex, vague_names, weakened_tests, RustChange, Sources,
 };
 use crate::passes_at_base::passes_at_base;
 use crate::process::tool_env;
@@ -135,7 +135,8 @@ pub fn under_mutmut_state(path: &OsStr) -> bool {
 /// (suppressions::stray_line_ends); when a check beside the linters ([`judge_checks`]) has a finding of severity
 /// "error", each of which is listed beside the linters' while the others are listed to weigh; when a test fails, or a
 /// test command's tests could not be judged; or when the coverage reports put new code below the minimum
-/// (coverage::NewCoverage::condition). The tests are those test_commands::test_results gives, run before the
+/// (coverage::NewCoverage::condition), new code being the lines the change added but Rust test code's
+/// ([`lines_to_cover`]). The tests are those test_commands::test_results gives, run before the
 /// linters. Suppressions the change added are listed, not counted against it.
 ///
 /// Errs when it cannot judge: `cwd` is not in a git work tree, `base` names no commit, the settings cannot be read
@@ -189,13 +190,17 @@ pub fn judge_change(cwd: &Path, base: &str, given: &Given) -> Result<QualityRepo
     );
     let test_contexts = given.test_contexts.as_deref().map(crate::paths::abs_path);
     let mutmut = Mutmut { rules, test_contexts: test_contexts.as_deref() };
-    let to_weigh = judge_checks(&change, &mutmut, budgets, &mut conditions, &mut issues)?;
+    let sources = Sources::read(&change)?;
+    let to_weigh = judge_checks(&sources, &mutmut, budgets, &mut conditions, &mut issues)?;
 
     conditions.extend(tests.problems);
     if let Some(failing) = tests.failing.as_ref().filter(|failing| !failing.is_empty()) {
         conditions.push(format!("{} tests fail; each is listed below.", failing.len()));
     }
-    let coverage = if tests.coverage.is_empty() { None } else { Some(new_coverage(&tests.coverage, &root, changed)?) };
+    let coverage = match tests.coverage.is_empty() {
+        true => None,
+        false => Some(new_coverage(&tests.coverage, &root, &lines_to_cover(&sources.rust))?),
+    };
     conditions.extend(coverage.as_ref().and_then(|c| c.condition()));
     let touched = touched_paths(&change.diff, changed);
 
@@ -221,25 +226,24 @@ pub fn judge_change(cwd: &Path, base: &str, given: &Given) -> Result<QualityRepo
 /// dependency-cycles, duplicated-blocks, flaky-tests, surviving-mutants and passes-at-base, the last two's runs within
 /// the seconds `budgets` gives, (mutation, base run), mutmut set up as `mutmut` says, and vague-names. Appends to
 /// `conditions` a failed condition for each check with findings of severity "error", in that order, and to `issues`
-/// those findings; returns the others, to weigh. Errs as [`Sources::read`], [`dependency_cycles`] and
-/// [`duplicated_blocks`] do, having appended nothing.
+/// those findings; returns the others, to weigh. Errs as [`dependency_cycles`] and [`duplicated_blocks`] do, having
+/// appended nothing.
 fn judge_checks(
-    change: &Change,
+    sources: &Sources,
     mutmut: &Mutmut,
     (mutation_budget, base_run_budget): (u64, u64),
     conditions: &mut Vec<String>,
     issues: &mut Vec<Finding>,
 ) -> Result<Vec<Finding>, Unjudged> {
-    let sources = Sources::read(change)?;
     let found = [
-        weakened_tests(&sources),
-        too_complex(&sources),
-        dependency_cycles(&sources)?,
-        duplicated_blocks(&sources)?,
+        weakened_tests(sources),
+        too_complex(sources),
+        dependency_cycles(sources)?,
+        duplicated_blocks(sources)?,
         named("flaky-tests", flaky_tests(&sources.python)),
-        named("surviving-mutants", surviving_mutants(&sources, mutmut, mutation_budget)),
-        named("passes-at-base", passes_at_base(&sources, base_run_budget)),
-        vague_names(&sources),
+        named("surviving-mutants", surviving_mutants(sources, mutmut, mutation_budget)),
+        named("passes-at-base", passes_at_base(sources, base_run_budget)),
+        vague_names(sources),
     ];
     let mut to_weigh = vec![];
     for found in found {
@@ -251,6 +255,23 @@ fn judge_checks(
         to_weigh.extend(weighed);
     }
     Ok(to_weigh)
+}
+
+/// The lines the change added that its coverage is judged on: all but those of Rust test code in the working tree, as
+/// its front end reads it (model::SourceFile::test_lines), a `#[cfg(test)]` item or a file among the tests whole. A
+/// passing test runs its own lines, so they would cover the code it lacks tests of. A file the front end could not
+/// read keeps every line, unless the project's settings place it among the tests (checks::Side::among_tests).
+fn lines_to_cover(rust: &RustChange) -> ChangedLines {
+    let mut out = rust.change.changed.clone();
+    for side in rust.files.iter().filter_map(|f| f.after.as_ref()) {
+        let Some(added) = out.get_mut(&side.path) else { continue };
+        match &side.source {
+            Ok(source) => added.retain(|&n| !source.test_lines.iter().any(|l| l.holds(n))),
+            Err(_) if side.among_tests => added.clear(),
+            Err(_) => {}
+        }
+    }
+    out
 }
 
 /// `findings` of the check named `check`, as its find gives them (copies::finding), with the check's name before

@@ -34,8 +34,8 @@ use syntax::{Fn, Holder, Items, Text};
 /// - a weakening is a skipping attribute (skips.rs), a `#[should_panic]` without `expected` on a test, or a value
 ///   thrown away by `let _ =`, `_ =` or `.ok()` in a `fn` among the test code that holds an assertion it calls or a
 ///   `catch_unwind`;
-/// - a binding is a name a `fn`, a parameter, a pattern, an item or a `use ... as` binds, the name and parameters of a
-///   `fn` of an `impl Trait for T` fixed by the trait.
+/// - a binding is a name a `fn`, a parameter, a pattern, an item or a `use ... as` binds; the name and parameters of a
+///   `fn`, and the name of a `type` or a `const`, that an `impl Trait for T` holds are fixed by the trait.
 ///
 /// Errs when `source` is not UTF-8, or does not parse as Rust, at the line of the first token tree-sitter could not
 /// place.

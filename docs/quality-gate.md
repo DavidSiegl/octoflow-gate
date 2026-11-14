@@ -133,10 +133,12 @@ change cannot weaken its tests unseen. Each of these is a finding:
 - `swallowed-error`: a bare `except:`, or an `except Exception:` that does nothing, on an added line;
 - `expected-value-changed`: an assertion whose literals changed while the rest of it stayed, in a change that also
   edits code outside the tests, which is Python source as **Passes at base** below counts it, on either side of the
-  change: the "update the expected value to match the output" move. The finding names the
-  assertion before and after. An expected value held in a constant counts too: when a kept test's assertions name a
-  constant of its own file at the base and still name it, bare or as `module.NAME` (the module by its dotted name or a
-  module-level import alias of it), and the constant's expression changed other than in layout, or it is no longer a
+  change: the "update the expected value to match the output" move. A value written of literals alone is one
+  literal, its sign and its brackets with it, so `-5` becoming `5` and `("a",)` becoming `"a"` count; parentheses
+  around such a value change nothing. The finding names the assertion before and after. An expected value held in a
+  constant counts too: when a kept test's assertions name a constant of its own file at the base and still name it,
+  bare or as `module.NAME` (the module by its dotted name or a module-level import alias of it), and the constant's
+  expression changed other than in layout, or it is no longer a
   constant, that is one finding per constant and test, at the test's first assertion naming it, naming the constant
   and its line. A constant whose name the test binds anywhere, even by a binding that does nothing (`global NAME`, a
   comprehension target, a lambda parameter), is not checked, so such a line hides an edited constant; a reviewer
@@ -488,11 +490,16 @@ header, and mutmut skips it. The rules' `[tool.mutmut]` says what can be mutated
 (`also_copy`), and which lines are left alone (`do_not_mutate_patterns`); see [whose rules judge a
 change](#whose-rules-judge-a-change). Python files are decoded by a byte order mark or a coding cookie, as [reading the
 source](#reading-the-source) says. mutmut runs pytest in the copy's `mutants/`, where it puts the mutated code.
-Its runs get, with `-c`, the configuration of the copy's top directory, in the order the reruns look in a directory: the
-project's own, which `also_copy` puts in `mutants/` so that paths in it, such as `pythonpath`, name the mutated code, or
-an empty one; and `--confcutdir` is `mutants/`. Both are added to the table's `pytest_add_cli_args`, so these runs too
-read no `pytest.ini` or `conftest.py` from above the copy. Where the project's Python has no mutmut, or the settings
-have no `pyproject.toml` beside them, a change to a function gets a `not-run` finding.
+Its runs get, with `-c`, the configuration of the tests mutmut runs, found as the reruns find a test file's: from each
+path the test selection (`pytest_add_cli_args_test_selection` and `tests_dir`) names, a directory looked up from itself,
+or from the copy's top when it names none; or, with `--test-contexts` (see below), from the files of the tests it
+records under those paths. An option's value given apart from it, as `--ignore tests/legacy`, counts as a path. That is
+the project's own, which `also_copy` puts in
+`mutants/` so that paths in it, such as `pythonpath`, name the mutated code, or an empty one; and `--confcutdir` is
+`mutants/`. Both are added to the table's `pytest_add_cli_args`, so these runs too read no `pytest.ini` or `conftest.py`
+from above the copy. mutmut takes one configuration for all its runs, so tests under more than one get a `not-run`
+finding, as does a change to a function where the project's Python has no mutmut, or the settings have no
+`pyproject.toml` beside them.
 
 **Which tests mutmut runs.** Before it tries a mutant, mutmut runs its whole test selection three times: to find which
 tests call each function, to check that they pass, and once more with `-x` until the first test that calls a mutated
@@ -504,7 +511,9 @@ function. Over a large suite, those runs alone can take longer than the budget. 
   runs get, so pytest itself applies their paths, `--ignore`, `--deselect` and the rest.
 
 A project's pytest `[[test]]` command writes the file, by default `.coverage`, when it runs with pytest-cov's
-`--cov-context=test`, and whoever starts the gate passes it.
+`--cov-context=test`, and whoever starts the gate passes it. pytest names the tests from its rootdir, which must be the
+tree's top, as it is for mutmut's runs: a command such as `pytest tests/` that finds a configuration in `tests/` roots
+them there unless it is given `--rootdir=.`.
 mutmut then runs those tests three times. For octoflow's PR #113, 253 mutants of 7 functions of its Python engine, that
 is 312 tests of 1351, and mutmut took 77 seconds instead of 709 on the build host, with the same verdicts, mutant by
 mutant. The cost grows with the tests that reach the change, not with the suite: a change to a function nearly every
@@ -516,9 +525,10 @@ The file must hold the run's contexts as pytest-cov writes them (`<node id>|run`
 coverage's C tracer: `[tool.coverage.run] core = "ctrace"` in `pyproject.toml`. Under Python 3.14, coverage's default
 core, `sys.monitoring`, records each line for only the first few tests to run it, so mutmut would miss tests that kill
 its mutants and report them as survivors. Any of these makes a `not-narrowed` finding, and mutmut runs the whole
-selection: the file cannot be read, holds no test's context, or does not measure a changed function's file; no line in
-it is recorded for at least a tenth of the tests it records, as that core writes it; or pytest's collection of the
-selection fails or does not finish. Without `--test-contexts`, as in a local run, mutmut runs the whole selection.
+selection: the file cannot be read, holds no test's context, names none of its tests from the tree's top, or does not
+measure a changed function's file; no line in it is recorded for at least a tenth of the tests it records, as that
+core writes it; or pytest's collection of the selection fails or does not finish. Without `--test-contexts`, as in a
+local run, mutmut runs the whole selection.
 Tests that reach a function only in a subprocess count neither in mutmut's own record nor in the file.
 
 `--mutation-budget SECONDS`, else the settings' `budgets.mutation`, 600 by default, bounds mutmut's run. Stopping it
@@ -676,8 +686,9 @@ counts where a line the change adds to a `.rs` file binds it, by any kind of bin
 underscore rule is a name whose last CamelCase word is one of the words, such as `RunInfo`, `StateManager` or
 `HTTPStatus`, but not `InfoStore`. A constant in capitals, as MAX_VALUE, ends in a word after an underscore, so the
 Python rule catches it. The name and parameters of each `fn` of an `impl Trait for T` are skipped, as `@override` is
-in Python, since the trait fixes them; what such a `fn`'s body binds is still read, as is every `fn` of an inherent
-`impl`. A `.rs` file that does not parse is a `not-read` finding at the line the parser stopped at.
+in Python, since the trait fixes them, and so is the name of each `type` and `const` it holds, as serde's `type Value`;
+what such a `fn`'s body binds is still read, as is every item of an inherent `impl`. A `.rs` file that does not parse
+is a `not-read` finding at the line the parser stopped at.
 
 Go is read the same way, in a Go module's `.go` files, tests included, with Rust's CamelCase rule, since Go names in
 MixedCaps (`runInfo`, `StateManager`): a name counts where an added line binds it by `:=` (in a statement, an
@@ -789,10 +800,10 @@ cargo llvm-cov nextest --locked --workspace --exclude xtask --ignore-run-fail --
 ```
 
 - **What it measures** is lines, not branches: branch coverage of Rust needs a nightly compiler. Each line of the
-  workspace's own crates that the compiler maps to code counts, the dependencies' do not. That includes the lines of
-  a `#[cfg(test)]` module: the tests'
-  own lines count as covered when they run, so they raise a change's coverage that adds both a function and its tests
-  (#50).
+  workspace's own crates that the compiler maps to code counts, the dependencies' do not. The report lists the lines
+  of test code too, which run whenever its tests pass; the gate leaves out those of each `#[cfg(test)]` item, as a
+  module, a fn or an impl, and of each file among the tests, so a change that adds a function and a test of it is
+  judged on the function alone (#50).
 - **Paths.** cargo-llvm-cov names each file relative to the workspace's directory, which it gives as the report's
   `<source>`, as an absolute path, so the gate reads `src/main.rs` of a workspace in `engine/` as
   `engine/src/main.rs`, as long as the report was written in the tree the gate judges; an absolute path stands as it

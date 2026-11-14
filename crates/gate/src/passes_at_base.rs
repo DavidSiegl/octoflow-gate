@@ -137,12 +137,12 @@ fn changed_tests(rust: &RustChange) -> (Vec<ChangedTest>, Vec<Finding>) {
 }
 
 /// Whether the change touches a test that spans `lines` in the working tree, by adding one of them (`added`) or
-/// removing lines at one of the `removal_points` from just above its first line, as an `#[ignore]` taken off its
-/// top, to just below its last. A removal just below its last line should not count, and does until #57: a test
-/// whose neighbour below it is deleted is run at the base.
+/// removing lines at one of the `removal_points` (diff::removal_points) from just above its first line, as an
+/// `#[ignore]` taken off its top, to just above its last. A removal after its last line, the `}`, is below the test,
+/// as a deleted neighbour's is, and does not count.
 fn touches(lines: Lines, added: &BTreeSet<u32>, removal_points: &BTreeSet<u32>) -> bool {
     added.iter().any(|&n| lines.holds(n))
-        || removal_points.iter().any(|&n| lines.first.saturating_sub(1) <= n && n <= lines.last)
+        || removal_points.iter().any(|&n| lines.first.saturating_sub(1) <= n && n < lines.last)
 }
 
 /// The `not-run` finding on `file`, which the change edits and leaves as `after`, unreadable for `unreadable`'s

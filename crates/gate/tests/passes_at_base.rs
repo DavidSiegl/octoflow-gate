@@ -494,7 +494,7 @@ fn a_test_is_changed_by_a_line_the_change_adds_or_removes_from_its_attributes_to
     for (name, base, after, judged) in [
         // No two in a row share a base, which each commits.
         ("its attribute edited", test.to_string(), test.replace("#[test]", "#[test] // run"), true),
-        ("a line removed right after it", format!("{test}// tail\n"), test.to_string(), true),
+        ("the test right after it removed", format!("{test}#[test]\nfn gone() {{}}\n"), test.to_string(), false),
         ("its last line edited", test.to_string(), test.replace("3); }", "3);  }"), true),
         ("a line removed above the line above it", format!("// a\n// b\n{test}"), format!("// b\n{test}"), false),
     ] {

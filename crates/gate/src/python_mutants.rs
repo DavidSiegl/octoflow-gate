@@ -22,11 +22,10 @@ use serde_json::{json, Value};
 use toml::Table;
 
 use crate::copies::{copy_tracked, finding, in_scratch_directory};
-use crate::git;
 use crate::glob::fnmatch;
 use crate::judge::MUTMUT_STATE;
 use crate::mutants::{KILL_WAIT, STOP_GRACE, SURVIVOR_EXAMPLES};
-use crate::parser_checks::{python_test, PythonChange};
+use crate::parser_checks::{python_test, regular_files_at_base, PythonChange};
 use crate::paths::{normpath, real_path};
 use crate::process::{self, run_with, Extras, Finished};
 use crate::pytest::{self, truthy, Setup};
@@ -84,15 +83,15 @@ pub struct Mutmut<'a> {
 /// its name, and each severity "warning".
 ///
 /// Mutation-tests with mutmut each top-level function and method of a top-level class (lang_python::Unit) that the
-/// change adds lines to, decorators included, or removes lines from, in a Python file outside the tests that it
-/// leaves a regular file in the working tree. Lines removed right after a function's last line count too, though
-/// they may have been the blank lines below it; comments and blank lines above its first decorator do not, since
-/// they change nothing mutmut mutates. Nor does a function whose file's base has one of its name with the same code,
-/// its decorators, parameters, defaults, annotations and body, and the same mutmut pragmas, whatever its other
-/// comments and layout ([`edited`]): an edit to those alone changes nothing mutmut mutates, while one to its
-/// signature alone can change what its body does, and one to a pragma which of its lines mutmut mutates. Reports at its def each such function with mutants its tests did not notice
-/// (`survived`), with how many of the mutants tried they were and what the first mutants::SURVIVOR_EXAMPLES change,
-/// as a line before and after; and each one no test calls (`untested`).
+/// change adds lines to, decorators included, or removes lines from, in a Python file outside the tests that it leaves
+/// a regular file in the working tree. Lines removed right after a function's last line count too, though they may have
+/// been the blank lines below it; comments and blank lines above its first decorator do not, since they change nothing
+/// mutmut mutates. Nor does a function whose file's base has one of its name with the same code, its decorators,
+/// parameters, defaults, annotations and body, and the same mutmut pragmas, whatever its other comments and layout
+/// ([`edited`]): an edit to those alone changes nothing mutmut mutates, while one to its signature alone can change
+/// what its body does, and one to a pragma which of its lines mutmut mutates. Reports at its def each such function
+/// with mutants its tests did not notice (`survived`), with how many of the mutants tried they were and what the first
+/// mutants::SURVIVOR_EXAMPLES change, as a line before and after; and each one no test calls (`untested`).
 ///
 /// mutmut runs by the project's Python (judge::Change::python) on a copy of the files git tracks, without what the
 /// tree tracks under mutmut's state, so it starts without a cache. It runs there by the `[tool.mutmut]` of
@@ -133,12 +132,24 @@ pub fn python_mutants(python: &PythonChange, mutmut: &Mutmut, seconds: u64) -> V
 /// Those of `units`, each with its file's path as PythonChange::changed_units gives them, whose code the change
 /// edited, in the same order: all but a unit whose file's base has a unit of its name with the same code
 /// (lang_python::Unit::code) and the same [`pragma_lines`], which only the unit's other comments and its layout can
-/// have changed, as nothing mutmut mutates does. A file whose base cannot be read or parsed, or that has none, has every unit edited.
+/// have changed, as nothing mutmut mutates does. A file whose base is no regular file, or cannot be read or parsed, or
+/// that has none, has every unit edited.
 fn edited(python: &PythonChange, units: Vec<(OsString, Unit)>) -> Vec<Function> {
+    let before = |path: &OsStr| {
+        let file = python.files.iter().find(|f| f.after.as_ref().is_some_and(|after| after.path == path));
+        file.and_then(|f| f.before.as_ref()).map(|before| before.path.clone())
+    };
+    let befores: BTreeSet<OsString> = units.iter().filter_map(|(path, _)| before(path)).collect();
+    let befores: Vec<OsString> = befores.into_iter().collect();
+    let sources = regular_files_at_base(python.change, &befores).unwrap_or_default();
+    let base_units = |path: &OsStr| {
+        let source = before(path).and_then(|before| sources.get(&before));
+        source.and_then(|source| lang_python::units(source).ok()).unwrap_or_default()
+    };
     let mut bases: HashMap<OsString, Vec<Unit>> = HashMap::new();
     let mut out = vec![];
     for (path, unit) in units {
-        let base = bases.entry(path.clone()).or_insert_with(|| base_units(python, &path));
+        let base = bases.entry(path.clone()).or_insert_with(|| base_units(&path));
         let same = |b: &Unit| b.name == unit.name && b.code == unit.code && pragma_lines(b) == pragma_lines(&unit);
         if !base.iter().any(same) {
             out.push(Function { path, unit });
@@ -151,17 +162,6 @@ fn edited(python: &PythonChange, units: Vec<(OsString, Unit)>) -> Vec<Function> 
 /// which of its lines mutmut mutates. A pragma moved to another line, or its line edited, changes them.
 fn pragma_lines(unit: &Unit) -> Vec<&str> {
     unit.source.iter().map(|line| line.trim()).filter(|line| mutmut_pragma(line).is_some()).collect()
-}
-
-/// The units of the base side of the file whose working-tree path is `path` in `python`'s change, read from git;
-/// none where the file has no base side or it cannot be read or parsed as Python.
-fn base_units(python: &PythonChange, path: &OsStr) -> Vec<Unit> {
-    let file = python.files.iter().find(|f| f.after.as_ref().is_some_and(|after| after.path == path));
-    let Some(before) = file.and_then(|f| f.before.as_ref()) else { return vec![] };
-    let mut spec = OsString::from(format!("{}:", python.change.base));
-    spec.push(&before.path);
-    let blob = git::output(&python.change.root, &[OsStr::new("cat-file"), OsStr::new("blob"), &spec]);
-    blob.ok().and_then(|source| lang_python::units(&source).ok()).unwrap_or_default()
 }
 
 /// A function the change touched, the unit mutmut mutates.

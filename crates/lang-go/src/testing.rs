@@ -37,8 +37,10 @@ const TESTIFY: &[&str] = &["github.com/stretchr/testify/assert", "github.com/str
 ///   it holds: its text the `if` to the end of its block, and its literals and shape those of its initializer and
 ///   condition and of those calls, so that `if got != 3 { t.Errorf(...) }` changing its 3 is a changed expected
 ///   value. A call, by its name, of a helper of the file, as `check(t, Add(1, 2), 3)`, with such a variable among its
-///   arguments, is one too, its literals the call's: a helper is a top-level function that holds such a failing call
-///   or a testify assertion outside any test, or calls another helper so. A literal is a number, a rune or a string.
+///   arguments, is one too where it is a statement of its own, its literals the call's, so not a fixture's whose
+///   result is used, as `srv := newServer(t, ":8080")`: a helper is a top-level function that holds such a failing
+///   call or a testify assertion outside any test, or calls another helper so. A literal is a number, a rune or a
+///   string.
 /// - A table of cases in its body, a composite literal that a `for … range` in the same top-level function ranges
 ///   over, written there or by a name a `:=` or a `var` there binds to it, as `[]struct{ in, want int }{{in: 2, want:
 ///   4}}`, holds its expected values: each of its elements written in braces of their own, its key with it in a
@@ -363,9 +365,11 @@ impl<'t> Walk<'t> {
         }
     }
 
-    /// The name of the function a call, `node`, calls by its name with a testing variable in scope among its
-    /// arguments, as a helper is called; None for any other call.
+    /// The name of the function a call, `node`, a statement of its own, calls by its name with a testing variable in
+    /// scope among its arguments, as a helper is called; None for any other call, as one whose result is used, as a
+    /// fixture's is.
     fn passing_testing(&self, node: Node<'t>) -> Option<&'t str> {
+        node.parent().filter(|p| p.kind() == "expression_statement")?;
         let callee = node.child_by_field_name("function").filter(|f| f.kind() == "identifier")?;
         let args = node.child_by_field_name("arguments").map(named).unwrap_or_default();
         let passed = |a: &Node| a.kind() == "identifier" && self.scope.contains(&self.text.of(*a));

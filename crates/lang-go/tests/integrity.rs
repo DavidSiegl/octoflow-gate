@@ -186,7 +186,7 @@ func TestAdd(t *testing.T) {
 }
 
 /// Tests that assert through helpers of the file: `check` fails its test itself, `checkAll` through `check2`, `log`
-/// fails nothing, and `t.Run`'s literal passes its own `t` on.
+/// fails nothing, `t.Run`'s literal passes its own `t` on, and `newServer`, a fixture whose result is used, sets up.
 const HELPER_TEST: &str = r#"package calc
 
 import "testing"
@@ -199,6 +199,15 @@ func TestAdd(t *testing.T) {
 		check(t, Add(-1, -1), -2)
 	})
 	other(Add(1, 1), 2)
+	srv := newServer(t, ":8080")
+	other(srv, 1)
+}
+
+func newServer(t *testing.T, addr string) int {
+	if addr == "" {
+		t.Fatal("no address")
+	}
+	return 1
 }
 
 func check(t *testing.T, got, want int) {

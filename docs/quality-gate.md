@@ -546,27 +546,30 @@ skips every expression that starts on a matching line, with all it holds, so a t
 so is a whole `add_argument(...)` or `add_parser(...)` call that starts on its `help=` or `description=` line. A change
 to such a text alone makes no mutant. Flag names that start a line of their own are still mutated.
 
-**Rust's mutants.** After mutmut, with what is left of the one `--mutation-budget`, the check mutation-tests the Rust a
-change adds lines to outside the tests (a `.rs` file of a Cargo package, as for test integrity) with
-[cargo-mutants](https://mutants.rs/). The languages share the one budget in turn, Python, Rust, then Go (below): each
-has an equal share of what those before it left, among itself and the languages after it that have something to
-mutate, so it also takes whatever an earlier one left unused. With Python and Rust to mutate, mutmut gets half the
-budget and cargo-mutants the rest; with Go as well, mutmut a third, cargo-mutants half of what is left and gremlins the
-rest; a change with no Python functions to mutate gives cargo-mutants all of it, or half with Go to mutate. A
-`budget-reached` finding names the seconds of the share its tool was stopped at.
-cargo-mutants chooses what to mutate itself: it runs `--in-diff` with the change's diff of the workspace's `.rs` files,
-which mutates only what the added lines hold, `--in-place` in the gate's copy of the files git tracks, once per Cargo
-workspace (that of the nearest `Cargo.toml` above the file, as `cargo locate-project` tells it), with `--test-tool
-nextest` and `--timeout 60` for each mutant's tests. Its outcomes, from `mutants.out/outcomes.json`, count as mutmut's
-do: a missed mutant survived; a caught one, and a timeout, did not; an unviable one, which does not build, was not
-tried. Added lines with nothing to mutate, such as a `use` or a `const`, give nothing. The findings are mutmut's kinds:
+**Rust's mutants.** After mutmut, with what is left of the one `--mutation-budget`, the check mutation-tests the Rust
+functions a change edits outside the tests with [cargo-mutants](https://mutants.rs/): a `fn` with a body, from its `fn`
+line to its closing brace, that the change adds a line to or removes lines from, as Python's are chosen, outside test
+code in a `.rs` file of a Cargo package that is not among the tests (as for test integrity). A file the gate cannot
+parse is a `not-run` finding, its functions not mutated. The languages share the one budget in turn, Python, Rust,
+then Go (below): each has an equal share of what those before it left, among itself and the languages after it that
+have something to mutate, so it also takes whatever an earlier one left unused. With Python and Rust to mutate, mutmut
+gets half the budget and cargo-mutants the rest; with Go as well, mutmut a third, cargo-mutants half of what is left and
+gremlins the rest; a change with no Python functions to mutate gives cargo-mutants all of it, or half with Go to mutate.
+A `budget-reached` finding names the seconds of the share its tool was stopped at.
+cargo-mutants mutates only those functions, given as one `--re` each that matches its mutants by their file and line
+(`^src/lib\.rs:(?:5|6|7):`), `--in-place` in the gate's copy of the files git tracks, once per Cargo workspace (that
+of the nearest `Cargo.toml` above the file, as `cargo locate-project` tells it), with `--test-tool nextest` and
+`--timeout 60` for each mutant's tests. Its outcomes, from `mutants.out/outcomes.json`, count as mutmut's do: a missed
+mutant survived; a caught one, and a timeout, did not; an unviable one, which does not build, was not tried. A change
+outside functions, such as to a `use` or a `const`, gives nothing. The findings are mutmut's kinds:
 
 - `survived`: a function with missed mutants, at the line its `fn` starts, with how many of its tried mutants survived
   and the first three, each by its line and cargo-mutants' description, such as `replace > with == in unchecked`;
 - `budget-reached`: the budget ran out, before cargo-mutants started (it needs the 15 seconds of its stop, as mutmut
   does) or while it ran, with how many mutants it had tried; the workspaces after it are `not-run`;
 - `not-run`: cargo-mutants could not start, wrote no outcomes the gate can read, or found the unmutated baseline not
-  passing, as for tests that fail or code that does not build in the copy; or the copy could not be made;
+  passing, as for tests that fail or code that does not build in the copy; the copy could not be made; or a changed
+  `.rs` file could not be parsed;
 - `not-mutated`: a changed `.rs` file with no `Cargo.toml` above it, or one whose workspace cargo cannot tell;
 - `not-removed`: the copy could not be removed afterwards; the findings stand.
 

@@ -143,11 +143,12 @@ pub fn failed(what: &str, path: &Path, e: &std::io::Error) -> String {
 /// and no file is written or removed through one: a link on the way to a replaced file is replaced by a directory, as
 /// the working tree has one there. A submodule holds the files of the commit the base records for it, as
 /// [`unpack_commit`] writes them, unless `beside` accepts its path: then it holds those of the commit its checkout in
-/// the working tree is at, without what that checkout holds that git does not track there.
+/// the working tree is at, without what that checkout holds that git does not track there, and is left empty when the
+/// working tree has no checkout of it.
 ///
 /// Gives back the submodules left empty, as [`unpack_commit`] does, of the base's and of those taken from the working
-/// tree. Errs, a clause, when git cannot list or write a
-/// commit, `tar` cannot unpack it, `dest` exists or a file cannot be written.
+/// tree. Errs, a clause, when git cannot list or write a commit, `tar` cannot unpack it, `dest` exists or a file cannot
+/// be written.
 pub fn copy_base_with_tests(
     change: &Change,
     dest: &Path,
@@ -164,17 +165,21 @@ pub fn copy_base_with_tests(
     }
     for new in change.files.iter().filter_map(|f| f.after.as_ref()).filter(|p| beside(p)) {
         let src = change.root.join(new);
-        if src.symlink_metadata().is_err() {
-            continue;
-        }
+        let Ok(meta) = src.symlink_metadata() else { continue };
         let dst = unlinked_path(dest, new)?;
         // A directory the base had where the change has a file or a link: emptied by the removals above, or not.
         remove_entry(&dst)?;
-        // A path the change records a commit at is a submodule's checkout, whose own `.git` would lead nowhere in the
-        // copy: it is written as the files of that commit.
-        if src.join(".git").symlink_metadata().is_ok() {
+        // git tracks files, links and commits, so a directory, not a link to one, is where the change records a
+        // submodule's commit. Its checkout's own `.git` would lead nowhere in the copy: it is written as the files of
+        // the commit the checkout is at.
+        if meta.is_dir() {
             std::fs::create_dir(&dst).map_err(|e| failed("make", &dst, &e))?;
-            empty.extend(unpack_commit(&src, "HEAD", &dst, archive, &format!("{}/", text::path(new)))?);
+            let name = text::path(new);
+            if src.join(".git").symlink_metadata().is_ok() {
+                empty.extend(unpack_commit(&src, "HEAD", &dst, archive, &format!("{name}/"))?);
+            } else {
+                empty.push((name, NOT_INITIALISED.to_string()));
+            }
         } else {
             copy(&src, &dst)?;
         }
@@ -192,6 +197,9 @@ fn remove_entry(path: &Path) -> Result<(), String> {
     }
     .map_err(|e| failed("remove", path, &e))
 }
+
+/// Why a submodule is left empty when the working tree has no checkout of it.
+const NOT_INITIALISED: &str = "which is not initialised in the working tree";
 
 /// Writes the files git tracked at `commit` in the repository whose working tree's top is `repo` to `dest`, an
 /// existing directory, through a tar file at `archive`, which it overwrites; then fills each submodule's directory
@@ -245,7 +253,7 @@ fn unpack_commit(
         // finds the superproject above it, and names the directory as a prefix within it.
         let own = git::run(&sub, &["rev-parse", "--show-prefix"]).map_err(|Unjudged(e)| e)?;
         if own.status != 0 || own.stdout.iter().any(|&b| b != b'\n') {
-            empty.push((name, "which is not initialised in the working tree".to_string()));
+            empty.push((name, NOT_INITIALISED.to_string()));
         } else if git::run(&sub, &["cat-file", "-e", &format!("{recorded}^{{commit}}")])
             .map_err(|Unjudged(e)| e)?
             .status

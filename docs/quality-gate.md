@@ -278,11 +278,11 @@ edits with gremlins (**Go's mutants**, below). The flaky-tests and passes-at-bas
 
 **Cognitive complexity** scores the functions the change edits, so that a change cannot pile branches into the function
 it is editing rather than split it. A function counts when the change adds a line to it, decorators included, in a
-Python file, a `.py` file or a script whose `#!` line names python (a first line `#![`, spaces allowed before the `[`,
-is a Rust inner attribute, no `#!` line), outside the files the settings exempt, by default `tests/`: any function that
-no other function holds, a method of a nested class and a function under a module-level `if` or `try` included. A
-function nested in another is part of that one. Files are decoded by their byte order mark or coding cookie, as
-[reading the source](#reading-the-source) says. Its score is G. Ann Campbell's [cognitive
+Python file, a `.py` file or a script whose `#!` line names python (a first line `#![`, whitespace allowed before the
+`[`, is a Rust inner attribute, no `#!` line), outside the files the settings exempt, by default `tests/`: any function
+that no other function holds, a method of a nested class and a function under a module-level `if` or `try` included. A
+function nested in another is part of that one. Files are decoded by their byte order mark or coding cookie, as [reading
+the source](#reading-the-source) says. Its score is G. Ann Campbell's [cognitive
 complexity](https://www.sonarsource.com/docs/CognitiveComplexity.pdf), which SonarQube's rule S3776 measured: a point
 for each `if`, `elif`, `else`, ternary, loop, `except`, `match`, sequence of like boolean operators and recursion, and
 one more for each level of nesting on those that nest. Recursion is a function that calls itself, or one on a cycle of
@@ -622,8 +622,8 @@ is the files git tracked at `--base`, as `git archive` writes them, with every o
 with the tests (those three kinds) taken from the working tree, or removed where the change removed it, so the
 changed tests keep their fixtures and data. A submodule holds the files of the commit the base records for it, from
 its own repository in the working tree, unless it is one of those files, as a fixture repository under `tests/` whose
-commit the change moves, which the working tree's directory replaces; one that is not initialised there, or lacks that
-commit, is left empty, and a `not-run` finding names it. pytest, in the project's
+commit the change moves, which then holds the files of the commit its checkout in the working tree is at; one that is
+not initialised there, or lacks that commit, is left empty, and a `not-run` finding names it. pytest, in the project's
 Python, with the configurations flaky-tests' reruns get, found the same way in the base, once for each, and the
 copy's own `TMPDIR`, first collects the changed test files with `--continue-on-collection-errors`, then runs those of
 the changed tests it collected, all within the one time limit:

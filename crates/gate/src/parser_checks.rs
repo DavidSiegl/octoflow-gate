@@ -149,7 +149,7 @@ pub struct RustChange<'a> {
 
 impl<'a> RustChange<'a> {
     /// `change`'s Rust, its files read from `stored` by [`RustChange::among_tests`]. Errs when git cannot list the
-    /// tree's files or show one at the base, or one cannot be read in the working tree.
+    /// working tree's files, or one cannot be read.
     fn of(change: &'a Change, stored: &Stored) -> Result<RustChange<'a>, Unjudged> {
         let (mut test_modules_at_base, mut test_modules_now) = (HashSet::new(), HashSet::new());
         if any_path(change, |path| path.as_bytes().ends_with(b".rs")) {
@@ -300,8 +300,8 @@ pub fn vague_names(sources: &Sources) -> Vec<Finding> {
 /// The dependency-cycles check's findings on `sources`, by path and line: on Python where the change holds Python,
 /// and on Rust where it holds Rust, each language's imports read (lang_python::imports, lang_rust::imports) over all
 /// the tree's tracked files of its name, `.py` or `.rs`, outside mutmut's state, at the base and in the working tree.
-/// The files gate.toml's `dependency-cycles.exempt` names take part in no cycle. Errs when git cannot list the tree's
-/// files or show one at the base, or one cannot be read in the working tree.
+/// The files gate.toml's `dependency-cycles.exempt` names take part in no cycle. Errs when git cannot list the working
+/// tree's files, or one cannot be read.
 pub fn dependency_cycles(sources: &Sources) -> Result<Vec<Finding>, Unjudged> {
     let mut out = vec![];
     if !sources.python.files.is_empty() {

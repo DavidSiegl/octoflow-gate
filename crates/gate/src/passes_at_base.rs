@@ -66,10 +66,10 @@ pub fn budget_reached(budget: &Budget, runner: &str, when: &str) -> Finding {
 /// tests ([`beside_tests`]) in place of the base's. A test in a file the change also edits outside its test code, its
 /// items marked `#[cfg(test)]`, cannot be separated from the code it tests: it is a `not-run` finding at its fn.
 /// Each Cargo target the tests are in ([`CrateLayout::targets`]) is built and run on its own, `cargo nextest run`
-/// filtered to its tests, `--locked` when the base tracks its workspace's Cargo.lock (the rule of crate::clippy), with a target
-/// directory of its own outside the copy; one whose tests do not compile there counts as failing, which is what the
-/// check expects of a test that needs the change, and gives nothing. A test the run did not report, as one a cfg
-/// leaves out at the base, gives nothing, and one built in several targets is reported only when it passed in each.
+/// filtered to its tests, `--locked` when the base tracks its workspace's Cargo.lock (the rule of crate::clippy), with
+/// a target directory of its own outside the copy; one whose tests do not compile there counts as failing, which is
+/// what the check expects of a test that needs the change, and gives nothing. A test the run did not report, as one a
+/// cfg leaves out at the base, gives nothing, and one built in several targets is reported only when it passed in each.
 ///
 /// The budget running out is a `budget-reached` finding, and each target after it a `not-run` one. A changed test
 /// file that does not parse, a test whose target cannot be placed, a copy that cannot be made, submodules the copy

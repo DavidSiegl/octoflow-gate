@@ -441,6 +441,36 @@ fn a_submodule_beside_the_tests_holds_the_commit_the_working_tree_records_whatev
 }
 
 #[test]
+fn a_submodule_beside_the_tests_not_initialised_in_the_working_tree_is_one_finding() {
+    let repo = calc(&[]);
+    add_submodules(&repo, &["tests/fixture"], &[]);
+    repo.git(&["submodule", "--quiet", "deinit", "--force", "tests/fixture"]);
+    // The change records another commit, which the working tree has no checkout of.
+    repo.git(&["update-index", "--cacheinfo", &format!("160000,{},tests/fixture", "2".repeat(40))]);
+    repo.put("tests/calc.rs", ADDS.as_bytes());
+    assert_eq!(findings(&repo, Gate::default())[0], (
+        None,
+        None,
+        "not-run".into(),
+        "the copy of the base leaves submodules empty, so a changed Rust test that needs one, if any does, was not \
+         judged: `tests/fixture`, which is not initialised in the working tree."
+            .into(),
+    ));
+}
+
+#[test]
+fn a_link_beside_the_tests_to_a_checkout_is_written_as_a_link() {
+    let repo = calc(&[]);
+    let reads = "#[test]\nfn reads() {\n    \
+                 assert!(std::fs::symlink_metadata(\"tests/root\").unwrap().file_type().is_symlink());\n}\n";
+    repo.put("tests/calc.rs", reads.as_bytes());
+    // The top of the repository, which holds `.git`.
+    std::os::unix::fs::symlink("..", repo.repo.join("tests/root")).unwrap();
+    repo.git(&["add", "tests/root"]);
+    assert_eq!(found(&repo), vec![at("tests/calc.rs", 2, "passes-at-base")]);
+}
+
+#[test]
 fn a_submodule_without_the_base_s_commit_is_one_finding() {
     let repo = calc(&[]);
     add_submodules(&repo, &["vendor/lib"], &[]);

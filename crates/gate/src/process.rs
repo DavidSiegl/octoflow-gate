@@ -106,13 +106,12 @@ pub struct Extras<'a> {
 /// in a process group of its own, stopped after `timeout`, as `extras.soft_stop` says; everything it printed, and how
 /// it ended.
 ///
-/// Once it has exited, or been killed, every process left in its group, such as a server it started, is killed too,
-/// and what was printed is read until no process holds the output open, and the input written until none holds it
-/// open, for at most [`KILL_WAIT`] more: only one that left the group can still hold them, and what that prints later
-/// is lost. So the call returns within `timeout`,
-/// the soft stop's grace and [`KILL_WAIT`]. When Ctrl-C reaches the gate meanwhile, the group is killed and the gate
-/// exits through [`exit_interrupted`]. Errs when `argv` cannot be started, and when its input cannot be written for a
-/// reason other than the process ending before it read it all.
+/// Once it has exited, or been killed, every process left in its group, such as a server it started, is killed too, and
+/// what was printed is read until no process holds the output open, and the input written until none holds it open, for
+/// at most [`KILL_WAIT`] more: only one that left the group can still hold them, and what that prints later is lost. So
+/// the call returns within `timeout`, the soft stop's grace and [`KILL_WAIT`]. When Ctrl-C reaches the gate meanwhile,
+/// the group is killed and the gate exits through [`exit_interrupted`]. Errs when `argv` cannot be started, and when
+/// its input cannot be written for a reason other than the process ending before it read it all.
 ///
 /// The process starts a session of its own, so it has no controlling terminal: the terminal's Ctrl-C is the gate's
 /// to pass on, and a tool that would read the terminal, or write to it under `stty tostop`, fails rather than

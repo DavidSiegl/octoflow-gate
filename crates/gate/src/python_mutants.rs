@@ -324,9 +324,10 @@ fn unmutatable(unit: &Unit) -> Option<String> {
 /// function's own line counts as its body. coverage.py reads the file, in `python`.
 ///
 /// Errs with why the file cannot tell them, a clause: coverage.py cannot read it, it holds no test's context, it
-/// records too few tests on each line ([`UNDER_RECORDED_SHARE`]), or it did not measure the file of one of
-/// `functions`, which it never does for a path that is not UTF-8. The node ids are as pytest names the tests from
-/// the rootdir of the run that wrote the file, which must be `root`, as mutmut runs them in its copy of `root`.
+/// records too few tests on each line ([`UNDER_RECORDED_SHARE`]), it did not measure the file of one of
+/// `functions`, which it never does for a path that is not UTF-8, or it names none of the tests from `root`
+/// ([`rooted_elsewhere`]). The node ids are as pytest names the tests from the rootdir of the run that wrote the file,
+/// which must be `root`, as mutmut runs them in its copy of `root`.
 fn recorded_tests(
     python: &Path,
     root: &Path,
@@ -375,7 +376,8 @@ fn recorded_tests(
     if let Some((f, _)) = functions.iter().zip(&found.reached).find(|(_, tests)| tests.is_none()) {
         return Err(format!("`{named}` did not measure `{}`", text::one_line(&text::path(&f.path))));
     }
-    Ok(found.reached.into_iter().flatten().flatten().collect())
+    let tests: BTreeSet<String> = found.reached.into_iter().flatten().flatten().collect();
+    rooted_elsewhere(root, &tests).map_or(Ok(tests), Err)
 }
 
 /// What [`TEST_CONTEXTS_PROGRAM`] prints.
@@ -441,8 +443,7 @@ fn time_left(deadline: Instant) -> Option<Duration> {
 /// place of its own, and its pytest runs taking the configuration of the tests they run ([`test_places`]) and no
 /// configuration or conftest.py from above the copy; tests under more than one are a `not-run` finding. `recorded`,
 /// when given, are the node ids of the tests `--test-contexts` records reaching `functions`: mutmut is then given
-/// those of them its selection collects ([`narrowed_table`]), unless they are not named from the copy's top
-/// ([`rooted_elsewhere`]), which is a `not-narrowed` finding.
+/// those of them its selection collects ([`narrowed_table`]).
 fn on_copy(
     copy: &TreeCopy,
     root: &Path,
@@ -466,13 +467,6 @@ fn on_copy(
             Err(_) => {}
         }
         mark_for_mutmut(copy.tree, functions).map_err(not_started)?;
-        let recorded = match recorded.and_then(|ids| rooted_elsewhere(copy.tree, ids)) {
-            Some(why) => {
-                out.push(not_narrowed(&why));
-                None
-            }
-            None => recorded,
-        };
         // One configuration for all of mutmut's pytest runs, as it takes one pytest_add_cli_args.
         let places = test_places(copy.tree, table, recorded);
         let groups = pytest::groups(copy.python, copy.tree, tmp, &places).map_err(not_started)?;
@@ -575,13 +569,13 @@ fn test_places(tree: &Path, table: &Table, recorded: Option<&BTreeSet<String>>) 
     out
 }
 
-/// Why `recorded`, the node ids `--test-contexts` records, cannot name tests as mutmut's runs in `tree`, a copy of
-/// the tree, name them, from its top, a clause; None when one of them names a file of the copy. pytest names tests
-/// from its rootdir, which, unless `--rootdir` sets it, is the directory of the configuration it finds, so a run
-/// started as `pytest tests/` with a tests/pytest.ini records `test_calc.py::test_x`.
-fn rooted_elsewhere(tree: &Path, recorded: &BTreeSet<String>) -> Option<String> {
-    let file = |id: &String| tree.join(pytest::node_parts(OsStr::new(id)).0);
-    if recorded.iter().any(|id| file(id).is_file()) {
+/// Why `recorded`, pytest node ids, cannot name tests as mutmut's runs in a copy of `root`, the tree, name them, from
+/// its top, a clause; None when there are none or one of them names a file of `root`. pytest names tests from its
+/// rootdir, which, unless `--rootdir` sets it, is the directory of the configuration it finds, so a run started as
+/// `pytest tests/` with a tests/pytest.ini records `test_calc.py::test_x`.
+fn rooted_elsewhere(root: &Path, recorded: &BTreeSet<String>) -> Option<String> {
+    let file = |id: &String| root.join(pytest::node_parts(OsStr::new(id)).0);
+    if recorded.is_empty() || recorded.iter().any(|id| file(id).is_file()) {
         return None;
     }
     let first = recorded.first().map(|id| text::one_line(id)).unwrap_or_default();

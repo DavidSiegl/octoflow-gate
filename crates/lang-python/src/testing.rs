@@ -109,23 +109,33 @@ const CONSTANT_KINDS: [&str; 7] =
 /// its own kind.
 const CONSTANT_WORDS: [&str; 11] = ["(", ")", "[", "]", "{", "}", ",", ":", "-", "+", "~"];
 
+/// A node whose tokens [`shape_and_literals`] is reading.
+struct Open<'t> {
+    kind: &'t str,
+    /// Where its tokens start in the shape and in the literals.
+    from: (usize, usize),
+    /// Whether all its tokens so far may make it one literal; never for a kind outside [`CONSTANT_KINDS`].
+    constant: bool,
+    /// Its tokens so far, words and literals as written, each folded node among them as its one literal; only while
+    /// `constant` holds, as they are read only then.
+    written: Vec<String>,
+}
+
+impl Open<'_> {
+    /// Adds `token`, as written, to the node's tokens, unless it can no longer be one literal.
+    fn write(&mut self, token: &str) {
+        if self.constant {
+            self.written.push(token.into());
+        }
+    }
+}
+
 /// `assertion`'s shape and its literals, as model::Assertion holds them: [`tokens`], each literal `$lit` in the shape.
 /// A value written as a constant expression is one literal, so that a change to its sign or to what holds it keeps
 /// the shape: `-5`, `("a",)`, `{"k": [1, 2]}`, each a literal of its tokens as written, spaced, but for parentheses
 /// around such a value, which change nothing and are left out of it. A node of [`CONSTANT_KINDS`] with a word other
 /// than [`CONSTANT_WORDS`] in it, or a node of another kind, such as a name or an f-string, is no such value.
 fn shape_and_literals(assertion: Node, text: Text) -> (String, Vec<String>) {
-    /// A node whose tokens are being read.
-    struct Open<'t> {
-        kind: &'t str,
-        /// Where its tokens start in the shape and in the literals.
-        from: (usize, usize),
-        /// Whether all its tokens so far may make it one literal; never for a kind outside [`CONSTANT_KINDS`].
-        constant: bool,
-        /// Its tokens so far, words and literals as written, each folded node among them as its one literal; kept
-        /// only while `constant` holds, as they are read only then.
-        written: Vec<String>,
-    }
     let (mut shape, mut literals) = (vec![], vec![]);
     // The nodes opened and not yet closed, innermost last, below them the assertion's outside, never one literal.
     let mut open = vec![Open { kind: "", from: (0, 0), constant: false, written: vec![] }];
@@ -140,15 +150,11 @@ fn shape_and_literals(assertion: Node, text: Text) -> (String, Vec<String>) {
             Token::Word(word) => {
                 shape.push(word.into());
                 innermost.constant &= CONSTANT_WORDS.contains(&word);
-                if innermost.constant {
-                    innermost.written.push(word.into());
-                }
+                innermost.write(word);
             }
             Token::Literal(literal) => {
                 shape.push("$lit".into());
-                if innermost.constant {
-                    innermost.written.push(literal.clone());
-                }
+                innermost.write(&literal);
                 literals.push(literal);
             }
             Token::Close => {
@@ -167,9 +173,7 @@ fn shape_and_literals(assertion: Node, text: Text) -> (String, Vec<String>) {
                 shape.truncate(node.from.0);
                 shape.push("$lit".into());
                 literals.truncate(node.from.1);
-                if outer.constant {
-                    outer.written.push(literal.clone());
-                }
+                outer.write(&literal);
                 literals.push(literal);
             }
         }

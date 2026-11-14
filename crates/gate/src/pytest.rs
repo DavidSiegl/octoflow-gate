@@ -312,25 +312,42 @@ pub fn junit_case(id: &OsStr) -> String {
 }
 
 /// The node ids, one per parameter set and sorted, of those of `tests` that `collected`, a `pytest --collect-only`
-/// that [`run`] ran, listed; `tests` are keyed by their paths from the run's rootdir. Errs with the problem, a
-/// clause naming `doing`, when it exited with status 0 but listed no node id in a form the gate can read.
+/// that [`run`] ran, listed; `tests` are keyed by their paths from the run's rootdir. Errs as [`listed_node_ids`]
+/// does, when it listed no node id of their files.
 pub fn listed_tests(collected: &Finished, doing: &str, tests: &Tests) -> Result<Vec<OsString>, String> {
-    let files: BTreeSet<&OsString> = tests.keys().map(|(path, _)| path).collect();
-    // At verbosity -1 pytest lists one node id a line, unindented, before its summary; a warnings summary repeats
-    // some, indented or not. A collection that found tests but listed none in that form cannot be judged.
-    let lines = collected.stdout.split(|&b| b == b'\n').filter(|line| line.windows(2).any(|pair| pair == b"::"));
-    let ids: BTreeSet<OsString> = lines
-        .map(|line| OsString::from_vec(line.to_vec()))
-        .filter(|id| files.contains(&node_parts(id).0))
-        .collect();
-    if collected.status == 0 && ids.is_empty() {
-        return Err(format!("pytest, {doing}, printed no node id the gate could read: {}", collected.said()));
-    }
+    let files: BTreeSet<&OsStr> = tests.keys().map(|(path, _)| path.as_os_str()).collect();
+    let ids = listed_node_ids(collected, doing, |file| files.contains(file))?;
     let wanted = |id: &OsString| {
         let (path, name, _) = node_parts(id);
         tests.contains_key(&(path, name))
     };
     Ok(ids.into_iter().filter(wanted).collect())
+}
+
+/// The node ids, sorted, that `collected`, a `pytest --collect-only` that [`run`] ran at verbosity -1, listed of the
+/// files `of_file` accepts, each given as its path from the run's rootdir. Errs with the problem, a clause naming
+/// `doing`, when it exited with status 0 but listed no such node id in a form the gate can read.
+pub fn listed_node_ids(
+    collected: &Finished,
+    doing: &str,
+    of_file: impl Fn(&OsStr) -> bool,
+) -> Result<BTreeSet<OsString>, String> {
+    // pytest lists one node id a line, unindented, before its summary; a warnings summary repeats some, indented or
+    // not. A collection that found tests but listed none in that form cannot be judged.
+    let named = |line: &&[u8]| {
+        line.first().is_some_and(|b| !b.is_ascii_whitespace()) && line.windows(2).any(|pair| pair == b"::")
+    };
+    let ids: BTreeSet<OsString> = collected
+        .stdout
+        .split(|&b| b == b'\n')
+        .filter(named)
+        .map(|line| OsString::from_vec(line.to_vec()))
+        .filter(|id| of_file(&node_parts(id).0))
+        .collect();
+    if collected.status == 0 && ids.is_empty() {
+        return Err(format!("pytest, {doing}, printed no node id the gate could read: {}", collected.said()));
+    }
+    Ok(ids)
 }
 
 #[cfg(test)]
@@ -532,6 +549,20 @@ mod tests {
         assert_eq!(inifiles(&["tests/unit", "tests/unit/test_u.py"]), [tree.join("tests/pytest.ini")]);
         assert_eq!(inifiles(&[""]), [tree.join("tox.ini")]);
         assert_eq!(inifiles(&["", "tests"]), [tree.join("tox.ini"), tree.join("tests/pytest.ini")]);
+    }
+
+    #[test]
+    fn a_listing_s_node_ids_are_its_unindented_lines_that_name_a_test_of_the_files_asked_for() {
+        let stdout = "t.py::test_a\nu.py::test_b\n\n  t.py::test_c: a warning\n\tt.py::test_d\n2 tests collected\n";
+        let ids = |of_file: fn(&OsStr) -> bool| listed_node_ids(&printed(0, stdout), "collecting", of_file);
+        assert_eq!(ids(|_| true).unwrap(), ["t.py::test_a", "u.py::test_b"].map(OsString::from).into());
+        assert_eq!(ids(|file| file == "t.py").unwrap(), [OsString::from("t.py::test_a")].into());
+        let listed = ids(|file| file == "v.py").unwrap_err();
+        assert!(listed.starts_with("pytest, collecting, printed no node id the gate could read: "), "{listed}");
+        // The only ids an indented line names do not count, and a collection of nothing names none.
+        let indented = listed_node_ids(&printed(0, "  t.py::test_a\n"), "collecting", |_| true);
+        assert!(indented.is_err(), "{indented:?}");
+        assert_eq!(listed_node_ids(&printed(5, "no tests collected\n"), "collecting", |_| true), Ok(BTreeSet::new()));
     }
 
     #[test]

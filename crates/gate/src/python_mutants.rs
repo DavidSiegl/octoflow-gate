@@ -642,14 +642,11 @@ fn narrowed_table(setup: &Setup, table: &Table, recorded: &BTreeSet<String>) -> 
         Ok(collected) => collected,
         Err(problem) => return Narrowed::Not(problem.clause),
     };
-    // At verbosity -1 pytest lists one node id a line, unindented, before its summary.
-    let printed = text::lossless(&collected.stdout);
-    let indented = |line: &str| !line.starts_with(text::py_strip(line));
-    let ids: BTreeSet<&str> = printed.split('\n').filter(|line| line.contains("::") && !indented(line)).collect();
-    if collected.status == 0 && ids.is_empty() {
-        let said = collected.said();
-        return Narrowed::Not(format!("pytest, {COLLECTING}, printed no node id the gate could read: {said}"));
-    }
+    let ids = match pytest::listed_node_ids(&collected, COLLECTING, |_| true) {
+        Ok(ids) => ids,
+        Err(problem) => return Narrowed::Not(problem),
+    };
+    let ids: BTreeSet<String> = ids.iter().map(|id| text::lossless(id.as_bytes())).collect();
     let tests: Vec<String> = recorded.iter().filter(|id| ids.contains(id.as_str())).cloned().collect();
     if tests.is_empty() {
         return Narrowed::ToNothing;

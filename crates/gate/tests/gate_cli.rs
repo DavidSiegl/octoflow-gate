@@ -233,6 +233,27 @@ fn sigterm_or_sighup_while_a_tool_runs_in_a_scratch_directory_leaves_none() {
     }
 }
 
+/// A terminal's hangup leaves the gate's standard error failing every write, as a pipe that no one reads does here.
+#[test]
+fn sighup_with_standard_error_gone_still_exits_130() {
+    let repo = repo();
+    repo.put("gate.toml", b"[[test]]\nname = \"slow\"\ncommand = [\"sh\", \"-c\", \"touch started; sleep 30\"]\n\
+                           junit = [\"results.xml\"]\n");
+    let mut gate = Command::new(env!("CARGO_BIN_EXE_gate")).current_dir(&repo.repo)
+        .args(["--base", "HEAD", "--out"]).arg(repo.outside.join("quality.md"))
+        .stderr(std::process::Stdio::piped())
+        .spawn().unwrap();
+    drop(gate.stderr.take());
+    let start = std::time::Instant::now();
+    while !repo.repo.join("started").exists() {
+        assert!(start.elapsed() < std::time::Duration::from_secs(30), "the test command never started");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let sent = Command::new("kill").args(["-HUP", &gate.id().to_string()]).status().unwrap();
+    assert!(sent.success());
+    assert_eq!(gate.wait().unwrap().code(), Some(130));
+}
+
 #[test]
 fn ctrl_c_writes_nothing_and_exits_130() {
     let repo = repo();

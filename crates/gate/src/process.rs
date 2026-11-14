@@ -341,7 +341,8 @@ pub fn interrupted() -> bool {
 /// The one place the gate exits other than from main, so that a stop deep in a check needs no path back up.
 pub fn exit_interrupted() -> ! {
     crate::scratch_directory::remove_scratch_directories();
-    eprintln!("interrupted; the report was not written whole");
+    // Not eprintln!, which panics, and so exits 101, when standard error is a terminal SIGHUP hung up.
+    let _ = writeln!(std::io::stderr(), "interrupted; the report was not written whole");
     std::process::exit(EXIT_INTERRUPTED)
 }
 

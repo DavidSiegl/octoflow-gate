@@ -23,13 +23,20 @@ use crate::python_mutants::{python_mutants, Mutmut};
 use crate::text;
 
 /// How each outcome cargo-mutants 27 writes in mutants.out/outcomes.json (a scenario's "summary") counts: a missed
-/// mutant survived; a caught one, and one whose tests outlived cargo-mutants' `--timeout`, did not; an unviable one,
-/// which does not build, was not tried. "Success" and "Failure" are the unmutated baseline's.
+/// mutant survived; a caught one, and one whose tests outlived cargo-mutants' timeout ([`MINIMUM_TEST_TIMEOUT`]), did
+/// not; an unviable one, which does not build, was not tried. "Success" and "Failure" are the unmutated baseline's.
 const SURVIVED: &str = "MissedMutant";
 const TRIED: [&str; 3] = ["MissedMutant", "CaughtMutant", "Timeout"];
 
-/// The seconds cargo-mutants gives one mutant's tests before it counts them a timeout (its `--timeout`).
-const TEST_TIMEOUT: u64 = 60;
+/// The fewest seconds cargo-mutants gives one mutant's tests before it counts them a timeout
+/// (`--minimum-test-timeout`); it gives them [`TIMEOUT_MULTIPLIER`] times as long as the unmutated baseline's tests
+/// took where that is longer. The baseline itself runs unbounded but for the check's budget: no `--timeout`, which
+/// would bound it too, so a workspace whose tests outlast a mutant's floor still has its mutants tried (cargo-mutants
+/// 27.1.0's `src/timeouts.rs`).
+const MINIMUM_TEST_TIMEOUT: u64 = 60;
+/// cargo-mutants' `--timeout-multiplier`, as [`MINIMUM_TEST_TIMEOUT`] says: room for a mutant's tests to run slower
+/// than the baseline's, without a mutant that hangs them taking five times the baseline (cargo-mutants' default).
+const TIMEOUT_MULTIPLIER: u64 = 2;
 
 /// How long cargo-mutants has, after the SIGINT that stops a run at the deadline, to write what it found and exit
 /// before it is killed, and mutmut as long.
@@ -147,7 +154,7 @@ fn rust_mutants(rust: &RustChange, functions: &[Edited], budget: &Budget) -> Vec
 /// The findings on `functions`, [`edited_rust`]'s, of cargo-mutants run on each Cargo workspace that holds one of
 /// them ([`cargo_roots`]), in path order of the workspaces, in a copy of the files git tracks made in `dir`, an empty
 /// directory, beside each run's output. cargo-mutants mutates only `functions` ([`run_workspace`]), and its tests run
-/// with `--test-tool nextest`, each mutant's within [`TEST_TIMEOUT`].
+/// with `--test-tool nextest`, each mutant's within its timeout ([`MINIMUM_TEST_TIMEOUT`]).
 ///
 /// A run the deadline stops is a `budget-reached` finding beside what the mutants it had tried showed, and each
 /// workspace after it a `not-run` one; a copy that cannot be made is the one `not-run` finding.
@@ -273,12 +280,14 @@ fn run_workspace(run: &Run, root: &OsStr, functions: &[&Edited], budget: &Budget
     // --in-place mutates the copy itself, which cargo-mutants would otherwise copy once more; mutants.out goes to
     // scratch, outside it.
     let dir = run.tree.join(root);
-    let timeout = TEST_TIMEOUT.to_string();
+    let (minimum, multiplier) = (MINIMUM_TEST_TIMEOUT.to_string(), TIMEOUT_MULTIPLIER.to_string());
     let mut argv: Vec<&OsStr> = ["cargo", "mutants", "--in-place", "--no-shuffle", "--dir"].map(OsStr::new).to_vec();
     argv.push(dir.as_os_str());
     let wanted: Vec<OsString> = functions.iter().map(|f| mutants_of(root, f).into()).collect();
     argv.extend(wanted.iter().flat_map(|re| [OsStr::new("--re"), re.as_os_str()]));
-    argv.extend(["--test-tool", "nextest", "--timeout", &timeout, "--output"].map(OsStr::new));
+    let timeouts = ["--minimum-test-timeout", &minimum, "--timeout-multiplier", &multiplier];
+    argv.extend(["--test-tool", "nextest"].into_iter().chain(timeouts).map(OsStr::new));
+    argv.push(OsStr::new("--output"));
     argv.extend([run.scratch.as_os_str(), OsStr::new("--colors"), OsStr::new("never")]);
     let env = [("CARGO_TERM_COLOR", OsStr::new("never"))];
     let extras = Extras { env: &env, soft_stop: Some(STOP_GRACE), ..Extras::default() };

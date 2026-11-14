@@ -600,8 +600,10 @@ gremlins the rest; a change with no Python functions to mutate gives cargo-mutan
 A `budget-reached` finding names the seconds of the share its tool was stopped at.
 cargo-mutants mutates only those functions, given as one `--re` each that matches its mutants by their file and line
 (`^src/lib\.rs:(?:5|6|7):`), `--in-place` in the gate's copy of the files git tracks, once per Cargo workspace (that
-of the nearest `Cargo.toml` above the file, as `cargo locate-project` tells it), with `--test-tool nextest` and
-`--timeout 60` for each mutant's tests. Its outcomes, from `mutants.out/outcomes.json`, count as mutmut's do: a missed
+of the nearest `Cargo.toml` above the file, as `cargo locate-project` tells it), with `--test-tool nextest`,
+`--minimum-test-timeout 60` and `--timeout-multiplier 2`: each mutant's tests have twice as long as the unmutated
+baseline's took, and at least 60 seconds, while the baseline runs bounded only by the budget, so a workspace whose
+tests take longer than a minute still has its mutants tried. Its outcomes, from `mutants.out/outcomes.json`, count as mutmut's do: a missed
 mutant survived; a caught one, and a timeout, did not; an unviable one, which does not build, was not tried. A change
 outside functions, such as to a `use` or a `const`, gives nothing. The findings are mutmut's kinds:
 

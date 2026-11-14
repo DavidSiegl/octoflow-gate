@@ -1,5 +1,5 @@
 //! The surviving-mutants check's Go half: gremlins (<https://gremlins.dev>) mutates the Go functions a change edits
-//! and runs each mutant against the tests of its package. The check itself, and its Rust half, are mutants.rs.
+//! and runs each mutant against all of its module's tests. The check itself, and its Rust half, are mutants.rs.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
@@ -22,7 +22,7 @@ use crate::paths::rel_path;
 use crate::process::{run_with, Extras, Finished};
 use crate::text;
 
-/// How each status gremlins 0.6 prints for a mutant counts: a mutant that LIVED survived the tests of its package; a
+/// How each status gremlins 0.6 prints for a mutant counts: a mutant that LIVED survived its module's tests; a
 /// KILLED one, and one whose tests outlived gremlins' timeout, did not; one NOT COVERED is on a line no test runs, so
 /// gremlins did not try it, and could not have found it caught. NOT VIABLE, which does not build, and SKIPPED, outside
 /// the lines the gate gave it, were not tried.
@@ -31,8 +31,9 @@ const TRIED: [&str; 3] = ["LIVED", "KILLED", "TIMED OUT"];
 const NOT_COVERED: &str = "NOT COVERED";
 
 /// How many times as long as the module's tests took in gremlins' first run of them, with their coverage, a mutant's
-/// tests may run before gremlins counts them timed out (its `--timeout-coefficient`, 3 by default). A mutant's run
-/// also builds its package anew, which the first run took from the build cache, so 3 left too little on a small module.
+/// tests may run before gremlins counts them timed out (its `--timeout-coefficient`, 3 by default). A mutant's run also
+/// builds the module's packages anew, which the first run took from the build cache, so 3 left too little on a small
+/// module.
 const TIMEOUT_COEFFICIENT: u32 = 10;
 
 /// The Go functions the change that `go` reads edits, in path and line order, and a `not-run` finding for each file

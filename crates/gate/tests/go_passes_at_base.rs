@@ -87,27 +87,33 @@ fn go_tests_that_do_not_build_at_the_base_need_the_change() {
     assert_eq!(findings(&repo), []);
 }
 
-/// go before 1.24 marks a package whose tests do not build only in the package's output, with no `FailedBuild`.
+/// go before 1.24 marks a package whose tests do not build only in the package's output, with no `FailedBuild`: an
+/// output event when they do not compile, and a plain line, outside the JSON, when an import cannot be found.
 #[test]
 fn go_tests_that_do_not_build_at_the_base_under_go_1_23_need_the_change() {
-    let repo = repo("");
-    repo.put("calc.go", FIXED.as_bytes());
-    repo.put("calc_test.go", ABS_TESTS.as_bytes());
-    let go_1_23 = r#"printf '%s\n' '{"Action":"start","Package":"example.com/calc"}' \
+    let not_compiled = r#"printf '%s\n' '{"Action":"start","Package":"example.com/calc"}' \
         '{"Action":"output","Package":"example.com/calc","Output":"FAIL\texample.com/calc [build failed]\n"}' \
         '{"Action":"fail","Package":"example.com/calc","Elapsed":0}'
 echo '# example.com/calc [example.com/calc.test]' >&2
 exit 1"#;
-    let bin = repo.stub("go", go_1_23);
-    repo.git(&["add", "-A"]);
-    let json = repo.outside.join("quality.json");
-    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
-    let done = repo.gate_command("HEAD").env("PATH", path).arg("--json").arg(&json).output().unwrap();
-    assert!(matches!(done.status.code(), Some(0 | 1)), "{}", String::from_utf8_lossy(&done.stderr));
-    let report: serde_json::Value = serde_json::from_slice(&std::fs::read(&json).unwrap()).unwrap();
-    let found: Vec<&serde_json::Value> = report["findings"].as_array().unwrap().iter()
-        .filter(|f| f["rule"].as_str().unwrap().starts_with("passes-at-base ")).collect();
-    assert_eq!(found, Vec::<&serde_json::Value>::new());
+    let not_found = r#"printf 'FAIL\texample.com/calc [setup failed]\n'
+echo 'calc_test.go:3:8: package example.com/calc/helper is not in std' >&2
+exit 1"#;
+    for go_1_23 in [not_compiled, not_found] {
+        let repo = repo("");
+        repo.put("calc.go", FIXED.as_bytes());
+        repo.put("calc_test.go", ABS_TESTS.as_bytes());
+        let bin = repo.stub("go", go_1_23);
+        repo.git(&["add", "-A"]);
+        let json = repo.outside.join("quality.json");
+        let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+        let done = repo.gate_command("HEAD").env("PATH", path).arg("--json").arg(&json).output().unwrap();
+        assert!(matches!(done.status.code(), Some(0 | 1)), "{}", String::from_utf8_lossy(&done.stderr));
+        let report: serde_json::Value = serde_json::from_slice(&std::fs::read(&json).unwrap()).unwrap();
+        let found: Vec<&serde_json::Value> = report["findings"].as_array().unwrap().iter()
+            .filter(|f| f["rule"].as_str().unwrap().starts_with("passes-at-base ")).collect();
+        assert_eq!(found, Vec::<&serde_json::Value>::new(), "{go_1_23}");
+    }
 }
 
 #[test]

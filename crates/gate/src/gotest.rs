@@ -51,7 +51,7 @@ pub enum Ran {
     /// The outcome go test reported for each of the tests it was given that it ran: Failed, Skipped or Passed. A test
     /// it did not report, as a name no function of the package has, is left out.
     Outcomes(HashMap<String, Outcome>),
-    /// The package's tests did not build (go test -json's `FailedBuild`): what the test files need is not there.
+    /// The package's tests did not build or load, as `unbuilt` tells it: what the test files need is not there.
     Unbuilt,
 }
 
@@ -78,13 +78,18 @@ struct Event {
     failed_build: Option<String>,
 }
 
-impl Event {
-    /// Whether the event tells that the package's tests did not build: by `FailedBuild`, or, from a go before 1.24,
-    /// which has no such field, by the package's `FAIL\t<package> [build failed]` line.
-    fn unbuilt(&self) -> bool {
-        let said_unbuilt = |output: &str| output.trim_end().ends_with(" [build failed]");
-        self.failed_build.is_some() || (self.test.is_none() && self.output.as_deref().is_some_and(said_unbuilt))
-    }
+/// Whether go test's standard output, `stdout`, of which `events` are the JSON lines, tells that the package's tests
+/// did not build or load: by an event's `FailedBuild`, or, from a go before 1.24, which has no such field, by the
+/// package's `FAIL\t<package> [build failed]` line, as an event's output, or `FAIL\t<package> [setup failed]`, as a
+/// plain line outside the JSON, when an import cannot be found.
+fn unbuilt(stdout: &[u8], events: &[Event]) -> bool {
+    let says_unbuilt = |line: &str| {
+        let line = line.trim_end();
+        line.starts_with("FAIL\t") && (line.ends_with(" [build failed]") || line.ends_with(" [setup failed]"))
+    };
+    let plain = stdout.split(|&b| b == b'\n').filter_map(|line| std::str::from_utf8(line).ok());
+    let package_output = events.iter().filter(|e| e.test.is_none()).filter_map(|e| e.output.as_deref());
+    events.iter().any(|e| e.failed_build.is_some()) || plain.chain(package_output).any(says_unbuilt)
 }
 
 /// Builds the tests of the Go package in `dir` into `binary`, a path that does not exist yet, as `go test -c -o
@@ -134,7 +139,7 @@ pub fn run(dir: &Path, names: &[&str], flags: &[&str], timeout: Duration, doing:
     if ![0, 1].contains(&done.status) {
         return Err(problem(format!("go test, {doing}, exited with status {}: {}", done.status, said())));
     }
-    if events.iter().any(Event::unbuilt) {
+    if unbuilt(&done.stdout, &events) {
         return Ok(Ran::Unbuilt);
     }
     let asked: HashSet<&str> = names.iter().copied().collect();

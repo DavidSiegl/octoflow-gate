@@ -184,7 +184,8 @@ impl<'t> Walk<'t> {
         self.own = binds::bindings(node, self.text).into_iter().map(|b| b.name).collect();
         let bound = named_initializers(body, self.text);
         self.tables = ranged_literals(body, &bound, self.text);
-        self.assertors = bound.iter().filter(|(_, value)| self.testify_new(*value)).map(|(name, _)| *name).collect();
+        let assertors = bound.iter().filter(|(_, initializer)| self.testify_new(*initializer));
+        self.assertors = assertors.map(|(name, _)| *name).collect();
         let params = self.testing_params(node);
         self.owner = None;
         let output = example_output(node, self.text);

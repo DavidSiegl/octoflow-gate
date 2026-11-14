@@ -108,6 +108,8 @@ pub fn weakenings(source: &str) -> Vec<Weakening> {
 /// trimmed and with its line, from 1; and the line of the last blank line before the first line that is neither blank
 /// nor a `//` comment, 0 where there is none.
 fn header(source: &str) -> (Vec<(&str, u32)>, u32) {
+    // go/build's importReader drops a leading byte order mark before it reads the header (go/build/read.go).
+    let source = source.strip_prefix('\u{feff}').unwrap_or(source);
     let mut comments = vec![];
     let mut last_blank = 0;
     // Whether a line neither blank nor a `//` comment has been met.
@@ -478,6 +480,12 @@ mod tests {
         assert_eq!(kind(&longest), Some(WeakeningKind::PlatformOnly));
         let too_long = format!("// +build {}", ["linux"; 102].join(","));
         assert_eq!(kind(&too_long), None);
+    }
+
+    #[test]
+    fn a_byte_order_mark_before_the_header_is_passed_over_as_go_does() {
+        assert_eq!(kind("\u{feff}//go:build ignore"), Some(WeakeningKind::Skip));
+        assert_eq!(kind("\u{feff}// +build linux"), Some(WeakeningKind::PlatformOnly));
     }
 
     #[test]

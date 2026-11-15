@@ -62,7 +62,7 @@ pub fn py_strip(text: &str) -> &str {
 }
 
 /// `text` in at most 160 characters, the last of them "…" when it was longer.
-pub fn clip(text: &str) -> String {
+pub fn shortened(text: &str) -> String {
     if text.chars().count() <= 160 {
         return text.to_string();
     }
@@ -121,10 +121,10 @@ mod tests {
     }
 
     #[test]
-    fn clip_cuts_past_160_characters() {
+    fn shortened_cuts_past_160_characters() {
         let whole = "é".repeat(160);
-        assert_eq!(clip(&whole), whole);
-        let cut = clip(&"é".repeat(161));
+        assert_eq!(shortened(&whole), whole);
+        let cut = shortened(&"é".repeat(161));
         assert_eq!((cut.chars().count(), cut.ends_with("é…")), (160, true));
     }
 

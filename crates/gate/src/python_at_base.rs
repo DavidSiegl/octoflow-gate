@@ -428,7 +428,7 @@ fn outside_failed_conftest(
 struct FailedConftest {
     conftest: OsString,
     /// The exception, as pytest's first line marked "E"; the line that names the conftest.py when there is none. Cut
-    /// as text::clip cuts.
+    /// as text::shortened cuts.
     error: String,
     /// The files the traceback passes through, the conftest.py among them.
     through: BTreeSet<OsString>,
@@ -460,7 +460,7 @@ fn failing_conftest(collected: &Finished, top: &Path) -> Option<FailedConftest> 
         Some(raised) => text::lossless(&raised[1]),
         None => text::lossless(line.as_bytes()),
     };
-    Some(FailedConftest { conftest, error: text::clip(text::py_strip(&error)), through })
+    Some(FailedConftest { conftest, error: text::shortened(text::py_strip(&error)), through })
 }
 
 /// `path`, absolute or from `top`, as a repository path from `top`: its directory resolved, as `top` is, and its

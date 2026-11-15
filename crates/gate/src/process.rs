@@ -37,7 +37,7 @@ pub struct Finished {
 }
 
 impl Finished {
-    /// What a tool that went wrong, such as cargo, said about it, in a line cut as text::clip cuts one: the
+    /// What a tool that went wrong, such as cargo, said about it, in a line cut as text::shortened cuts one: the
     /// exception of a pytest internal error, else the exception that ended it when it printed a traceback, else the
     /// first line of its standard error, else the last line of its output; "nothing" when it printed nothing. Only
     /// `\n` ends a line, so a path in it stays whole.
@@ -57,7 +57,7 @@ impl Finished {
             (None, None, _, Some(last)) => last,
             _ => "nothing",
         };
-        crate::text::clip(said)
+        crate::text::shortened(said)
     }
 }
 

@@ -19,13 +19,17 @@ pub const GATE_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const QUALITY_SCHEMA_VERSION: u32 = 1;
 /// The most findings the quality file lists, issues and findings to weigh numbered as one list, and the most failing
 /// tests; the rest are counted.
-pub const QUALITY_ISSUE_LIMIT: usize = 50;
+pub const QUALITY_FINDINGS_LIMIT: usize = 50;
 
 /// The headings of the sections a reader of the quality file finds the failed conditions and failing tests under.
-const FAILED_CONDITIONS: &str = "## Failed conditions";
-const FAILING_TESTS: &str = "## Failing tests";
+const QUALITY_FAILED_CONDITIONS: &str = "## Failed conditions";
+const QUALITY_FAILING_TESTS: &str = "## Failing tests";
 /// Leads the findings to weigh; a reader takes the numbered findings after it as ones that do not fail the gate.
-const TO_WEIGH_NOTE: &str = "These do not fail the gate. Fix each, or say in your report why it should stand.";
+const QUALITY_TO_WEIGH_NOTE: &str = "These do not fail the gate. Fix each, or say in your report why it should stand.";
+
+/// The words of the gate line, [`Verdict::word`]'s.
+pub const QUALITY_OK: &str = "OK";
+pub const QUALITY_ERROR: &str = "ERROR";
 
 /// The gate's word on a change, the quality file's first line after `GATE: `.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -41,8 +45,8 @@ impl Verdict {
     /// quality.json.
     pub fn word(self) -> &'static str {
         match self {
-            Verdict::Ok => "OK",
-            Verdict::Error => "ERROR",
+            Verdict::Ok => QUALITY_OK,
+            Verdict::Error => QUALITY_ERROR,
         }
     }
 }
@@ -91,18 +95,18 @@ impl QualityReport {
 
     /// The quality file: `GATE: ` and the verdict on its first line, then what whoever answers it has to answer.
     ///
-    /// It numbers at most [`QUALITY_ISSUE_LIMIT`] findings and lists as many failing tests, each by the first line of
-    /// its detail, and counts the rest. It is prose, whose wording may change in any release; a program reads
+    /// It numbers at most [`QUALITY_FINDINGS_LIMIT`] findings and lists as many failing tests, each by the first line
+    /// of its detail, and counts the rest. It is prose, whose wording may change in any release; a program reads
     /// [`QualityReport::json`] instead.
     pub fn markdown(&self) -> String {
         let mut out = vec![format!("GATE: {}", self.verdict().word()), String::new(), self.intro()];
         if !self.conditions.is_empty() {
-            out.extend([String::new(), FAILED_CONDITIONS.into(), String::new()]);
+            out.extend([String::new(), QUALITY_FAILED_CONDITIONS.into(), String::new()]);
             out.extend(self.conditions.iter().map(|c| one_line(&format!("- {c}"))));
         }
         out.extend(issues_section(&self.issues, self.elsewhere));
         if !self.to_weigh.is_empty() {
-            out.extend(to_weigh_section(&self.to_weigh, self.issues.len().min(QUALITY_ISSUE_LIMIT)));
+            out.extend(to_weigh_section(&self.to_weigh, self.issues.len().min(QUALITY_FINDINGS_LIMIT)));
         }
         if let Some(tests) = &self.failing_tests {
             out.extend(tests_section(tests));
@@ -316,8 +320,8 @@ fn issues_section(issues: &[Finding], elsewhere: usize) -> Vec<String> {
     if issues.is_empty() {
         out.push("None.".into());
     }
-    out.extend(issues.iter().take(QUALITY_ISSUE_LIMIT).enumerate().map(|(k, f)| numbered(k + 1, f)));
-    if let Some(more) = issues.len().checked_sub(QUALITY_ISSUE_LIMIT).filter(|&more| more > 0) {
+    out.extend(issues.iter().take(QUALITY_FINDINGS_LIMIT).enumerate().map(|(k, f)| numbered(k + 1, f)));
+    if let Some(more) = issues.len().checked_sub(QUALITY_FINDINGS_LIMIT).filter(|&more| more > 0) {
         out.extend([
             String::new(),
             format!("{more} more issues on changed lines are not listed; fix the ones above first."),
@@ -335,15 +339,15 @@ fn issues_section(issues: &[Finding], elsewhere: usize) -> Vec<String> {
     out
 }
 
-/// The findings to weigh, numbered on from `after`, the last issue's number, within [`QUALITY_ISSUE_LIMIT`].
+/// The findings to weigh, numbered on from `after`, the last issue's number, within [`QUALITY_FINDINGS_LIMIT`].
 fn to_weigh_section(to_weigh: &[Finding], after: usize) -> Vec<String> {
     let mut out = vec![String::new(), "## Findings to weigh".into(), String::new()];
-    let room = QUALITY_ISSUE_LIMIT - after;
+    let room = QUALITY_FINDINGS_LIMIT - after;
     if room == 0 {
         out.push(format!("{} findings to weigh are not listed; answer the issues above first.", to_weigh.len()));
         return out;
     }
-    out.extend([TO_WEIGH_NOTE.into(), String::new()]);
+    out.extend([QUALITY_TO_WEIGH_NOTE.into(), String::new()]);
     out.extend(to_weigh.iter().take(room).enumerate().map(|(k, f)| numbered(after + k + 1, f)));
     if to_weigh.len() > room {
         out.extend([String::new(), format!("{} more findings to weigh are not listed.", to_weigh.len() - room)]);
@@ -361,15 +365,15 @@ fn numbered(k: usize, f: &Finding) -> String {
 }
 
 fn tests_section(tests: &[(String, String)]) -> Vec<String> {
-    let mut out = vec![String::new(), FAILING_TESTS.into(), String::new()];
+    let mut out = vec![String::new(), QUALITY_FAILING_TESTS.into(), String::new()];
     if tests.is_empty() {
         out.push("None.".into());
     }
-    out.extend(tests.iter().take(QUALITY_ISSUE_LIMIT).map(|(name, detail)| {
+    out.extend(tests.iter().take(QUALITY_FINDINGS_LIMIT).map(|(name, detail)| {
         one_line(&format!("- `{name}`: {}", first_line(detail).unwrap_or("failed")))
     }));
-    if tests.len() > QUALITY_ISSUE_LIMIT {
-        out.push(format!("- and {} more.", tests.len() - QUALITY_ISSUE_LIMIT));
+    if tests.len() > QUALITY_FINDINGS_LIMIT {
+        out.push(format!("- and {} more.", tests.len() - QUALITY_FINDINGS_LIMIT));
     }
     out
 }

@@ -1147,7 +1147,7 @@ fn example(copy: &TreeCopy, unit: &Unit, mutant: &str, deadline: Instant) -> Opt
     let hits = unit.source.iter().enumerate().filter(|(_, line)| reads_so(line));
     let hits = hits.filter_map(|(k, _)| u32::try_from(k).ok().map(|k| unit.lines.first + k));
     let line = hits.min_by_key(|&n| n.abs_diff(expected)).unwrap_or(expected);
-    Some(format!("line {line}, `{}` became `{}`", text::clip(&old.join(" ")), text::clip(&new.join(" "))))
+    Some(format!("line {line}, `{}` became `{}`", text::shortened(&old.join(" ")), text::shortened(&new.join(" "))))
 }
 
 /// What the first hunk of `diff`, `mutmut show`'s diff of a function and its mutant, changes: the line of the

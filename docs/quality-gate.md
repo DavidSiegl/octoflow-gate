@@ -1127,25 +1127,25 @@ file. A reader checks itself against the `tests/golden/*.json` files, which the 
 (`crates/gate/tests/golden_reports.rs`) and a release ships as `golden/`, each beside the quality file of the same
 report.
 
-The quality file is prose for the people and agents who answer it and review the answer, and its wording and layout
-may change in any release; a program reads `quality.json`. The parts below are the exception: a reader that has no
+The quality file is prose for the people and agents who answer it and review the answer, and its wording and layout may
+change in any release; a program reads `quality.json`. The parts below are the exception: a reader that has no
 `quality.json`, as [octoflow](https://github.com/DavidSiegl/octoflow-ai)'s orchestrator for a build whose quality job
 archived none, reads them from the quality file, keeping its own copy of them and checking that copy against
-`tests/golden/*.txt`, so a change to one of them is a change to such a reader. The names in parentheses are the
-gate's for each part (`crates/gate/src/report.rs` and `text.rs`), and octoflow's copy (`engine/src/quality.rs` and
+`tests/golden/*.txt`, so a change to one of them is a change to such a reader. The names in parentheses are the gate's
+for each part that has one (`crates/gate/src/report.rs` and `text.rs`), and octoflow's copy (`engine/src/quality.rs` and
 `checks.rs`) uses the same ones, so a search for one finds both.
 
-- **The gate line.** The first non-blank line is `GATE: OK` or `GATE: ERROR`; a reader should tolerate Markdown
-  emphasis around it. The gate writes no other; a reader may add its own, as octoflow's `GATE: BUILD_FAILED` for a
-  build that ended before the gate ran.
+- **The gate line.** The first non-blank line is `GATE: OK` or `GATE: ERROR` (`QUALITY_OK`, `QUALITY_ERROR`); a reader
+  should tolerate Markdown emphasis around it. The gate writes no other; a reader may add its own, as octoflow's `GATE:
+  BUILD_FAILED` for a build that ended before the gate ran.
 - **Sections.** Each starts with a level-2 heading, a line that starts with `##` and a space, and runs to the next.
 - **Failed conditions.** Under `## Failed conditions` (`QUALITY_FAILED_CONDITIONS`), one bullet per condition, as
   the file words it.
 - **Numbered findings.** Issues and findings to weigh, numbered as one list over the whole file, at most
   `QUALITY_FINDINGS_LIMIT` (50), the rest counted. Each is a line `N.`, then where, then its severity, its rule, a
   colon and its message; where is the path and line in backticks, as `` `a.py:3` ``, the path and
-  `(the whole file)` in backticks for a finding on no line, or `The change as a whole:` for one on no file. The
-  rule's first word names the check, or the linter, that raised it.
+  `(the whole file)` in backticks for a finding on no line, or `The change as a whole:` for one on no file
+  (`numbered`). The rule's first word names the check, or the linter, that raised it.
 - **Findings to weigh.** In a section, the line `These do not fail the gate. Fix each, or say in your report why
   it should stand.` (`QUALITY_TO_WEIGH_NOTE`) comes before its findings to weigh; the numbered findings above it
   fail the gate.

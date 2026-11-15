@@ -121,7 +121,7 @@ mod tests {
     }
 
     #[test]
-    fn clip_cuts_past_160_characters() {
+    fn shortened_cuts_past_160_characters() {
         let whole = "é".repeat(160);
         assert_eq!(shortened(&whole), whole);
         let cut = shortened(&"é".repeat(161));

@@ -27,6 +27,10 @@ const QUALITY_FAILING_TESTS: &str = "## Failing tests";
 /// Leads the findings to weigh; a reader takes the numbered findings after it as ones that do not fail the gate.
 const QUALITY_TO_WEIGH_NOTE: &str = "These do not fail the gate. Fix each, or say in your report why it should stand.";
 
+/// The words of the gate line, [`Verdict::word`]'s.
+pub const QUALITY_OK: &str = "OK";
+pub const QUALITY_ERROR: &str = "ERROR";
+
 /// The gate's word on a change, the quality file's first line after `GATE: `.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum Verdict {
@@ -41,8 +45,8 @@ impl Verdict {
     /// quality.json.
     pub fn word(self) -> &'static str {
         match self {
-            Verdict::Ok => "OK",
-            Verdict::Error => "ERROR",
+            Verdict::Ok => QUALITY_OK,
+            Verdict::Error => QUALITY_ERROR,
         }
     }
 }

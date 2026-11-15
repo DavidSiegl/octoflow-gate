@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use gate::config_edits::{tool_config, touched_paths, ToolConfig};
 use gate::coverage::NewCoverage;
-use gate::report::{Finding, QualityReport, GATE_VERSION, QUALITY_ISSUE_LIMIT};
+use gate::report::{Finding, QualityReport, GATE_VERSION, QUALITY_FINDINGS_LIMIT};
 
 /// Passes when `report`'s quality file and quality.json are tests/golden/<name>.txt and .json, the JSON's
 /// gate_version written `<version>` there.
@@ -109,7 +109,7 @@ fn an_error_report_with_every_section() {
 
 #[test]
 fn an_error_report_whose_findings_to_weigh_are_cut() {
-    let n = QUALITY_ISSUE_LIMIT as u32 - 1;
+    let n = QUALITY_FINDINGS_LIMIT as u32 - 1;
     let r = QualityReport {
         conditions: vec![format!("{n} findings on lines the change added; each is listed below.")],
         issues: issues(n),
@@ -122,7 +122,7 @@ fn an_error_report_whose_findings_to_weigh_are_cut() {
 
 #[test]
 fn an_error_report_over_the_limit() {
-    let limit = QUALITY_ISSUE_LIMIT;
+    let limit = QUALITY_FINDINGS_LIMIT;
     let r = QualityReport {
         conditions: vec![
             format!("{} findings on lines the change added; each is listed below.", limit + 2),

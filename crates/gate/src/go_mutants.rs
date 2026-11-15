@@ -299,7 +299,7 @@ fn git_for_gremlins(scratch: &Path, diff: &[u8]) -> std::io::Result<OsString> {
 fn run_findings(done: &Finished, module: &Path, functions: &[&Edited], place: &str, budget: u64) -> Vec<Finding> {
     if done.status != 0 && !done.stopped {
         let stderr = text::lossless(&done.stderr);
-        let error = stderr.split('\n').find_map(|line| line.strip_prefix("ERROR: ")).map(text::clip);
+        let error = stderr.split('\n').find_map(|line| line.strip_prefix("ERROR: ")).map(text::shortened);
         let said = error.unwrap_or_else(|| done.said());
         return vec![not_run(&format!("gremlins failed in {place}, exiting with status {}: {said}", done.status))];
     }

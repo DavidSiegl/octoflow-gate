@@ -89,6 +89,12 @@ fn an_error_report_with_every_section() {
         failing_tests: Some(vec![
             ("t.T.test_x".into(), "AssertionError: 3 != 2\ntraceback".into()),
             ("t.T.test_y".into(), String::new()),
+            (
+                "gate.tests::sums".into(),
+                "thread 'tests::sums' (7) panicked at src/lib.rs:6:5:\nsums differ\n  left: 2\n\
+                 OCTOFLOW_TEST_SEED=42 was this failing test's run seed"
+                    .into(),
+            ),
         ]),
         coverage: Some(NewCoverage {
             lines: 20,

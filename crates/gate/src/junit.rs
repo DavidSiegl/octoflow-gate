@@ -20,8 +20,14 @@ pub enum Outcome {
 /// (test, outcome, what failed) for each test case of the JUnit report at `report`, the test named
 /// `classname.name`; "" for an outcome other than Failed.
 ///
-/// What failed is what [`what_failed`] says of a failure's or an error's message and text. Errs when the report
-/// cannot be read or parsed.
+/// What failed is a failure's or an error's message, else, when the message is blank, its text. A message that the
+/// text opens with gives way to the text, which says more: cargo-nextest's message is only a panic's first line,
+/// `thread '…' panicked at <file>:<line>:<col>`, and its text goes on with the panic's message and what the test
+/// printed on standard error after it. A message that says no more than that the test failed, as gotestsum's
+/// `Failed`, gives way to the text without the lines `go test -v` frames a test's output with (`=== RUN`, `--- FAIL:`
+/// and the like), unless nothing but whitespace is left of it, as of a `t.Fail()` that logged nothing: so it opens
+/// with the test's own first line, such as a `t.Errorf`'s or, for a package that does not compile, gotestsum's
+/// `FAIL <package> [build failed]`. Errs when the report cannot be read or parsed.
 pub fn junit_outcomes(report: &Path) -> Result<Vec<(String, Outcome, String)>, Unjudged> {
     let doc = xml::parse_file(report)
         .map_err(|e| Unjudged(format!("cannot read the test report {}: {e}", crate::text::path(report.as_os_str()))))?;
@@ -42,25 +48,20 @@ pub fn junit_outcomes(report: &Path) -> Result<Vec<(String, Outcome, String)>, U
     Ok(out)
 }
 
-/// What failed, of a failing test case whose failure or error has `message` and `text`, "" for one it lacks: the
-/// message, else the text. A message that the text opens with gives way to the text, which says more: cargo-nextest's
-/// message is only a panic's first line, `thread '…' panicked at <file>:<line>:<col>`, and its text goes on with the
-/// panic's message and what the test printed on standard error after it. A message that says no more than that the
-/// test failed, as gotestsum's `Failed`, gives way to the text without the lines `go test -v` frames a test's output
-/// with (`=== RUN`, `--- FAIL:` and the like), unless nothing but whitespace is left of it, as of a `t.Fail()` that
-/// logged nothing: so it opens with the test's own first line, such as a `t.Errorf`'s or, for a package that does not
-/// compile, gotestsum's `FAIL <package> [build failed]`.
+/// What failed, of a failing test case whose failure or error has `message` and `text`, "" for one it lacks, as
+/// [`junit_outcomes`] gives it.
 fn what_failed(message: &str, text: &str) -> String {
-    let output = without_go_test_framing(text);
-    if message.is_empty() {
-        text.to_string()
-    } else if message.trim().eq_ignore_ascii_case("failed") && !output.trim().is_empty() {
-        output
-    } else if !message.trim().is_empty() && text.trim_start().starts_with(message.trim()) {
-        text.to_string()
-    } else {
-        message.to_string()
+    let message_said = message.trim();
+    if message_said.is_empty() || text.trim_start().starts_with(message_said) {
+        return text.to_string();
     }
+    if message_said.eq_ignore_ascii_case("failed") {
+        let output = without_go_test_framing(text);
+        if !output.trim().is_empty() {
+            return output;
+        }
+    }
+    message.to_string()
 }
 
 /// `output` without the lines with which `go test -v` announces a test or its result: `=== RUN`, `=== PAUSE`,
@@ -131,6 +132,7 @@ mod tests {
              OCTOFLOW_TEST_SEED=42 was this failing test&apos;s run seed</failure></testcase>\
              <testcase classname=\"t\" name=\"a\"><failure message=\"AssertionError\">def test_a():&#xA;\
              E   AssertionError</failure></testcase>\
+             <testcase classname=\"t\" name=\"b\"><failure message=\" \">boom</failure></testcase>\
              </testsuite></testsuites>",
         )
         .unwrap();
@@ -144,6 +146,7 @@ mod tests {
                         .into()
                 ),
                 ("t.a".into(), "AssertionError".into()),
+                ("t.b".into(), "boom".into()),
             ]
         );
     }

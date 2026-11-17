@@ -95,9 +95,9 @@ impl QualityReport {
 
     /// The quality file: `GATE: ` and the verdict on its first line, then what whoever answers it has to answer.
     ///
-    /// It numbers at most [`QUALITY_FINDINGS_LIMIT`] findings and lists as many failing tests, each by the first line
-    /// of its detail, and counts the rest. It is prose, whose wording may change in any release; a program reads
-    /// [`QualityReport::json`] instead.
+    /// It numbers at most [`QUALITY_FINDINGS_LIMIT`] findings and lists as many failing tests, each by its detail's
+    /// first line and the lines after it that say why (`failure_summary`), and counts the rest. It is prose, whose
+    /// wording may change in any release; a program reads [`QualityReport::json`] instead.
     pub fn markdown(&self) -> String {
         let mut out = vec![format!("GATE: {}", self.verdict().word()), String::new(), self.intro()];
         if !self.conditions.is_empty() {
@@ -384,9 +384,10 @@ const RUN_SEED_VARIABLE: &str = "OCTOFLOW_TEST_SEED";
 
 /// What a failing test's line in the quality file says of `detail`, what failed as the test report gave it: its
 /// first line, "failed" when it has none; for a Rust panic, whose first line only says where, the message on the line
-/// after too; then every line that names [`RUN_SEED_VARIABLE`], so that the case can be generated again. The lines are
-/// `detail`'s after [`text::py_strip`], split at `\r\n` and at each of [`text::LINE_BREAKS`], and are joined by
-/// spaces.
+/// after too; then the first line that names [`RUN_SEED_VARIABLE`], so that the case can be generated again (a run
+/// has one seed, so any further such line repeats it). The lines are `detail`'s after [`text::py_strip`], split at
+/// `\r\n` and at each of [`text::LINE_BREAKS`]; each part is stripped the same way, an empty one is left out, and the
+/// rest are joined by spaces.
 fn failure_summary(detail: &str) -> String {
     let mut lines = text::py_strip(detail).split("\r\n").flat_map(|line| line.split(text::LINE_BREAKS));
     let first = lines.next().unwrap_or_default();
@@ -394,13 +395,14 @@ fn failure_summary(detail: &str) -> String {
         return "failed".into();
     }
     let mut parts = vec![first];
-    // `thread 'name' panicked at file:line:col:`, since Rust 1.73, which a later Rust
-    // gives ` (<thread id>)` after the name.
+    // `thread 'name' panicked at file:line:col:`, since Rust 1.73, which a later Rust gives ` (<thread id>)` after
+    // the name.
     let rust_panic = first.starts_with("thread '") && first.contains(" panicked at ") && first.ends_with(':');
     if rust_panic {
         parts.extend(lines.next());
     }
-    parts.extend(lines.filter(|line| line.contains(RUN_SEED_VARIABLE)));
+    parts.extend(lines.find(|line| line.contains(RUN_SEED_VARIABLE)));
+    let parts: Vec<&str> = parts.into_iter().map(text::py_strip).filter(|part| !part.is_empty()).collect();
     parts.join(" ")
 }
 
@@ -438,8 +440,12 @@ mod tests {
             "thread 'main' panicked at src/a.rs:1:2: boom"
         );
         assert_eq!(
-            failure_summary("AssertionError: 3 != 2\nTraceback\nOCTOFLOW_TEST_SEED=7"),
+            failure_summary("AssertionError: 3 != 2\nTraceback\n  OCTOFLOW_TEST_SEED=7 \nOCTOFLOW_TEST_SEED=7"),
             "AssertionError: 3 != 2 OCTOFLOW_TEST_SEED=7"
+        );
+        assert_eq!(
+            failure_summary("thread 'a' panicked at a.rs:1:2:\n\nnote: run with"),
+            "thread 'a' panicked at a.rs:1:2:"
         );
     }
 

@@ -95,9 +95,9 @@ impl QualityReport {
 
     /// The quality file: `GATE: ` and the verdict on its first line, then what whoever answers it has to answer.
     ///
-    /// It numbers at most [`QUALITY_FINDINGS_LIMIT`] findings and lists as many failing tests, each by the first line
-    /// of its detail, and counts the rest. It is prose, whose wording may change in any release; a program reads
-    /// [`QualityReport::json`] instead.
+    /// It numbers at most [`QUALITY_FINDINGS_LIMIT`] findings and lists as many failing tests, each by its detail's
+    /// first line and the lines after it that say why (`failure_summary`), and counts the rest. It is prose, whose
+    /// wording may change in any release; a program reads [`QualityReport::json`] instead.
     pub fn markdown(&self) -> String {
         let mut out = vec![format!("GATE: {}", self.verdict().word()), String::new(), self.intro()];
         if !self.conditions.is_empty() {
@@ -370,7 +370,7 @@ fn tests_section(tests: &[(String, String)]) -> Vec<String> {
         out.push("None.".into());
     }
     out.extend(tests.iter().take(QUALITY_FINDINGS_LIMIT).map(|(name, detail)| {
-        one_line(&format!("- `{name}`: {}", first_line(detail).unwrap_or("failed")))
+        one_line(&format!("- `{name}`: {}", failure_summary(detail)))
     }));
     if tests.len() > QUALITY_FINDINGS_LIMIT {
         out.push(format!("- and {} more.", tests.len() - QUALITY_FINDINGS_LIMIT));
@@ -378,12 +378,32 @@ fn tests_section(tests: &[(String, String)]) -> Vec<String> {
     out
 }
 
-/// The first line of `detail` stripped of the whitespace around it, as Python's `detail.strip().splitlines()[0]`
-/// takes it, by [`text::py_strip`] and [`text::LINE_BREAKS`]; None when `detail` is only whitespace.
-fn first_line(detail: &str) -> Option<&str> {
-    let stripped = text::py_strip(detail);
-    let end = stripped.find(text::LINE_BREAKS).unwrap_or(stripped.len());
-    (!stripped.is_empty()).then(|| &stripped[..end])
+/// The environment variable a generated-input test of octoflow's reads its run seed from, and which a failing one
+/// names on standard error (octoflow-ai's `engine/src/test_support.rs`), so that [`failure_summary`] keeps the seed.
+const RUN_SEED_VARIABLE: &str = "OCTOFLOW_TEST_SEED";
+
+/// What a failing test's line in the quality file says of `detail`, what failed as the test report gave it: its
+/// first line, "failed" when it has none; for a Rust panic, whose first line only says where, the message on the line
+/// after too; then the first line that names [`RUN_SEED_VARIABLE`], so that the case can be generated again (a run
+/// has one seed, so any further such line repeats it). The lines are `detail`'s after [`text::py_strip`], split at
+/// `\r\n` and at each of [`text::LINE_BREAKS`]; each part is stripped the same way, an empty one is left out, and the
+/// rest are joined by spaces.
+fn failure_summary(detail: &str) -> String {
+    let mut lines = text::py_strip(detail).split("\r\n").flat_map(|line| line.split(text::LINE_BREAKS));
+    let first = lines.next().unwrap_or_default();
+    if first.is_empty() {
+        return "failed".into();
+    }
+    let mut parts = vec![first];
+    // `thread 'name' panicked at file:line:col:`, since Rust 1.73, which a later Rust gives ` (<thread id>)` after
+    // the name.
+    let rust_panic = first.starts_with("thread '") && first.contains(" panicked at ") && first.ends_with(':');
+    if rust_panic {
+        parts.extend(lines.next());
+    }
+    parts.extend(lines.find(|line| line.contains(RUN_SEED_VARIABLE)));
+    let parts: Vec<&str> = parts.into_iter().map(text::py_strip).filter(|part| !part.is_empty()).collect();
+    parts.join(" ")
 }
 
 #[cfg(test)]
@@ -399,8 +419,39 @@ mod tests {
     }
 
     #[test]
-    fn a_failing_test_s_first_line_is_its_detail_s_after_stripping() {
-        assert_eq!(first_line("  \n Error: 1\r\nline 2"), Some("Error: 1"));
-        assert_eq!(first_line(" \n\u{1f} "), None);
+    fn a_failing_test_s_summary_is_its_detail_s_first_line_after_stripping() {
+        assert_eq!(failure_summary("  \n Error: 1\r\nline 2"), "Error: 1");
+        assert_eq!(failure_summary(" \n\u{1f} "), "failed");
+    }
+
+    #[test]
+    fn a_rust_panic_s_summary_keeps_its_message_and_its_run_seed() {
+        let detail = "thread 'tests::boom' (1600516) panicked at src/lib.rs:6:32:\n\
+                      assertion `left == right` failed: sums differ\n  left: 2\n right: 3\n\
+                      note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\
+                      OCTOFLOW_TEST_SEED=42 was this failing test's run seed\n";
+        assert_eq!(
+            failure_summary(detail),
+            "thread 'tests::boom' (1600516) panicked at src/lib.rs:6:32: \
+             assertion `left == right` failed: sums differ OCTOFLOW_TEST_SEED=42 was this failing test's run seed"
+        );
+        assert_eq!(
+            failure_summary("thread 'main' panicked at src/a.rs:1:2:\r\nboom\r\nleft"),
+            "thread 'main' panicked at src/a.rs:1:2: boom"
+        );
+        assert_eq!(
+            failure_summary("AssertionError: 3 != 2\nTraceback\n  OCTOFLOW_TEST_SEED=7 \nOCTOFLOW_TEST_SEED=7"),
+            "AssertionError: 3 != 2 OCTOFLOW_TEST_SEED=7"
+        );
+        assert_eq!(
+            failure_summary("thread 'a' panicked at a.rs:1:2:\n\nnote: run with"),
+            "thread 'a' panicked at a.rs:1:2:"
+        );
+    }
+
+    #[test]
+    fn each_failing_test_is_one_line_of_the_section() {
+        let tests = [("t\ra".to_string(), "thread 'a' panicked at a.rs:1:2:\nboom\u{2028}again".to_string())];
+        assert_eq!(tests_section(&tests)[3], "- `t\\x0da`: thread 'a' panicked at a.rs:1:2: boom");
     }
 }

@@ -899,7 +899,11 @@ cargo llvm-cov nextest --locked --workspace --ignore-run-fail --profile ci \
   whatever fails, and the `ci` profile of `ci/nextest.toml` writes their JUnit report to `target/nextest/ci/junit.xml`
   in the workspace, here at the top level, which `gate.toml` names as the command's JUnit report. A workspace that does
   not compile is a failed condition naming the command, and so is a run that leaves no JUnit report, since
-  `--ignore-run-fail` also passes a nextest that ran no test ([running the tests](#running-the-tests)). `--config-file`
+  `--ignore-run-fail` also passes a nextest that ran no test ([running the tests](#running-the-tests)). A failing
+  test's detail is the panic and what the test printed on standard error after it, since nextest's message is only the
+  panic's first line, `thread '…' panicked at <file>:<line>:<col>`; the quality file's line for the test adds the
+  panic's message, on the line after, and any line naming `OCTOFLOW_TEST_SEED`, with which octoflow's generated-input
+  tests generate a failing case again (`failure_summary` in `crates/gate/src/report.rs`). `--config-file`
   replaces the workspace's own `.config/nextest.toml`, so a change cannot configure how its tests run in the gate.
 - **Doctests** do not run: cargo-nextest has none, and cargo-llvm-cov runs them only on a nightly toolchain.
 - **Where the tools come from**: `ci/install-tools.sh` downloads cargo-llvm-cov and cargo-nextest, and cargo-mutants for
@@ -1149,7 +1153,9 @@ for each part that has one (`crates/gate/src/report.rs` and `text.rs`), and octo
 - **Findings to weigh.** In a section, the line `These do not fail the gate. Fix each, or say in your report why
   it should stand.` (`QUALITY_TO_WEIGH_NOTE`) comes before its findings to weigh; the numbered findings above it
   fail the gate.
-- **Failing tests.** Under `## Failing tests` (`QUALITY_FAILING_TESTS`), one bullet per test, `` - `name`: detail ``.
+- **Failing tests.** Under `## Failing tests` (`QUALITY_FAILING_TESTS`), one bullet per test, `` - `name`: detail ``,
+  the detail cut to its first line, a Rust panic's message and any line naming `OCTOFLOW_TEST_SEED`, joined by spaces
+  (`failure_summary`).
 - **One line per item.** A character that ends a line in some reader, such as `\r` or U+2028, is written as an escape,
   `\x0d` or `\u2028`, in every list item and name (`one_line` in `crates/gate/src/text.rs`), so each item is read back
   as the one line it was written as.

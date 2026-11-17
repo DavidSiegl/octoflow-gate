@@ -20,11 +20,8 @@ pub enum Outcome {
 /// (test, outcome, what failed) for each test case of the JUnit report at `report`, the test named
 /// `classname.name`; "" for an outcome other than Failed.
 ///
-/// What failed is a failure's or an error's message, else its text. A message that says no more than that the test
-/// failed, as gotestsum's `Failed`, gives way to the text without the lines `go test -v` frames a test's output with
-/// (`=== RUN`, `--- FAIL:` and the like), unless nothing but whitespace is left of it, as of a `t.Fail()` that logged
-/// nothing: so it opens with the test's own first line, such as a `t.Errorf`'s or, for a package that does not
-/// compile, gotestsum's `FAIL <package> [build failed]`. Errs when the report cannot be read or parsed.
+/// What failed is what [`what_failed`] says of a failure's or an error's message and text. Errs when the report
+/// cannot be read or parsed.
 pub fn junit_outcomes(report: &Path) -> Result<Vec<(String, Outcome, String)>, Unjudged> {
     let doc = xml::parse_file(report)
         .map_err(|e| Unjudged(format!("cannot read the test report {}: {e}", crate::text::path(report.as_os_str()))))?;
@@ -33,15 +30,7 @@ pub fn junit_outcomes(report: &Path) -> Result<Vec<(String, Outcome, String)>, U
         let name = format!("{}.{}", case.get("classname").unwrap_or(""), case.get("name").unwrap_or(""));
         let name = name.trim_matches('.').to_string();
         if let Some(failed) = case.child("failure").or_else(|| case.child("error")) {
-            let message = failed.get("message").unwrap_or("");
-            let output = without_go_test_framing(&failed.text);
-            let detail = if message.is_empty() {
-                failed.text.clone()
-            } else if message.trim().eq_ignore_ascii_case("failed") && !output.trim().is_empty() {
-                output
-            } else {
-                message.to_string()
-            };
+            let detail = what_failed(failed.get("message").unwrap_or(""), &failed.text);
             out.push((name, Outcome::Failed, detail));
         } else if let Some(skipped) = case.child("skipped") {
             let xfail = skipped.get("type") == Some("pytest.xfail");
@@ -51,6 +40,27 @@ pub fn junit_outcomes(report: &Path) -> Result<Vec<(String, Outcome, String)>, U
         }
     }
     Ok(out)
+}
+
+/// What failed, of a failing test case whose failure or error has `message` and `text`, "" for one it lacks: the
+/// message, else the text. A message that the text opens with gives way to the text, which says more: cargo-nextest's
+/// message is only a panic's first line, `thread '…' panicked at <file>:<line>:<col>`, and its text goes on with the
+/// panic's message and what the test printed on standard error after it. A message that says no more than that the
+/// test failed, as gotestsum's `Failed`, gives way to the text without the lines `go test -v` frames a test's output
+/// with (`=== RUN`, `--- FAIL:` and the like), unless nothing but whitespace is left of it, as of a `t.Fail()` that
+/// logged nothing: so it opens with the test's own first line, such as a `t.Errorf`'s or, for a package that does not
+/// compile, gotestsum's `FAIL <package> [build failed]`.
+fn what_failed(message: &str, text: &str) -> String {
+    let output = without_go_test_framing(text);
+    if message.is_empty() {
+        text.to_string()
+    } else if message.trim().eq_ignore_ascii_case("failed") && !output.trim().is_empty() {
+        output
+    } else if !message.trim().is_empty() && text.trim_start().starts_with(message.trim()) {
+        text.to_string()
+    } else {
+        message.to_string()
+    }
 }
 
 /// `output` without the lines with which `go test -v` announces a test or its result: `=== RUN`, `=== PAUSE`,
@@ -105,6 +115,37 @@ mod tests {
         assert_eq!(failing_tests(&path).unwrap().len(), 2);
         std::fs::write(&path, "<testsuite>").unwrap();
         assert!(failing_tests(&path).unwrap_err().0.starts_with("cannot read the test report "));
+    }
+
+    #[test]
+    fn a_message_the_text_opens_with_gives_way_to_the_text() {
+        let dir = ScratchDir::new();
+        let path = dir.join("junit.xml");
+        std::fs::write(
+            &path,
+            "<testsuites><testsuite>\
+             <testcase classname=\"probe\" name=\"tests::boom\">\
+             <failure message=\"thread &apos;tests::boom&apos; (16) panicked at src/lib.rs:6:32\" \
+             type=\"test failure with exit code 101\">\
+             thread &apos;tests::boom&apos; (16) panicked at src/lib.rs:6:32:&#xA;sums differ&#xA;\
+             OCTOFLOW_TEST_SEED=42 was this failing test&apos;s run seed</failure></testcase>\
+             <testcase classname=\"t\" name=\"a\"><failure message=\"AssertionError\">def test_a():&#xA;\
+             E   AssertionError</failure></testcase>\
+             </testsuite></testsuites>",
+        )
+        .unwrap();
+        assert_eq!(
+            failing_tests(&path).unwrap(),
+            [
+                (
+                    "probe.tests::boom".into(),
+                    "thread 'tests::boom' (16) panicked at src/lib.rs:6:32:\nsums differ\n\
+                     OCTOFLOW_TEST_SEED=42 was this failing test's run seed"
+                        .into()
+                ),
+                ("t.a".into(), "AssertionError".into()),
+            ]
+        );
     }
 
     #[test]

@@ -1,8 +1,8 @@
 // Builds main and every pull request in a Multibranch Pipeline job and runs the quality
 // gate (scripts/gate) on each, failing the build on GATE: ERROR or when the gate could
-// not judge; then builds and checks the release tarball, which a build of main releases
-// when its version is new (Package, Release). A build of main whose tree a pull request build already judged skips
-// the gate (Judged at PR). For a pull request, Jenkins's GitHub App reports the result as the commit
+// not judge; then builds and checks the release tarball, has octoflow's main drive it (octoflow), and a build of
+// main releases it when its version is new (Package, Release). A build of main whose tree a pull request build already
+// judged skips the gate (Judged at PR). For a pull request, Jenkins's GitHub App reports the result as the commit
 // status continuous-integration/jenkins/pr-head, which auto-merge trusts only from that
 // App, as does the ci-cd ruleset on main once agent-estate's init/github-rules.py has set
 // it.
@@ -15,7 +15,8 @@ pipeline {
 
     options {
         buildDiscarder(logRotator(numToKeepStr: '30'))
-        timeout(time: 60, unit: 'MINUTES')
+        // The Gate stage has taken 40 minutes, and the octoflow stage, its own 30 at most, comes on top.
+        timeout(time: 90, unit: 'MINUTES')
         // One build per branch at a time, so a build's previous one has always finished.
         // The mail on a pass after a failure then compares each build with the one before
         // it (post).
@@ -113,6 +114,25 @@ pipeline {
             }
         }
 
+        // Whether octoflow can drive the tarball Package built: octoflow's main runs its e2e scenario real_gate on it
+        // (ci/octoflow-check.sh, which says what it needs; CLAUDE.md, "Releases", how a change octoflow must follow
+        // first gets through). On every build, before Release, so a release octoflow cannot drive is never published.
+        // CARGO_HOME and TMPDIR as Package's; the check's clone and build go under TMPDIR, which cleanup empties. Its
+        // own timeout, since it waits for octoflow's builds on the node (ci/cargo-lock.sh) and builds octoflow cold, so
+        // that a slow check fails here, naming this stage, rather than as the whole build's timeout.
+        stage('octoflow') {
+            environment {
+                CARGO_HOME = "${env.WORKSPACE}/.cargo-home"
+                TMPDIR = "${env.WORKSPACE_TMP}/tmp"
+            }
+            options {
+                timeout(time: 30, unit: 'MINUTES')
+            }
+            steps {
+                sh 'ci/octoflow-check.sh "$RELEASE_TARBALL" "$TMPDIR/octoflow-check"'
+            }
+        }
+
         // A merge into main that raises the version in crates/gate/Cargo.toml releases it; any other build of main finds
         // that release already there. gh creates the tag v<version> on GitHub at the commit built, so Jenkins needs
         // no git push credentials. Modelled on octoflow-ai's Release stage.
@@ -166,7 +186,10 @@ pipeline {
 
     post {
         always {
-            archiveArtifacts allowEmptyArchive: true, artifacts: 'quality.md, quality.json'
+            // The release candidate too, on every build, so that octoflow's change for a gate change it must follow
+            // first can be made against it (ci/octoflow-check.sh).
+            archiveArtifacts allowEmptyArchive: true,
+                             artifacts: 'quality.md, quality.json, dist/octoflow-gate-*.tar.gz*'
             // The JUnit report the gate's test command wrote (gate.toml's [[test]]), shown as the
             // build's test results and never judged: neither the build's result nor a GitHub check
             // (skipPublishingChecks) comes from it, so a failing test leaves the result to the
@@ -202,8 +225,9 @@ ${env.BUILD_URL}console""",
         }
         // Last, whatever the steps above did, so no build leaves the workspace to the next.
         cleanup {
-            // The TMPDIR scripts/gate and Package use too, which cleanWs leaves: scripts/gate empties it before it
-            // runs, but a build of main judged at PR runs Package alone. A clear-out that fails only warns, as there.
+            // The TMPDIR scripts/gate, Package and the octoflow stage use, which cleanWs leaves: scripts/gate empties
+            // it before it runs, but a build of main judged at PR skips the gate, and the octoflow stage leaves a whole
+            // octoflow clone and build there. A clear-out that fails only warns, as in scripts/gate.
             sh '''
                 # Unset, the path would be /tmp itself, the agent's.
                 [ -n "${WORKSPACE_TMP:-}" ] || exit 0

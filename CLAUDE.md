@@ -16,6 +16,11 @@ stages).
   sha256 of its downloaded tarball; `scripts/gate` refuses a `gate.toml` the pinned release would not read, so a new
   key lands with or after the raise.
 - Jenkins creates tags and releases after the merge.
+- Every build has octoflow's `main` drive the release tarball it built (`ci/octoflow-check.sh`, the Jenkinsfile's
+  octoflow stage), and fails when octoflow cannot. A change octoflow must follow first, such as a new
+  `schema_version` or a renamed flag, needs octoflow's change merged before this one can pass: make it against the
+  tarball the pull request's build archives. octoflow's own CI drives the release it pins, the one already out, so
+  its change has to drive both, e.g. by reading the old `schema_version` and the new one.
 
 ## Work
 

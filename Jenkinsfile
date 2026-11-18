@@ -1,8 +1,8 @@
 // Builds main and every pull request in a Multibranch Pipeline job and runs the quality
 // gate (scripts/gate) on each, failing the build on GATE: ERROR or when the gate could
-// not judge; then builds and checks the release tarball, which a build of main releases
-// when its version is new (Package, Release). A build of main whose tree a pull request build already judged skips
-// the gate (Judged at PR). For a pull request, Jenkins's GitHub App reports the result as the commit
+// not judge; then builds and checks the release tarball, has octoflow's main drive it (octoflow), and a build of
+// main releases it when its version is new (Package, Release). A build of main whose tree a pull request build already
+// judged skips the gate (Judged at PR). For a pull request, Jenkins's GitHub App reports the result as the commit
 // status continuous-integration/jenkins/pr-head, which auto-merge trusts only from that
 // App, as does the ci-cd ruleset on main once agent-estate's init/github-rules.py has set
 // it.
@@ -113,6 +113,20 @@ pipeline {
             }
         }
 
+        // Whether octoflow can drive the tarball Package built: octoflow's main runs its e2e scenario real_gate on it
+        // (ci/octoflow-check.sh, which says what it needs and how a change octoflow must follow first gets through).
+        // On every build, before Release, so a release octoflow cannot drive is never published. CARGO_HOME and TMPDIR
+        // as Package's; the check's clone and build go under TMPDIR, which cleanup empties.
+        stage('octoflow') {
+            environment {
+                CARGO_HOME = "${env.WORKSPACE}/.cargo-home"
+                TMPDIR = "${env.WORKSPACE_TMP}/tmp"
+            }
+            steps {
+                sh 'ci/octoflow-check.sh "$RELEASE_TARBALL" "$TMPDIR/octoflow-check"'
+            }
+        }
+
         // A merge into main that raises the version in crates/gate/Cargo.toml releases it; any other build of main finds
         // that release already there. gh creates the tag v<version> on GitHub at the commit built, so Jenkins needs
         // no git push credentials. Modelled on octoflow-ai's Release stage.
@@ -166,7 +180,10 @@ pipeline {
 
     post {
         always {
-            archiveArtifacts allowEmptyArchive: true, artifacts: 'quality.md, quality.json'
+            // The release candidate too, on every build, so that octoflow's change for a gate change it must follow
+            // first can be made against it (ci/octoflow-check.sh).
+            archiveArtifacts allowEmptyArchive: true,
+                             artifacts: 'quality.md, quality.json, dist/octoflow-gate-*.tar.gz*'
             // The JUnit report the gate's test command wrote (gate.toml's [[test]]), shown as the
             // build's test results and never judged: neither the build's result nor a GitHub check
             // (skipPublishingChecks) comes from it, so a failing test leaves the result to the

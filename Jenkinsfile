@@ -15,7 +15,8 @@ pipeline {
 
     options {
         buildDiscarder(logRotator(numToKeepStr: '30'))
-        timeout(time: 60, unit: 'MINUTES')
+        // The Gate stage has taken 40 minutes, and the octoflow stage, its own 30 at most, comes on top.
+        timeout(time: 90, unit: 'MINUTES')
         // One build per branch at a time, so a build's previous one has always finished.
         // The mail on a pass after a failure then compares each build with the one before
         // it (post).
@@ -114,13 +115,18 @@ pipeline {
         }
 
         // Whether octoflow can drive the tarball Package built: octoflow's main runs its e2e scenario real_gate on it
-        // (ci/octoflow-check.sh, which says what it needs and how a change octoflow must follow first gets through).
-        // On every build, before Release, so a release octoflow cannot drive is never published. CARGO_HOME and TMPDIR
-        // as Package's; the check's clone and build go under TMPDIR, which cleanup empties.
+        // (ci/octoflow-check.sh, which says what it needs; CLAUDE.md, "Releases", how a change octoflow must follow
+        // first gets through). On every build, before Release, so a release octoflow cannot drive is never published.
+        // CARGO_HOME and TMPDIR as Package's; the check's clone and build go under TMPDIR, which cleanup empties. Its
+        // own timeout, since it waits for octoflow's builds on the node (ci/cargo-lock.sh) and builds octoflow cold, so
+        // that a slow check fails here, naming this stage, rather than as the whole build's timeout.
         stage('octoflow') {
             environment {
                 CARGO_HOME = "${env.WORKSPACE}/.cargo-home"
                 TMPDIR = "${env.WORKSPACE_TMP}/tmp"
+            }
+            options {
+                timeout(time: 30, unit: 'MINUTES')
             }
             steps {
                 sh 'ci/octoflow-check.sh "$RELEASE_TARBALL" "$TMPDIR/octoflow-check"'
@@ -219,8 +225,9 @@ ${env.BUILD_URL}console""",
         }
         // Last, whatever the steps above did, so no build leaves the workspace to the next.
         cleanup {
-            // The TMPDIR scripts/gate and Package use too, which cleanWs leaves: scripts/gate empties it before it
-            // runs, but a build of main judged at PR runs Package alone. A clear-out that fails only warns, as there.
+            // The TMPDIR scripts/gate, Package and the octoflow stage use, which cleanWs leaves: scripts/gate empties
+            // it before it runs, but a build of main judged at PR skips the gate, and the octoflow stage leaves a whole
+            // octoflow clone and build there. A clear-out that fails only warns, as in scripts/gate.
             sh '''
                 # Unset, the path would be /tmp itself, the agent's.
                 [ -n "${WORKSPACE_TMP:-}" ] || exit 0

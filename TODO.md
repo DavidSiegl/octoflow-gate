@@ -8,6 +8,12 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
 
 ## Open issues
 
+- **The octoflow stage downloads all of octoflow's CI tools where its scenario needs only gitleaks.** As
+  cross-review 43 put it (F6, 2026-11-18): "octoflow-ai's `ci/install-tools.sh` also downloads cargo-llvm-cov,
+  cargo-nextest, cargo-mutants and cargo-about. That is four more GitHub downloads per build, any of which can fail
+  the gate's build although real_gate does not use it." `ci/octoflow-check.sh` runs it; octoflow's script takes only
+  a directory. Closes with an option there to install named tools only (an octoflow-ai change), which the check then
+  passes `gitleaks`.
 - **A Python function a removed mutmut pragma frees is mutated only when the diff touches its lines.** As
   cross-review 38 put it (round 3, 2026-11-14): "a pragma change only selects functions whose lines the diff
   touches. Deleting a `start`/`end` pair around f2, f3, f4 puts removal points next to f2 and f4 but none in f3. f3

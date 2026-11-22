@@ -329,8 +329,8 @@ pub fn vague_names(sources: &Sources) -> Vec<Finding> {
 /// The dependency-cycles check's findings on `sources`, by path and line: on Python where the change holds Python,
 /// and on Rust where it holds Rust, each language's imports read (lang_python::imports, lang_rust::imports) over all
 /// the tree's judged files of its name (Change::judged), `.py` or `.rs`, outside mutmut's state, at the base and in
-/// the working tree. The files gate.toml's `dependency-cycles.exempt` names take part in no cycle. Errs when git cannot
-/// one of the working tree's files cannot be read.
+/// the working tree. The files gate.toml's `dependency-cycles.exempt` names take part in no cycle. Errs when one of the
+/// working tree's files cannot be read.
 pub fn dependency_cycles(sources: &Sources) -> Result<Vec<Finding>, Unjudged> {
     let mut out = vec![];
     if !sources.python.files.is_empty() {

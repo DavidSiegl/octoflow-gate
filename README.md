@@ -108,8 +108,8 @@ passes-at-base and surviving-mutants checks of a change to Python run pytest, py
 project's Python, which `gate.toml`'s `python` or `--python` names, `python3` without either; those of a change to Rust
 run cargo-nextest and cargo-mutants, and the flaky-tests, passes-at-base and surviving-mutants checks of a change to Go
 run go test and gremlins. golangci-lint, and the go tool it and gremlins run, come from `PATH` for a project that tracks
-Go files; a Go project runs its tests with gotestsum ([Go tests and
-coverage](docs/quality-gate.md#go-tests-and-coverage)).
+Go files; a Go project runs its tests with gotestsum
+([Go tests and coverage](docs/quality-gate.md#go-tests-and-coverage)).
 
 A linter that is missing is a failed condition naming it, and for clippy that is a `cargo clippy --version` that
 fails, as it does where rustup's `clippy` component is not installed; a check that cannot run is one of its own

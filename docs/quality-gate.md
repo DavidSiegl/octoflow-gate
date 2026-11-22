@@ -633,8 +633,10 @@ such as to a `use` or a `const`, gives nothing. The findings are mutmut's kinds:
 - `budget-reached`: the budget ran out, before cargo-mutants started (it needs the 15 seconds of its stop, as mutmut
   does) or while it ran, with how many mutants it had tried; the workspaces after it are `not-run`;
 - `not-run`: cargo-mutants could not start, wrote no outcomes the gate can read, or found the unmutated baseline not
-  passing, as for tests that fail or code that does not build in the copy; the copy could not be made; or a changed
-  `.rs` file could not be parsed;
+  passing, as for tests that fail or code that does not build in the copy, with what its log says went wrong: the first
+  test's panic, cut as a failing test's detail is, or the first compiler or cargo error with its location, whichever
+  comes first, else the log's last line, since the log goes with the gate's copy; the copy could not be made; or a
+  changed `.rs` file could not be parsed;
 - `not-mutated`: a changed `.rs` file with no `Cargo.toml` above it, one whose workspace cargo cannot tell, or one
   whose workspace's directory is not above it, as a `package.workspace` can name;
 - `not-removed`: the copy could not be removed afterwards; the findings stand.

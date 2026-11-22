@@ -388,7 +388,7 @@ const RUN_SEED_VARIABLE: &str = "OCTOFLOW_TEST_SEED";
 /// has one seed, so any further such line repeats it). The lines are `detail`'s after [`text::py_strip`], split at
 /// `\r\n` and at each of [`text::LINE_BREAKS`]; each part is stripped the same way, an empty one is left out, and the
 /// rest are joined by spaces.
-fn failure_summary(detail: &str) -> String {
+pub(crate) fn failure_summary(detail: &str) -> String {
     let mut lines = text::py_strip(detail).split("\r\n").flat_map(|line| line.split(text::LINE_BREAKS));
     let first = lines.next().unwrap_or_default();
     if first.is_empty() {

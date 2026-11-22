@@ -322,9 +322,15 @@ fn run_findings(done: &Finished, output: &Path, root: &OsStr, budget: u64) -> Ve
     let place = format!("the workspace at `{}`", dir_name(root));
     let baseline = outcomes.iter().find(|o| o.scenario == "Baseline").and_then(|o| o.summary.as_str());
     if let Some(summary) = baseline.filter(|&s| s != "Success") {
+        // The log goes with the gate's scratch directory, so the finding carries what it says.
+        let log = output.join("log/baseline.log");
+        let said = match std::fs::read(&log) {
+            Ok(bytes) => format!("its log said: {}", baseline_cause(&text::lossless(&bytes))),
+            Err(e) => format!("its log could not be read: {}: {e}", text::path(log.as_os_str())),
+        };
         return vec![not_run(&format!(
-            "the unmutated baseline of {place} did not pass ({summary}, as cargo-mutants words it; its log is \
-             mutants.out/log/baseline.log), so it tried no mutant"
+            "the unmutated baseline of {place} did not pass ({summary}, as cargo-mutants words it), so it tried no \
+             mutant; {said}"
         ))];
     }
     let prefix = if root.is_empty() { vec![] } else { [root.as_bytes(), b"/"].concat() };
@@ -354,6 +360,28 @@ fn run_findings(done: &Finished, output: &Path, root: &OsStr, budget: u64) -> Ve
 struct Outcome {
     scenario: Value,
     summary: Value,
+}
+
+/// What `log`, the log cargo-mutants writes of an unmutated baseline that failed (mutants.out/log/baseline.log),
+/// says went wrong, in one line, from whichever comes first of: the first line that opens a Rust panic, with what
+/// report::failure_summary keeps of a failing test's detail after it; the first that opens an error of rustc's or
+/// cargo's (`error:` or `error[`), with the location rustc names on the line after it (`--> file:line:col`). A build
+/// that fails does so before any test runs, and a failing test's panic comes before nextest's closing error. Without
+/// either, the last line but those that open with `*** `, cargo-mutants' own; "nothing" when there is none. Lines are
+/// taken without the whitespace at either end, as nextest indents what a test printed.
+fn baseline_cause(log: &str) -> String {
+    let lines: Vec<&str> = log.split('\n').map(text::py_strip).collect();
+    for (k, line) in lines.iter().enumerate() {
+        if line.starts_with("thread '") && line.contains(" panicked at ") {
+            return crate::report::failure_summary(&lines[k..].join("\n"));
+        }
+        if line.starts_with("error:") || line.starts_with("error[") {
+            let at = lines.get(k + 1).filter(|next| next.starts_with("--> "));
+            return at.map_or(line.to_string(), |at| format!("{line} {at}"));
+        }
+    }
+    let last = lines.iter().rev().find(|line| !line.is_empty() && !line.starts_with("*** "));
+    last.map_or("nothing".into(), |line| line.to_string())
 }
 
 /// The outcomes cargo-mutants wrote to outcomes.json in `output`, its mutants.out; cargo-mutants rewrites the file
@@ -682,12 +710,70 @@ mod tests {
             too.");
     }
 
+    /// [`run_findings`] of a run in the workspace at engine whose unmutated baseline failed, having written `log`,
+    /// when given, as its baseline.log.
+    fn failed_baseline(log: Option<&str>) -> Vec<Finding> {
+        let dir = ScratchDir::new();
+        write_outcomes(&dir, &[baseline("Failure")]);
+        if let Some(log) = log {
+            std::fs::create_dir_all(dir.join("log")).unwrap();
+            std::fs::write(dir.join("log/baseline.log"), log).unwrap();
+        }
+        let found = run_findings(&done(4, false), &dir, OsStr::new("engine"), 30);
+        found
+    }
+
+    /// The finding of a failed baseline whose log said `said`.
+    fn baseline_not_run(said: &str) -> Vec<Finding> {
+        vec![not_run(&format!(
+            "the unmutated baseline of the workspace at `engine` did not pass (Failure, as cargo-mutants words it), \
+             so it tried no mutant; its log said: {said}"
+        ))]
+    }
+
     #[test]
-    fn a_baseline_that_fails_is_not_run() {
-        assert_eq!(engine_findings(&done(4, false), Some(&[baseline("Failure")])), vec![not_run(
-            "the unmutated baseline of the workspace at `engine` did not pass (Failure, as cargo-mutants words it; its \
-             log is mutants.out/log/baseline.log), so it tried no mutant"
-        )]);
+    fn a_baseline_that_fails_to_build_is_not_run_and_says_the_compiler_s_error() {
+        let log = "\n*** baseline\n\n*** /bin/cargo nextest run --no-run --verbose --package=calc@0.1.0\n   \
+                   Compiling calc v0.1.0 (/tmp/x)\nerror[E0583]: file not found for module `extra`\n --> \
+                   src/lib.rs:1:1\n  |\n1 | mod extra;\n  | ^^^^^^^^^^\n\nerror: could not compile `calc` (lib) \
+                   due to 1 previous error\n\n*** result: Failure(101)\n";
+        assert_eq!(
+            failed_baseline(Some(log)),
+            baseline_not_run("error[E0583]: file not found for module `extra` --> src/lib.rs:1:1")
+        );
+        let full = "*** /bin/cargo nextest run --no-run\nerror: failed to write /tmp/x/target: No space left on \
+                    device (os error 28)\n*** result: Failure(101)\n";
+        assert_eq!(
+            failed_baseline(Some(full)),
+            baseline_not_run("error: failed to write /tmp/x/target: No space left on device (os error 28)")
+        );
+    }
+
+    #[test]
+    fn a_baseline_whose_test_fails_is_not_run_and_says_its_panic() {
+        let log = "*** /bin/cargo nextest run --verbose\n        FAIL [   0.021s] (1/1) calc t\n  stderr ───\n    \
+                   thread 't' (13) panicked at src/lib.rs:4:8:\n    \
+                   assertion `left == right` failed: sums differ\n      left: 3\n    OCTOFLOW_TEST_SEED=7 \
+                   was this failing test's run seed\nerror: test run failed\n\
+                   *** result: Failure(100)\n";
+        assert_eq!(
+            failed_baseline(Some(log)),
+            baseline_not_run(
+                "thread 't' (13) panicked at src/lib.rs:4:8: assertion `left == right` failed: sums differ \
+                 OCTOFLOW_TEST_SEED=7 was this failing test's run seed"
+            )
+        );
+    }
+
+    #[test]
+    fn a_failed_baseline_without_an_error_or_a_panic_says_its_last_line_or_that_its_log_is_missing() {
+        let log = "*** /bin/cargo nextest run\nKilled\n\n*** result: Failure(137)\n";
+        assert_eq!(failed_baseline(Some(log)), baseline_not_run("Killed"));
+        assert_eq!(failed_baseline(Some("*** baseline\n")), baseline_not_run("nothing"));
+        let [missing] = &failed_baseline(None)[..] else { panic!("not one finding") };
+        let said = "so it tried no mutant; its log could not be read: ";
+        let missing_file = "/log/baseline.log: No such file or directory (os error 2); ";
+        assert!(missing.message.contains(said) && missing.message.contains(missing_file), "{}", missing.message);
     }
 
     #[test]

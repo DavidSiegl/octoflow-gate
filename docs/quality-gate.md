@@ -31,11 +31,11 @@ leaves neither tracked nor ignored is judged: a virtual environment or `node_mod
 mutmut run left fails the gate as mutmut state the change commits (below), a `quality.md` an earlier run wrote is
 linted, and a `Cargo.lock` cargo wrote makes clippy run `--locked`. Ignore such files in `.gitignore`.
 
-`gate` is one binary, which a release ships built ([README.md](../README.md), "Running the gate in a project"); it
-runs in the tree it judges, and reads the tree's Rust, Python and Go [itself](#reading-the-source). The tools
-it runs it finds on `PATH`, but for the judged project's Python, in which that project's pytest, pytest-randomly and
-mutmut are installed: `--python PATH` names it, else the `python` key of [the settings](#the-gates-settings), else it
-is `python3`.
+`gate` is one binary, which a release ships built ([README.md](../README.md), "Running the gate in a project"); it runs
+in the tree it judges, and reads the tree's Rust, Python and Go [itself](#reading-the-source). The tools it runs it
+finds on `PATH`, git 2.34 or later among them, but for the judged project's Python, in which that project's pytest,
+pytest-randomly and mutmut are installed: `--python PATH` names it, else the `python` key of [the
+settings](#the-gates-settings), else it is `python3`.
 
 It first runs the tests, with the commands the project's `gate.toml` lists as `[[test]]`
 ([running the tests](#running-the-tests)). This repository's lists one, `cargo llvm-cov nextest`, which runs the

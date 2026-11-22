@@ -330,7 +330,7 @@ pub fn vague_names(sources: &Sources) -> Vec<Finding> {
 /// and on Rust where it holds Rust, each language's imports read (lang_python::imports, lang_rust::imports) over all
 /// the tree's judged files of its name (Change::judged), `.py` or `.rs`, outside mutmut's state, at the base and in
 /// the working tree. The files gate.toml's `dependency-cycles.exempt` names take part in no cycle. Errs when git cannot
-/// list the base's files, or one cannot be read.
+/// one of the working tree's files cannot be read.
 pub fn dependency_cycles(sources: &Sources) -> Result<Vec<Finding>, Unjudged> {
     let mut out = vec![];
     if !sources.python.files.is_empty() {
@@ -371,11 +371,11 @@ type ReadImports = fn(&[(OsString, Vec<u8>)]) -> ImportGraph;
 /// Files of a tree, as the front ends' imports take them: (path from the tree's top level, bytes).
 type TreeFiles = Vec<(OsString, Vec<u8>)>;
 
-/// (path, bytes) of each of the tree's tracked regular files outside mutmut's state ([`under_mutmut_state`]) whose
-/// path ends in `suffix`, as `change`'s base holds them and as its working tree does, `at_base` being the contents at
-/// the base of the change's files that are regular files there, by base path ([`Stored::at_base`]). A base path is the
-/// file's there, which the change may rename. Errs when git cannot list the working tree's files, or one cannot be
-/// read.
+/// (path, bytes) of each of the tree's judged regular files (Change::judged) outside mutmut's state
+/// ([`under_mutmut_state`]) whose path ends in `suffix`, as `change`'s base holds them and as its working tree does,
+/// `at_base` being the contents at the base of the change's files that are regular files there, by base path
+/// ([`Stored::at_base`]). A base path is the file's there, which the change may rename. Errs when one of the working
+/// tree's files cannot be read.
 fn trees(
     change: &Change,
     at_base: &HashMap<OsString, Vec<u8>>,
@@ -413,8 +413,8 @@ fn working_tree_files(change: &Change, wanted: impl Fn(&OsStr) -> bool) -> Resul
 /// lang_rust::code_tokens, lang_go::code_tokens) over the working tree's judged files outside mutmut's state that
 /// hold the language as the other parser checks tell it, by name or first line and in one of its projects
 /// ([`holds_source`]), and are not generated ([`Language::generated`]). The files gate.toml's
-/// `duplicated-blocks.exempt` names are neither judged nor matched. Errs when git cannot list the tree's files, or one
-/// cannot be read.
+/// `duplicated-blocks.exempt` names are neither judged nor matched. Errs when one of the working tree's files cannot be
+/// read.
 pub fn duplicated_blocks(sources: &Sources) -> Result<Vec<Finding>, Unjudged> {
     let change = sources.change;
     let languages: [(&Language, ReadTokens); 3] =

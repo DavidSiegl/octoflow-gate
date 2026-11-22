@@ -164,6 +164,22 @@ fn an_untracked_file_is_judged_as_an_added_one_an_ignored_one_is_not_and_the_ind
 }
 
 #[test]
+fn a_file_the_test_commands_write_is_not_judged() {
+    let repo = repo();
+    let args = repo.outside.join("shellcheck-args");
+    let bin = repo.stub("shellcheck", &format!("printf '%s\\n' \"$@\" > '{}'", args.display()));
+    repo.put("before.sh", b"#!/bin/sh\n");
+    repo.put("gate.toml", b"[[test]]\nname = \"writes\"\n\
+                           command = [\"sh\", \"-c\", \"echo '#!/bin/sh' > written.sh\"]\n");
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    let done = repo.gate_command("HEAD").env("PATH", path).output().unwrap();
+    assert!(repo.repo.join("written.sh").exists(), "{}", String::from_utf8_lossy(&done.stdout));
+    let given = std::fs::read_to_string(&args).unwrap();
+    assert!(given.lines().any(|a| a == "before.sh"), "{given}");
+    assert!(!given.lines().any(|a| a == "written.sh"), "{given}");
+}
+
+#[test]
 fn a_change_it_cannot_judge_writes_nothing_and_exits_2() {
     let repo = repo();
     let out = repo.outside.join("quality.md");

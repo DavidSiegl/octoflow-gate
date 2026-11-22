@@ -83,7 +83,7 @@ fn rerun_findings(python: &PythonChange, tmp: &Path, tests: &Tests) -> Vec<Findi
     let change = python.change;
     let whole = |message: String| vec![finding(None, None, "not-rerun", message)];
     let tree = tmp.join("tree");
-    if let Err(e) = copy_working_tree(&change.root, &tree) {
+    if let Err(e) = copy_working_tree(change, &tree) {
         return whole(format!(
             "could not copy the working tree to rerun the changed tests in: {e}; the changed tests were not rerun."
         ));
@@ -226,7 +226,7 @@ fn go_findings(go: &GoChange) -> Vec<Finding> {
 /// working tree that it makes in `tmp`, an empty directory, beside the tests it builds.
 fn go_rerun_findings(go: &GoChange, tmp: &Path, packages: &Packages) -> Vec<Finding> {
     let tree = tmp.join("tree");
-    if let Err(e) = copy_working_tree(&go.change.root, &tree) {
+    if let Err(e) = copy_working_tree(go.change, &tree) {
         let message = format!(
             "could not copy the working tree to rerun the changed Go tests in: {e}; the changed Go tests were not \
              rerun."

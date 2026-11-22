@@ -161,7 +161,7 @@ fn rust_mutants(rust: &RustChange, functions: &[Edited], budget: &Budget) -> Vec
 /// workspace after it a `not-run` one; a copy that cannot be made is the one `not-run` finding.
 fn on_copy(rust: &RustChange, dir: &Path, functions: &[Edited], budget: &Budget) -> Vec<Finding> {
     let tree = dir.join("tree");
-    if let Err(e) = copy_working_tree(&rust.change.root, &tree) {
+    if let Err(e) = copy_working_tree(rust.change, &tree) {
         return vec![not_run(&format!("could not copy the tree for cargo-mutants: {e}"))];
     }
     let mut out = vec![];
@@ -364,18 +364,20 @@ struct Outcome {
 
 /// What `log`, the log cargo-mutants writes of an unmutated baseline that failed (mutants.out/log/baseline.log),
 /// says went wrong, in one line, from whichever comes first of: the first line that opens a Rust panic, with what
-/// report::failure_summary keeps of a failing test's detail after it; the first that opens an error of rustc's or
-/// cargo's (`error:` or `error[`), with the location rustc names on the line after it (`--> file:line:col`). A build
-/// that fails does so before any test runs, and a failing test's panic comes before nextest's closing error. Without
-/// either, the last line but those that open with `*** `, cargo-mutants' own; "nothing" when there is none. Lines are
-/// taken without the whitespace at either end, as nextest indents what a test printed.
+/// report::failure_summary keeps of a failing test's detail after it; the first unindented line that opens an error
+/// of rustc's or cargo's (`error:` or `error[`), with the location rustc names on the line after it (`-->
+/// file:line:col`). A build that fails does so before any test runs, and a failing test's panic comes before
+/// nextest's closing error. Without either, the last line but those that open with `*** `, cargo-mutants' own;
+/// "nothing" when there is none. Lines are taken without the whitespace at either end, as nextest indents what a test
+/// printed; that indent is what tells an `error:` a test printed from cargo's.
 fn baseline_cause(log: &str) -> String {
-    let lines: Vec<&str> = log.split('\n').map(text::py_strip).collect();
+    let raw: Vec<&str> = log.split('\n').collect();
+    let lines: Vec<&str> = raw.iter().map(|line| text::py_strip(line)).collect();
     for (k, line) in lines.iter().enumerate() {
         if line.starts_with("thread '") && line.contains(" panicked at ") {
             return crate::report::failure_summary(&lines[k..].join("\n"));
         }
-        if line.starts_with("error:") || line.starts_with("error[") {
+        if raw[k].starts_with("error:") || raw[k].starts_with("error[") {
             let at = lines.get(k + 1).filter(|next| next.starts_with("--> "));
             return at.map_or(line.to_string(), |at| format!("{line} {at}"));
         }
@@ -751,7 +753,8 @@ mod tests {
 
     #[test]
     fn a_baseline_whose_test_fails_is_not_run_and_says_its_panic() {
-        let log = "*** /bin/cargo nextest run --verbose\n        FAIL [   0.021s] (1/1) calc t\n  stderr ───\n    \
+        let log = "*** /bin/cargo nextest run --verbose\n        FAIL [   0.021s] (1/1) calc t\n  \
+                   stderr ───\n    error: connection refused\n    \
                    thread 't' (13) panicked at src/lib.rs:4:8:\n    \
                    assertion `left == right` failed: sums differ\n      left: 3\n    OCTOFLOW_TEST_SEED=7 \
                    was this failing test's run seed\nerror: test run failed\n\

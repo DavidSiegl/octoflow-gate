@@ -22,10 +22,14 @@ gate --base main --out quality.md
 ```
 
 The working tree it judges is the files git tracks and those it neither tracks nor ignores: a file not yet added
-counts as one the change adds, so a change judged before it is committed is judged as it would be committed. Every
-check takes that same tree: the linters read it, the changed lines are diffed from it, and the tools that run in a copy
-get a copy of it. git's own index is left as it was. An untracked directory that holds a repository of its own goes
-into the copies whole, and adds no changed line.
+counts as one the change adds, so a change judged before it is committed is judged as it would be committed. The gate
+lists that tree once, before the tests run, and every check takes the list: the linters read it, the changed lines are
+diffed from it, and the tools that run in a copy get a copy of it. A file the tests write is not judged, and git's own
+index is left as it was. An untracked directory that holds a repository of its own goes into the copies whole, as a
+submodule does, and adds no changed line, as `git add` would add it as one entry, not its files. So whatever a tree
+leaves neither tracked nor ignored is judged: a virtual environment or `node_modules/` is linted, a `mutants/` a local
+mutmut run left fails the gate as mutmut state the change commits (below), a `quality.md` an earlier run wrote is
+linted, and a `Cargo.lock` cargo wrote makes clippy run `--locked`. Ignore such files in `.gitignore`.
 
 `gate` is one binary, which a release ships built ([README.md](../README.md), "Running the gate in a project"); it
 runs in the tree it judges, and reads the tree's Rust, Python and Go [itself](#reading-the-source). The tools
@@ -107,7 +111,7 @@ instead, as `test-integrity` does for what a spec can ask for. Either kind is li
 not only on added lines, and names the check that raised it. A check that cannot run says so as one of its
 findings, so a failing check that cannot run fails the gate.
 
-The gate reads the change without what the tree tracks under `mutants/`, mutmut's state (`Change::from_tree` in
+The gate reads the change without what the tree holds under `mutants/`, mutmut's state (`Change::from_tree` in
 `crates/gate/src/judge.rs`), and every part of it reads that one change: no linter finding, suppression, line end or
 coverage counts there, no check selects a test, a function or a changed line there, or counts an edit there as a change
 to the code, and a file moved out of it counts as added. A change that adds or edits files there, or moves files into
@@ -396,7 +400,7 @@ one, and that both flag, is two findings at its `def`.
 **Dependency cycles** finds the import a change adds that closes a cycle between the project's own modules: two
 modules that import each other, directly or through others, can no longer be read, tested or moved apart. It runs on
 the languages the change holds Python or Rust of, `crates/checks/src/cycles.rs` judging the import graphs the front
-ends read (`imports` in `crates/lang-python` and `crates/lang-rust`) over every file of the language the tree tracks
+ends read (`imports` in `crates/lang-python` and `crates/lang-rust`) over every file of the language the gate judges
 outside `mutants/`, named `.py` or `.rs`: once as the base holds them and once as the working tree does, the base's
 files under the names the change gives them. Each node is a file; a `dependency-cycles` finding, which fails the gate,
 lies on an import that closes a cycle where the import is from one file of another the base's file did not import and
@@ -429,8 +433,8 @@ take part in no cycle.
 **Duplicated blocks** finds a block of code a change adds that the tree already holds elsewhere, or that the change adds
 twice: a copy is logic that has to be fixed twice, and a change is where it enters. It runs on each of Python, Rust and
 Go where the change adds a line to a file it judges, `crates/checks/src/duplicates.rs` comparing the tokens the front
-ends read (`code_tokens` in `crates/lang-python`, `crates/lang-rust` and `crates/lang-go`) of every file the working
-tree tracks outside `mutants/` that holds the language as the other checks tell it: a `.py` name or a `#!` line naming
+ends read (`code_tokens` in `crates/lang-python`, `crates/lang-rust` and `crates/lang-go`) of every file the gate
+judges outside `mutants/` that holds the language as the other checks tell it: a `.py` name or a `#!` line naming
 python, a `.rs` name, a `.go` name inside a Go module, generated Go left out. A name stands for what kind of name it is
 and a literal for what kind of literal, so a copy whose names and values were changed is still a copy; keywords,
 operators and punctuation stand for themselves. Comments, `use`, `extern crate` and `import` statements, Go's `package`

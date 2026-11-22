@@ -86,7 +86,7 @@ pub fn judge_change(cwd: &Path, base: &str, given: &Given) -> Result<QualityRepo
     let changed = &change.changed;
     let tests = test_results(&root, &change.settings.test_commands, &given.tests, &given.coverage)?;
 
-    let judged = JudgedFiles::new(git::judged_files(&root)?);
+    let judged = JudgedFiles::new(change.judged.clone());
     let mut conditions = mutmut_state_condition(&change.mutmut_state);
     let mut findings = vec![];
     let mut reads: Vec<(&Linter, Vec<OsString>)> = vec![];

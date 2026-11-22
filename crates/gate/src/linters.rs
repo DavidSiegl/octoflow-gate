@@ -155,7 +155,7 @@ fn argv(words: &[&str], path: Option<&Path>, more: &[&str], files: &[OsString]) 
     out
 }
 
-/// The files of a tree the gate judges (git::judged_files), which the linters read and a path a linter printed is
+/// The files of a tree the gate judges (Change::judged), which the linters read and a path a linter printed is
 /// read against.
 pub struct JudgedFiles {
     /// By path, in byte order.

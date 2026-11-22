@@ -16,7 +16,7 @@
 //! The cargo commands it runs, each within process::TOOL_TIMEOUT: `cargo clippy --version`, whose failure is clippy
 //! missing; `cargo locate-project` for each Cargo.toml among the files it is given; and `cargo clippy` in each
 //! workspace, which builds what it needs to (target/ in the workspace) and may fetch the crates it uses. That last
-//! runs with `--locked` when the workspace's Cargo.lock is among the judged files (git::judged_files), so that it
+//! runs with `--locked` when the workspace's Cargo.lock is among the judged files (Change::judged), so that it
 //! judges the versions the change commits and never rewrites the file; without one, cargo writes a Cargo.lock beside
 //! the manifest (a workspace that commits no lock file has cargo resolve one afresh, which `--locked` refuses), which
 //! the next run judges as the change's unless git ignores it. passes-at-base follows the same rule at the base.

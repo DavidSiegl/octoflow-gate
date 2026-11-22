@@ -124,14 +124,13 @@ pub(crate) fn go_mutants(go: &GoChange, functions: &[Edited], budget: &Budget) -
         return vec![];
     }
     in_scratch_directory("not-run", "to run gremlins on a copy of the tree in", |dir| {
-        on_copy(&go.change.root, &go.change.base, dir, functions, budget)
+        on_copy(go.change, dir, functions, budget)
     })
 }
 
 /// The findings on `functions` of gremlins run on each Go module that holds one of them, in path order of the
-/// modules, in a copy of the working tree at `root` (copies::copy_working_tree) made in `dir`, an empty directory,
-/// beside each run's files.
-/// `base` is the change's base, which gremlins is told to diff against.
+/// modules, in a copy of `change`'s working tree (copies::copy_working_tree) made in `dir`, an empty directory,
+/// beside each run's files. gremlins is told to diff against the change's base.
 ///
 /// gremlins mutates only the lines it reads as changed from `git diff --merge-base <base>`, whose names it takes as
 /// paths from the module's directory: the git a run finds first on PATH gives it the module's edited functions as a
@@ -140,9 +139,9 @@ pub(crate) fn go_mutants(go: &GoChange, functions: &[Edited], budget: &Budget) -
 ///
 /// A run the deadline stops is a `budget-reached` finding beside what the mutants it had tried showed, and each module
 /// after it a `not-run` one; a copy that cannot be made is the one `not-run` finding.
-fn on_copy(root: &Path, base: &str, dir: &Path, functions: &[Edited], budget: &Budget) -> Vec<Finding> {
+fn on_copy(change: &Change, dir: &Path, functions: &[Edited], budget: &Budget) -> Vec<Finding> {
     let tree = dir.join("tree");
-    if let Err(e) = copy_working_tree(root, &tree) {
+    if let Err(e) = copy_working_tree(change, &tree) {
         return vec![not_run(&format!("could not copy the tree for gremlins: {e}"))];
     }
     let mut out = vec![];
@@ -160,7 +159,7 @@ fn on_copy(root: &Path, base: &str, dir: &Path, functions: &[Edited], budget: &B
     }
     let modules: Vec<_> = modules.into_iter().collect();
     for (n, (module, mine)) in modules.iter().enumerate() {
-        let run = Run { tree: &tree, scratch: &dir.join(format!("run-{n}")), base };
+        let run = Run { tree: &tree, scratch: &dir.join(format!("run-{n}")), base: &change.base };
         let (found, stopped) = run_module(&run, module, mine, budget);
         out.extend(found);
         if stopped {

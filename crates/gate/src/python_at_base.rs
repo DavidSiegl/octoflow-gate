@@ -533,6 +533,7 @@ mod tests {
             changed: [].into(),
             files: vec![ChangedFile { before: None, after: Some("new/sub.py".into()) }],
             mutmut_state: vec![],
+            judged: vec![],
             settings: Settings::default(),
             python: PathBuf::from("python3"),
         };

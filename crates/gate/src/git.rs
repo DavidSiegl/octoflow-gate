@@ -149,7 +149,9 @@ impl UntrackedAdded {
         let own = root.join(OsString::from_vec(first_line(output(root, &["rev-parse", "--git-path", "index"])?)));
         copy_index(&own, Path::new(&index))?;
         let input: Vec<u8> = added.iter().flat_map(|n| [n.as_bytes(), b"\0"]).flatten().copied().collect();
-        let args = ["--literal-pathspecs", "add", "--intent-to-add", "--pathspec-from-file=-", "--pathspec-file-nul"];
+        // --sparse: outside a sparse checkout's cone git lists untracked files but refuses to add them without it.
+        let args = ["--literal-pathspecs", "add", "--intent-to-add", "--sparse", "--pathspec-from-file=-",
+                    "--pathspec-file-nul"];
         output_fed(root, &args, &Fed { input: &input, index: Some(&index), ..Fed::default() })?;
         Ok(UntrackedAdded { root: root.to_path_buf(), index: Some((index, dir)) })
     }
@@ -253,16 +255,15 @@ mod tests {
 
     #[test]
     fn untracked_files_are_judged_and_diffed_as_added_but_for_ignored_ones_and_a_repository_of_their_own() {
-        let dir = std::env::temp_dir().join(format!("gate-git-untracked-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let scratch = ScratchDirectory::new(&std::env::temp_dir()).unwrap();
+        let dir = scratch.path().to_path_buf();
         std::fs::create_dir_all(dir.join("nested")).unwrap();
         let git = |cwd: &Path, args: &[&str]| output(cwd, args).unwrap();
         git(&dir, &["init", "--quiet"]);
-        let me = ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"];
         std::fs::write(dir.join(".gitignore"), "ignored.txt\n").unwrap();
         std::fs::write(dir.join("old.txt"), "one\ntwo\nthree\nfour\n").unwrap();
         git(&dir, &["add", "-A"]);
-        git(&dir, &[&me[..], &["commit", "--quiet", "-m", "base"]].concat());
+        git(&dir, &[&COMMITTER[..], &["commit", "--quiet", "-m", "base"]].concat());
         std::fs::rename(dir.join("old.txt"), dir.join("moved.txt")).unwrap();
         std::fs::write(dir.join("ignored.txt"), "").unwrap();
         std::fs::write(dir.join("new.txt"), "new\n").unwrap();
@@ -274,11 +275,34 @@ mod tests {
         let tree = UntrackedAdded::new(&dir).unwrap();
         let diffed = tree.output(&["diff", "--name-status", "-M", "HEAD"]).unwrap();
         let after = std::fs::read(dir.join(".git/index")).unwrap();
-        std::fs::remove_dir_all(&dir).unwrap();
         let names: Vec<&str> = judged.iter().map(|n| n.to_str().unwrap()).collect();
         assert_eq!(names, [".gitignore", "moved.txt", "nested/", "new.txt", "old.txt"]);
         assert_eq!(String::from_utf8(diffed).unwrap(), "R100\told.txt\tmoved.txt\nA\tnew.txt\n");
         assert_eq!(after, index, "the repository's own index changed");
+    }
+
+    /// The `git -c` arguments a test's commit is made with, whatever the user's configuration.
+    const COMMITTER: [&str; 6] = ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"];
+
+    #[test]
+    fn an_untracked_file_outside_a_sparse_checkout_s_cone_is_diffed_as_added() {
+        let scratch = ScratchDirectory::new(&std::env::temp_dir()).unwrap();
+        let dir = scratch.path();
+        let git = |args: &[&str]| output(dir, args).unwrap();
+        git(&["init", "--quiet"]);
+        for path in ["a/kept.txt", "b/out.txt"] {
+            std::fs::create_dir_all(dir.join(path).parent().unwrap()).unwrap();
+            std::fs::write(dir.join(path), "").unwrap();
+        }
+        git(&["add", "-A"]);
+        git(&[&COMMITTER[..], &["commit", "--quiet", "-m", "base"]].concat());
+        git(&["sparse-checkout", "set", "--cone", "a"]);
+        std::fs::create_dir_all(dir.join("b")).unwrap();
+        std::fs::write(dir.join("b/new.txt"), "new\n").unwrap();
+
+        let tree = UntrackedAdded::new(dir).unwrap();
+        let diffed = tree.output(&["diff", "--name-status", "HEAD"]).unwrap();
+        assert_eq!(String::from_utf8(diffed).unwrap(), "A\tb/new.txt\n");
     }
 
     #[test]

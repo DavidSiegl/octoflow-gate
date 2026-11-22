@@ -5,7 +5,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use crate::diff::{change_diff, changed_files, changed_lines, ChangedFile, ChangedLines};
-use crate::git::UntrackedAdded;
+use crate::git::{judged_files, UntrackedAdded};
 use crate::settings::Settings;
 use crate::Unjudged;
 
@@ -33,6 +33,10 @@ pub struct Change {
     /// The files the change adds or edits under [`MUTMUT_STATE`], the one part of it the fields above leave out, in
     /// path order: a file it adds, renames into it or changes there in any way but deleting it.
     pub mutmut_state: Vec<OsString>,
+    /// The files the gate judges in the working tree, by their paths from root in byte order, as git::judged_files
+    /// listed them before any test command ran: what a test writes in the tree is not judged, and the linters, the
+    /// copies and the checks that read the tree's files take this list rather than listing the tree again.
+    pub judged: Vec<OsString>,
     /// How the gate reads the project, as its gate.toml says.
     pub settings: Settings,
     /// The program that runs the judged project's Python, in which the checks expect its pytest, pytest-randomly and
@@ -48,9 +52,10 @@ impl Change {
     /// Its diff, changed and files show the change as if git tracked nothing under [`MUTMUT_STATE`] on either side,
     /// so nothing that reads them selects a test, a function or a changed line there, or counts an edit there as a
     /// change to the code. A file moved out of it is an added file, and one moved into it a deleted one, which
-    /// mutmut_state names instead. Errs when git cannot diff the tree against base, or a copy of its index cannot
-    /// be made to diff its untracked files through (git::UntrackedAdded).
+    /// mutmut_state names instead. Errs when git cannot list the tree's files or diff them against base, or a copy of
+    /// its index cannot be made to diff its untracked files through (git::UntrackedAdded).
     pub fn from_tree(root: &Path, base: &str, settings: Settings, python: Option<&Path>) -> Result<Change, Unjudged> {
+        let judged = judged_files(root)?;
         let tree = UntrackedAdded::new(root)?;
         let diff = change_diff(&tree, base, &[OUTSIDE_MUTMUT_STATE])?;
         let mut mutmut_state: Vec<OsString> =
@@ -63,6 +68,7 @@ impl Change {
             files: changed_files(&tree, base, &[OUTSIDE_MUTMUT_STATE])?,
             diff,
             mutmut_state,
+            judged,
             python: match (python, &settings.python) {
                 (Some(given), _) => program(given, &crate::paths::abs_path(Path::new("."))),
                 (None, Some(own)) => program(Path::new(own), root),

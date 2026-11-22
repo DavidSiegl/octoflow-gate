@@ -72,17 +72,16 @@ pub fn finding(path: Option<&OsStr>, line: Option<u32>, rule: &str, message: Str
     Finding { path: path.map(OsStr::to_os_string), line, severity: "warning".into(), rule: rule.into(), message }
 }
 
-/// Copies the files the gate judges in the working tree at `root` (git::judged_files), as they are there, to the
-/// same paths under `dest`, a directory it makes, with its parents. A symbolic link is copied as a link, and a
-/// submodule, or a directory holding a repository git does not track, as its directory; a tracked file missing from
-/// the working tree is left out. Errs, a clause, when git cannot list the files, `dest` exists or a file cannot be
-/// copied; `dest` may then hold part of the copy.
-pub fn copy_working_tree(root: &Path, dest: &Path) -> Result<(), String> {
-    let names = git::judged_files(root).map_err(|Unjudged(e)| e)?;
+/// Copies the files the gate judges in `change`'s working tree (Change::judged), as they are there now, to the same
+/// paths under `dest`, a directory it makes, with its parents. A symbolic link is copied as a link, and a submodule,
+/// or a directory holding a repository git does not track, as its directory; a listed file the working tree no longer
+/// holds is left out. Errs, a clause, when `dest` exists or a file cannot be copied; `dest` may then hold part of the
+/// copy.
+pub fn copy_working_tree(change: &Change, dest: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dest.parent().unwrap_or(Path::new("/"))).map_err(|e| failed("make", dest, &e))?;
     std::fs::create_dir(dest).map_err(|e| failed("make", dest, &e))?;
-    for name in names {
-        let (src, dst) = (root.join(&name), dest.join(&name));
+    for name in &change.judged {
+        let (src, dst) = (change.root.join(name), dest.join(name));
         if src.symlink_metadata().is_err() {
             continue;
         }

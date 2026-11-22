@@ -10,7 +10,7 @@ use crate::config_edits::{cargo_home_in, edited_config, tool_config, touched_pat
 use crate::coverage::new_coverage;
 use crate::diff::ChangedLines;
 use crate::flaky_tests::flaky_tests;
-use crate::linters::{tracked_from, Linter, LINTERS};
+use crate::linters::{JudgedFiles, Linter, LINTERS};
 use crate::mutants::surviving_mutants;
 use crate::parser_checks::{
     dependency_cycles, duplicated_blocks, too_complex, vague_names, weakened_tests, RustChange, Sources,
@@ -73,12 +73,12 @@ pub fn judge_change(cwd: &Path, base: &str, given: &Given) -> Result<QualityRepo
     if done.status != 0 {
         return Err(Unjudged(format!("{} is not in a git work tree", text::path(cwd.as_os_str()))));
     }
-    let root = PathBuf::from(OsString::from_vec(first_line(done.stdout)));
+    let root = PathBuf::from(OsString::from_vec(git::first_line(done.stdout)));
     let done = git::run(&root, &["rev-parse", "--verify", "--quiet", &format!("{base}^{{commit}}")])?;
     if done.status != 0 {
         return Err(Unjudged(format!("{base} names no commit in {}", text::path(root.as_os_str()))));
     }
-    let base_sha = text::lossless(&first_line(done.stdout));
+    let base_sha = text::lossless(&git::first_line(done.stdout));
     let JudgedBy { settings, settings_from, rules, rules_from } =
         JudgedBy::for_tree(&root, given.settings.as_deref())?;
     let rules = rules.as_deref();
@@ -86,14 +86,14 @@ pub fn judge_change(cwd: &Path, base: &str, given: &Given) -> Result<QualityRepo
     let changed = &change.changed;
     let tests = test_results(&root, &change.settings.test_commands, &given.tests, &given.coverage)?;
 
-    let tracked = tracked_from(&git::output(&root, &["ls-files", "-z"])?);
+    let judged = JudgedFiles::new(git::judged_files(&root)?);
     let mut conditions = mutmut_state_condition(&change.mutmut_state);
     let mut findings = vec![];
     let mut reads: Vec<(&Linter, Vec<OsString>)> = vec![];
     for linter in &LINTERS {
-        let files = linter.files(&tracked, &change.settings);
+        let files = linter.files(&judged, &change.settings);
         if !files.is_empty() {
-            let (found, problems) = linter.run(&root, rules, &files, &tracked);
+            let (found, problems) = linter.run(&root, rules, &files, &judged);
             findings.extend(found);
             conditions.extend(problems);
         }
@@ -129,7 +129,7 @@ pub fn judge_change(cwd: &Path, base: &str, given: &Given) -> Result<QualityRepo
     let touched = touched_paths(&change.diff, changed);
 
     Ok(QualityReport {
-        head: text::lossless(&first_line(git::output(&root, &["rev-parse", "HEAD"])?)),
+        head: text::lossless(&git::first_line(git::output(&root, &["rev-parse", "HEAD"])?)),
         base: base_sha,
         conditions,
         elsewhere,
@@ -204,14 +204,6 @@ fn lines_to_cover(rust: &RustChange) -> ChangedLines {
 fn named(check: &str, findings: Vec<Finding>) -> Vec<Finding> {
     let rule = |own: String| if own.is_empty() { check.to_string() } else { format!("{check} {own}") };
     findings.into_iter().map(|f| Finding { rule: rule(f.rule), ..f }).collect()
-}
-
-/// What git printed, up to the newline that ends its one line.
-fn first_line(mut printed: Vec<u8>) -> Vec<u8> {
-    if let Some(end) = printed.iter().position(|&b| b == b'\n') {
-        printed.truncate(end);
-    }
-    printed
 }
 
 /// The failed condition, as a list of one, naming the files a change commits under [`MUTMUT_STATE`], `committed`;

@@ -5,23 +5,22 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
-use std::path::Path;
 use std::sync::LazyLock;
 
 use regex::bytes::Regex;
 
-use crate::git;
+use crate::git::UntrackedAdded;
 use crate::Unjudged;
 
 /// Line numbers, from 1, by a file's path relative to the tree's top. Which tree, and which lines, each producer
 /// says; a file with no lines maps to an empty set, which differs from its absence.
 pub type ChangedLines = BTreeMap<OsString, BTreeSet<u32>>;
 
-/// `git diff -U0` from `base` to the working tree's tracked files under `root`, in the one shape [`changed_lines`]
-/// parses, whatever the user's git config. With `pathspecs`, git's, only the files they match: a rename from a file
-/// they leave out is an added file. Only git's `\n` ends a line of it, so nothing inside an added line can pass for
-/// a header. Errs as [`git::output`] does.
-pub fn change_diff(root: &Path, base: &str, pathspecs: &[&str]) -> Result<Vec<u8>, Unjudged> {
+/// `git diff -U0` from `base` to the files of `tree`, those git tracks and those it neither tracks nor ignores, in
+/// the one shape [`changed_lines`] parses, whatever the user's git config. With `pathspecs`, git's, only the files
+/// they match: a rename from a file they leave out is an added file. Only git's `\n` ends a line of it, so nothing
+/// inside an added line can pass for a header. Errs as [`UntrackedAdded::output`] does.
+pub fn change_diff(tree: &UntrackedAdded, base: &str, pathspecs: &[&str]) -> Result<Vec<u8>, Unjudged> {
     let mut args = vec![
         "-c",
         "core.quotePath=false",
@@ -36,10 +35,10 @@ pub fn change_diff(root: &Path, base: &str, pathspecs: &[&str]) -> Result<Vec<u8
         "--",
     ];
     args.extend_from_slice(pathspecs);
-    git::output(root, &args)
+    tree.output(&args)
 }
 
-/// One tracked file a change touches: its path at the base and in the working tree, None on the side where it does
+/// One file a change touches: its path at the base and in the working tree, None on the side where it does
 /// not exist; a rename pairs the two as [`change_diff`] does.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChangedFile {
@@ -47,12 +46,12 @@ pub struct ChangedFile {
     pub after: Option<OsString>,
 }
 
-/// Each tracked file under `root` changed since `base`; `pathspecs` as for [`change_diff`]. Errs as
-/// [`git::output`] does.
-pub fn changed_files(root: &Path, base: &str, pathspecs: &[&str]) -> Result<Vec<ChangedFile>, Unjudged> {
+/// Each file of `tree` changed since `base`, of those [`change_diff`] diffs; `pathspecs` as for it. Errs as
+/// [`UntrackedAdded::output`] does.
+pub fn changed_files(tree: &UntrackedAdded, base: &str, pathspecs: &[&str]) -> Result<Vec<ChangedFile>, Unjudged> {
     let mut args = vec!["diff", "--name-status", "-z", "-M", "--no-ext-diff", base, "--"];
     args.extend_from_slice(pathspecs);
-    let listed = git::output(root, &args)?;
+    let listed = tree.output(&args)?;
     let fields: Vec<&[u8]> = listed.split(|&b| b == 0).collect();
     let name = |k: usize| OsString::from_vec(fields[k].to_vec());
     let mut out = Vec::new();

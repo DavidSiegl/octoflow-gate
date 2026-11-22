@@ -24,7 +24,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use crate::linters::{tool_process, Tracked};
+use crate::linters::{tool_process, JudgedFiles};
 use crate::report::Finding;
 use crate::text;
 
@@ -35,12 +35,12 @@ const TYPECHECK: &str = "typecheck";
 /// in it (`NoGoFiles` in golangci-lint 2's `pkg/exitcodes`): nothing to lint, so nothing found.
 const NO_GO_FILES: i32 = 5;
 
-/// golangci-lint's findings over `files`, the tracked files it reads, in the tree whose top level is `root`, and the
+/// golangci-lint's findings over `files`, the judged files it reads, in the tree whose top level is `root`, and the
 /// failed conditions it caused, as linters::Linter::run says, `name` being the linter's. Of `files` the go.mod files
 /// say which modules it lints, those the go tool would build ([`linted_module`]); without a Go source among them
 /// there is nothing to lint, and golangci-lint does not run. A module with no Go file of its own, its code all in
 /// modules nested in it, gives nothing.
-pub fn run(name: &str, root: &Path, files: &[OsString], tracked: &Tracked) -> (Vec<Finding>, Vec<String>) {
+pub fn run(name: &str, root: &Path, files: &[OsString], judged: &JudgedFiles) -> (Vec<Finding>, Vec<String>) {
     if !files.iter().any(|f| f.as_bytes().ends_with(b".go")) {
         return (vec![], vec![]);
     }
@@ -48,7 +48,7 @@ pub fn run(name: &str, root: &Path, files: &[OsString], tracked: &Tracked) -> (V
     manifests.sort();
     let (mut found, mut problems) = (vec![], vec![]);
     for manifest in manifests {
-        let (lints, problem) = lint_module(name, root, Path::new(manifest), tracked);
+        let (lints, problem) = lint_module(name, root, Path::new(manifest), judged);
         found.extend(lints);
         problems.extend(problem);
     }
@@ -65,7 +65,7 @@ fn linted_module(path: &OsStr) -> bool {
 
 /// The findings golangci-lint gives in the module whose go.mod is `manifest`, relative to `root`, and the failed
 /// condition, None when its code compiled and golangci-lint ran as it should.
-fn lint_module(name: &str, root: &Path, manifest: &Path, tracked: &Tracked) -> (Vec<Finding>, Option<String>) {
+fn lint_module(name: &str, root: &Path, manifest: &Path, judged: &JudgedFiles) -> (Vec<Finding>, Option<String>) {
     let module = manifest.parent().unwrap_or(Path::new(""));
     let config = config_flags(root, module);
     let mut argv = [
@@ -109,7 +109,7 @@ fn lint_module(name: &str, root: &Path, manifest: &Path, tracked: &Tracked) -> (
     };
     let (mut lints, mut compile_errors) = (vec![], vec![]);
     for issue in issues {
-        match issue_finding(issue, root, tracked) {
+        match issue_finding(issue, root, judged) {
             Some((finding, true)) => compile_errors.push(finding),
             Some((finding, false)) => lints.push(finding),
             None => {}
@@ -143,15 +143,15 @@ fn config_flags(root: &Path, module: &Path) -> Vec<OsString> {
 }
 
 /// The finding `issue`, one of golangci-lint's JSON `Issues`, gives, an error with the linter's name as its rule, and
-/// whether it is the type checker's, which says the code does not compile; None when it names no tracked file, or is
+/// whether it is the type checker's, which says the code does not compile; None when it names no judged file, or is
 /// not of the shape golangci-lint 2 writes.
 ///
 /// A type checker's message is its first line naming a place in the code, as `./calc.go:15:28: undefined: nope`, past
 /// the line naming the package that golangci-lint puts first.
-fn issue_finding(issue: &Value, root: &Path, tracked: &Tracked) -> Option<(Finding, bool)> {
+fn issue_finding(issue: &Value, root: &Path, judged: &JudgedFiles) -> Option<(Finding, bool)> {
     let linter = issue.get("FromLinter")?.as_str()?;
     let place = issue.get("Pos")?;
-    let path = tracked.name_of(place.get("Filename")?.as_str()?.as_bytes(), root)?;
+    let path = judged.name_of(place.get("Filename")?.as_str()?.as_bytes(), root)?;
     let said = issue.get("Text")?.as_str()?;
     let compile_error = linter == TYPECHECK;
     let message = match compile_error {
@@ -218,12 +218,12 @@ mod tests {
 
     #[test]
     fn an_issue_is_read_with_its_linter_and_a_type_error_by_its_place_in_the_code() {
-        let tracked = Tracked::new(vec!["m/calc.go".into()]);
+        let judged = JudgedFiles::new(vec!["m/calc.go".into()]);
         let issue = |linter: &str, text: &str, file: &str, line: u64| {
             json!({"FromLinter": linter, "Text": text, "Severity": "", "SourceLines": ["x"],
                    "Pos": {"Filename": file, "Offset": 0, "Line": line, "Column": 0}})
         };
-        let read = |issue: Value| issue_finding(&issue, Path::new("/top"), &tracked);
+        let read = |issue: Value| issue_finding(&issue, Path::new("/top"), &judged);
         let (found, compile_error) = read(issue("errcheck", "Error return value is not checked", "/top/m/calc.go", 12))
             .unwrap();
         assert!(!compile_error);

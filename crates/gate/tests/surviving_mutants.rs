@@ -63,6 +63,11 @@ type Found = (Option<String>, Option<u32>, String, String);
 /// budget of `budget` seconds, the default when None, and `env` set for the gate.
 fn findings(repo: &Repo, budget: Option<u64>, env: &[(&str, OsString)]) -> Vec<Found> {
     repo.git(&["add", "-A"]);
+    untracked_findings(repo, budget, env)
+}
+
+/// [`findings`] on the working tree as it is, what git does not track left so.
+fn untracked_findings(repo: &Repo, budget: Option<u64>, env: &[(&str, OsString)]) -> Vec<Found> {
     let json = repo.outside.join("quality.json");
     let mut command = repo.gate_command("HEAD");
     command.arg("--json").arg(&json).args(["--base-run-budget", "1"]);
@@ -107,6 +112,18 @@ fn a_function_whose_mutants_survive_is_found_and_one_whose_mutants_are_caught_is
     let (path, line, rule, message) = &found[0];
     assert_eq!((path.as_deref(), *line, rule.as_str()), (Some("src/lib.rs"), Some(9), "survived"), "{message}");
     assert!(message.starts_with("5 of 5 mutants of `unchecked` survived its tests: line 10: replace "), "{message}");
+}
+
+#[test]
+fn a_module_git_does_not_track_yet_is_mutated_with_the_tree_that_needs_it() {
+    let repo = repo(&[]);
+    repo.put("src/lib.rs", format!("{LIB}pub mod extra;\n").as_bytes());
+    repo.put("src/extra.rs", ADDED.as_bytes());
+    repo.put("tests/calc.rs", TESTS.replace("SLEEP", "").replace("calc::", "calc::extra::").as_bytes());
+    let found = untracked_findings(&repo, None, &[]);
+    assert_eq!(found.len(), 1, "{found:?}");
+    let (path, line, rule, message) = &found[0];
+    assert_eq!((path.as_deref(), *line, rule.as_str()), (Some("src/extra.rs"), Some(6), "survived"), "{message}");
 }
 
 #[test]

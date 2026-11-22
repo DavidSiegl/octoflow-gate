@@ -1,6 +1,6 @@
 //! What the checks that run a project's tools share: the copies of a tree they run them in, so that nothing they
 //! build or write lands in the tree the gate judges (a scratch directory of the gate's own, a copy of the working
-//! tree's tracked files, and a copy of the base with the change's tests in it); the budget they run within; and the
+//! tree's files, and a copy of the base with the change's tests in it); the budget they run within; and the
 //! shape and order of their findings.
 
 use std::ffi::{OsStr, OsString};
@@ -72,19 +72,17 @@ pub fn finding(path: Option<&OsStr>, line: Option<u32>, rule: &str, message: Str
     Finding { path: path.map(OsStr::to_os_string), line, severity: "warning".into(), rule: rule.into(), message }
 }
 
-/// Copies the files git tracks in the working tree at `root`, as they are there, to the same paths under `dest`, a
-/// directory it makes, with its parents. A symbolic link is copied as a link and a submodule as its directory; a
-/// tracked file missing from the working tree is left out. Errs, a clause, when git cannot list the files, `dest`
-/// exists or a file cannot be copied; `dest` may then hold part of the copy.
-pub fn copy_tracked(root: &Path, dest: &Path) -> Result<(), String> {
-    let listed = git::output(root, &["ls-files", "-z"]).map_err(|Unjudged(e)| e)?;
-    let mut names: Vec<&[u8]> = listed.split(|&b| b == 0).filter(|n| !n.is_empty()).collect();
-    names.sort();
-    names.dedup();
+/// Copies the files the gate judges in the working tree at `root` (git::judged_files), as they are there, to the
+/// same paths under `dest`, a directory it makes, with its parents. A symbolic link is copied as a link, and a
+/// submodule, or a directory holding a repository git does not track, as its directory; a tracked file missing from
+/// the working tree is left out. Errs, a clause, when git cannot list the files, `dest` exists or a file cannot be
+/// copied; `dest` may then hold part of the copy.
+pub fn copy_working_tree(root: &Path, dest: &Path) -> Result<(), String> {
+    let names = git::judged_files(root).map_err(|Unjudged(e)| e)?;
     std::fs::create_dir_all(dest.parent().unwrap_or(Path::new("/"))).map_err(|e| failed("make", dest, &e))?;
     std::fs::create_dir(dest).map_err(|e| failed("make", dest, &e))?;
     for name in names {
-        let (src, dst) = (root.join(OsStr::from_bytes(name)), dest.join(OsStr::from_bytes(name)));
+        let (src, dst) = (root.join(&name), dest.join(&name));
         if src.symlink_metadata().is_err() {
             continue;
         }

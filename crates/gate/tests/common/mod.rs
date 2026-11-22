@@ -78,8 +78,8 @@ impl Repo {
         self.git(&["commit", "--quiet", "-m", message]);
     }
 
-    /// Commits a submodule at vendor/lib and puts a named pipe in its working tree. A copy of the tracked files
-    /// (copies::copy_tracked) takes a submodule's directory whole, so it meets the pipe, which git does not track,
+    /// Commits a submodule at vendor/lib and puts a named pipe in its working tree. A copy of the working tree
+    /// (copies::copy_working_tree) takes a submodule's directory whole, so it meets the pipe, which git does not track,
     /// and refuses it: the tree cannot be copied, though git reads its change.
     pub fn make_uncopyable(&self) {
         let lib = self.outside.join("lib");
@@ -148,7 +148,7 @@ pub const NO_PYTHON_LINTERS: (&str, &[u8]) = ("gate.toml", b"[linters]\nruff = [
 
 /// The Python of the workspace's own environment, which has the pytest, pytest-randomly, pytest-cov and mutmut that
 /// the checks run with a judged project's Python. uv names it, and makes the environment first where the tree has
-/// none, as in the copy of the tracked files that cargo-mutants runs these tests in.
+/// none, as in the copy of the working tree that cargo-mutants runs these tests in.
 pub fn python() -> PathBuf {
     let workspace = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
     let named = Command::new("uv")

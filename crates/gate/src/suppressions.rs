@@ -104,7 +104,7 @@ fn python_suppressions(lines: &[Vec<u8>]) -> Vec<u32> {
 
 /// (path, line, the character) for each file in `changed` that a linter of `reads` reads and whose working tree at
 /// `root` holds one of that linter's [`Linter::line_ends`] at or before the last line the change added: the first
-/// line that holds one, whichever commit added it. `reads` pairs each linter with the tracked files it reads. Errs
+/// line that holds one, whichever commit added it. `reads` pairs each linter with the judged files it reads. Errs
 /// when such a file cannot be read.
 pub fn stray_line_ends(
     root: &Path,

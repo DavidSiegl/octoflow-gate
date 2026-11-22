@@ -5,6 +5,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use crate::diff::{change_diff, changed_files, changed_lines, ChangedFile, ChangedLines};
+use crate::git::UntrackedAdded;
 use crate::settings::Settings;
 use crate::Unjudged;
 
@@ -22,7 +23,8 @@ pub struct Change {
     pub root: PathBuf,
     /// The commit the change is judged against, a full sha.
     pub base: String,
-    /// `git diff -U0` from base to the working tree (diff::change_diff), of the files the gate sees.
+    /// `git diff -U0` from base to the working tree (diff::change_diff), of the files the gate sees: those of
+    /// git::judged_files, but for a directory holding a repository of its own that git does not track.
     pub diff: Vec<u8>,
     /// `changed_lines(diff)`.
     pub changed: ChangedLines,
@@ -46,17 +48,19 @@ impl Change {
     /// Its diff, changed and files show the change as if git tracked nothing under [`MUTMUT_STATE`] on either side,
     /// so nothing that reads them selects a test, a function or a changed line there, or counts an edit there as a
     /// change to the code. A file moved out of it is an added file, and one moved into it a deleted one, which
-    /// mutmut_state names instead. Errs when git cannot diff the tree against base.
+    /// mutmut_state names instead. Errs when git cannot diff the tree against base, or a copy of its index cannot
+    /// be made to diff its untracked files through (git::UntrackedAdded).
     pub fn from_tree(root: &Path, base: &str, settings: Settings, python: Option<&Path>) -> Result<Change, Unjudged> {
-        let diff = change_diff(root, base, &[OUTSIDE_MUTMUT_STATE])?;
+        let tree = UntrackedAdded::new(root)?;
+        let diff = change_diff(&tree, base, &[OUTSIDE_MUTMUT_STATE])?;
         let mut mutmut_state: Vec<OsString> =
-            changed_files(root, base, &[INSIDE_MUTMUT_STATE])?.into_iter().filter_map(|f| f.after).collect();
+            changed_files(&tree, base, &[INSIDE_MUTMUT_STATE])?.into_iter().filter_map(|f| f.after).collect();
         mutmut_state.sort();
         Ok(Change {
             root: root.to_path_buf(),
             base: base.to_string(),
             changed: changed_lines(&diff),
-            files: changed_files(root, base, &[OUTSIDE_MUTMUT_STATE])?,
+            files: changed_files(&tree, base, &[OUTSIDE_MUTMUT_STATE])?,
             diff,
             mutmut_state,
             python: match (python, &settings.python) {

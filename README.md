@@ -23,10 +23,10 @@ a loop, and runs in any project as one binary.
 It judges the change rather than the codebase: findings on lines the change did not add are counted and never held
 against it.
 
-- **Linters** over the files git tracks: ruff and mypy for Python, pymarkdown for Markdown, shellcheck for shell
-  scripts, actionlint for GitHub workflows, clippy for each Cargo workspace, golangci-lint for each Go module. Their
-  findings on added lines fail the gate, and so does a linter that is missing or fails, or a Cargo workspace or Go
-  module that does not compile.
+- **Linters** over the files git tracks or does not ignore: ruff and mypy for Python, pymarkdown for Markdown,
+  shellcheck for shell scripts, actionlint for GitHub workflows, clippy for each Cargo workspace, golangci-lint for
+  each Go module. Their findings on added lines fail the gate, and so does a linter that is missing or fails, or a
+  Cargo workspace or Go module that does not compile.
 - **Tests and coverage**, from JUnit reports and Cobertura, LCOV or Go coverage reports: a failing test fails the
   gate, and so does coverage below 80% on 20 or more new lines to cover.
 - **Checks of what the change did**: tests it weakened (removed, skipped, fewer assertions, expected values changed

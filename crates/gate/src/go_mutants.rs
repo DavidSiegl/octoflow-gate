@@ -12,7 +12,7 @@ use std::time::Instant;
 use checks::{ChangedFile, Finding, Side};
 use regex::bytes::Regex;
 
-use crate::copies::{copy_tracked, finding, in_scratch_directory, Budget};
+use crate::copies::{copy_working_tree, finding, in_scratch_directory, Budget};
 use crate::diff::removal_points;
 use crate::git::{self, shell_quote_bytes};
 use crate::change::Change;
@@ -112,7 +112,7 @@ fn unchanged_declarations(change: &Change, file: &ChangedFile) -> Vec<bool> {
 /// Go's findings of the surviving-mutants check on `functions`, [`edited_functions`]' of `go`, in no order.
 ///
 /// Runs gremlins, until `budget` runs out, on each Go module that holds one of them, the directory of the go.mod
-/// nearest above its file, in a copy of the files git tracks, as [`on_copy`] says. Each function with mutants that
+/// nearest above its file, in a copy of the working tree, as [`on_copy`] says. Each function with mutants that
 /// survived is a `survived` finding at its `func` line, with how many of the mutants tried of it they were and the
 /// first [`SURVIVOR_EXAMPLES`] of them; one with mutants on lines no test runs an `untested` one, with how many. A
 /// function gremlins makes no mutant of gives nothing. The budget running out is a `budget-reached` finding; a
@@ -129,7 +129,8 @@ pub(crate) fn go_mutants(go: &GoChange, functions: &[Edited], budget: &Budget) -
 }
 
 /// The findings on `functions` of gremlins run on each Go module that holds one of them, in path order of the
-/// modules, in a copy of the files git tracks at `root` made in `dir`, an empty directory, beside each run's files.
+/// modules, in a copy of the working tree at `root` (copies::copy_working_tree) made in `dir`, an empty directory,
+/// beside each run's files.
 /// `base` is the change's base, which gremlins is told to diff against.
 ///
 /// gremlins mutates only the lines it reads as changed from `git diff --merge-base <base>`, whose names it takes as
@@ -141,7 +142,7 @@ pub(crate) fn go_mutants(go: &GoChange, functions: &[Edited], budget: &Budget) -
 /// after it a `not-run` one; a copy that cannot be made is the one `not-run` finding.
 fn on_copy(root: &Path, base: &str, dir: &Path, functions: &[Edited], budget: &Budget) -> Vec<Finding> {
     let tree = dir.join("tree");
-    if let Err(e) = copy_tracked(root, &tree) {
+    if let Err(e) = copy_working_tree(root, &tree) {
         return vec![not_run(&format!("could not copy the tree for gremlins: {e}"))];
     }
     let mut out = vec![];
@@ -201,7 +202,7 @@ fn diff_of(module: &Path, functions: &[&Edited]) -> Vec<u8> {
 
 /// What a run of gremlins on one module reads and where it writes.
 struct Run<'a> {
-    /// The copy of the tracked files, in which gremlins makes its own copies to mutate.
+    /// The copy of the working tree, in which gremlins makes its own copies to mutate.
     tree: &'a Path,
     /// A directory the run makes for the diff it reads and the git that gives it, outside the copy.
     scratch: &'a Path,

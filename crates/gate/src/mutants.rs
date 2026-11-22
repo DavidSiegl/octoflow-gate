@@ -14,7 +14,7 @@ use model::Function;
 use serde_json::Value;
 
 use crate::clippy::workspaces;
-use crate::copies::{copy_tracked, finding, in_scratch_directory, sort_by_place, Budget};
+use crate::copies::{copy_working_tree, finding, in_scratch_directory, sort_by_place, Budget};
 use crate::diff::removal_points;
 use crate::go_mutants::{edited_functions, go_mutants};
 use crate::parser_checks::{project_dir, RustChange, Sources};
@@ -136,7 +136,7 @@ fn edited_rust(rust: &RustChange) -> (Vec<Edited>, Vec<Finding>) {
 /// Rust's findings of the surviving-mutants check on `functions`, [`edited_rust`]'s of `rust`, in no order.
 ///
 /// Runs cargo-mutants, until `budget` runs out, on each Cargo workspace that holds one of `functions`, in a copy of
-/// the files git tracks, as [`on_copy`] says. Each function with mutants that survived is a `survived` finding at the
+/// the working tree, as [`on_copy`] says. Each function with mutants that survived is a `survived` finding at the
 /// line its fn starts, with how many of the mutants tried of it they were and the first [`SURVIVOR_EXAMPLES`] of
 /// them. A function with nothing to mutate gives nothing. The budget running out is a `budget-reached` finding; a
 /// file in no workspace cargo can tell, or whose workspace's directory is not above it, is a `not-mutated` one on it;
@@ -152,15 +152,16 @@ fn rust_mutants(rust: &RustChange, functions: &[Edited], budget: &Budget) -> Vec
 }
 
 /// The findings on `functions`, [`edited_rust`]'s, of cargo-mutants run on each Cargo workspace that holds one of
-/// them ([`cargo_roots`]), in path order of the workspaces, in a copy of the files git tracks made in `dir`, an empty
-/// directory, beside each run's output. cargo-mutants mutates only `functions` ([`run_workspace`]), and its tests run
-/// with `--test-tool nextest`, each mutant's within its timeout ([`MINIMUM_TEST_TIMEOUT`]).
+/// them ([`cargo_roots`]), in path order of the workspaces, in a copy of the working tree (copies::copy_working_tree)
+/// made in `dir`, an empty directory, beside each run's output. cargo-mutants mutates only `functions`
+/// ([`run_workspace`]), and its tests run with `--test-tool nextest`, each mutant's within its timeout
+/// ([`MINIMUM_TEST_TIMEOUT`]).
 ///
 /// A run the deadline stops is a `budget-reached` finding beside what the mutants it had tried showed, and each
 /// workspace after it a `not-run` one; a copy that cannot be made is the one `not-run` finding.
 fn on_copy(rust: &RustChange, dir: &Path, functions: &[Edited], budget: &Budget) -> Vec<Finding> {
     let tree = dir.join("tree");
-    if let Err(e) = copy_tracked(&rust.change.root, &tree) {
+    if let Err(e) = copy_working_tree(&rust.change.root, &tree) {
         return vec![not_run(&format!("could not copy the tree for cargo-mutants: {e}"))];
     }
     let mut out = vec![];
@@ -254,7 +255,7 @@ fn mutants_of(root: &OsStr, f: &Edited) -> String {
 
 /// Where a run of cargo-mutants on one workspace mutates and writes.
 struct Run<'a> {
-    /// The copy of the tracked files, which `--in-place` mutates.
+    /// The copy of the working tree, which `--in-place` mutates.
     tree: &'a Path,
     /// A directory the run makes for its mutants.out, outside the copy.
     scratch: &'a Path,

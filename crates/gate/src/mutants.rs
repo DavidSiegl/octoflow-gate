@@ -14,7 +14,7 @@ use model::Function;
 use serde_json::Value;
 
 use crate::clippy::workspaces;
-use crate::copies::{copy_tracked, finding, in_scratch_directory, sort_by_place, Budget};
+use crate::copies::{copy_working_tree, finding, in_scratch_directory, sort_by_place, Budget};
 use crate::diff::removal_points;
 use crate::go_mutants::{edited_functions, go_mutants};
 use crate::parser_checks::{project_dir, RustChange, Sources};
@@ -136,7 +136,7 @@ fn edited_rust(rust: &RustChange) -> (Vec<Edited>, Vec<Finding>) {
 /// Rust's findings of the surviving-mutants check on `functions`, [`edited_rust`]'s of `rust`, in no order.
 ///
 /// Runs cargo-mutants, until `budget` runs out, on each Cargo workspace that holds one of `functions`, in a copy of
-/// the files git tracks, as [`on_copy`] says. Each function with mutants that survived is a `survived` finding at the
+/// the working tree, as [`on_copy`] says. Each function with mutants that survived is a `survived` finding at the
 /// line its fn starts, with how many of the mutants tried of it they were and the first [`SURVIVOR_EXAMPLES`] of
 /// them. A function with nothing to mutate gives nothing. The budget running out is a `budget-reached` finding; a
 /// file in no workspace cargo can tell, or whose workspace's directory is not above it, is a `not-mutated` one on it;
@@ -152,15 +152,16 @@ fn rust_mutants(rust: &RustChange, functions: &[Edited], budget: &Budget) -> Vec
 }
 
 /// The findings on `functions`, [`edited_rust`]'s, of cargo-mutants run on each Cargo workspace that holds one of
-/// them ([`cargo_roots`]), in path order of the workspaces, in a copy of the files git tracks made in `dir`, an empty
-/// directory, beside each run's output. cargo-mutants mutates only `functions` ([`run_workspace`]), and its tests run
-/// with `--test-tool nextest`, each mutant's within its timeout ([`MINIMUM_TEST_TIMEOUT`]).
+/// them ([`cargo_roots`]), in path order of the workspaces, in a copy of the working tree (copies::copy_working_tree)
+/// made in `dir`, an empty directory, beside each run's output. cargo-mutants mutates only `functions`
+/// ([`run_workspace`]), and its tests run with `--test-tool nextest`, each mutant's within its timeout
+/// ([`MINIMUM_TEST_TIMEOUT`]).
 ///
 /// A run the deadline stops is a `budget-reached` finding beside what the mutants it had tried showed, and each
 /// workspace after it a `not-run` one; a copy that cannot be made is the one `not-run` finding.
 fn on_copy(rust: &RustChange, dir: &Path, functions: &[Edited], budget: &Budget) -> Vec<Finding> {
     let tree = dir.join("tree");
-    if let Err(e) = copy_tracked(&rust.change.root, &tree) {
+    if let Err(e) = copy_working_tree(rust.change, &tree) {
         return vec![not_run(&format!("could not copy the tree for cargo-mutants: {e}"))];
     }
     let mut out = vec![];
@@ -254,7 +255,7 @@ fn mutants_of(root: &OsStr, f: &Edited) -> String {
 
 /// Where a run of cargo-mutants on one workspace mutates and writes.
 struct Run<'a> {
-    /// The copy of the tracked files, which `--in-place` mutates.
+    /// The copy of the working tree, which `--in-place` mutates.
     tree: &'a Path,
     /// A directory the run makes for its mutants.out, outside the copy.
     scratch: &'a Path,
@@ -321,9 +322,15 @@ fn run_findings(done: &Finished, output: &Path, root: &OsStr, budget: u64) -> Ve
     let place = format!("the workspace at `{}`", dir_name(root));
     let baseline = outcomes.iter().find(|o| o.scenario == "Baseline").and_then(|o| o.summary.as_str());
     if let Some(summary) = baseline.filter(|&s| s != "Success") {
+        // The log goes with the gate's scratch directory, so the finding carries what it says.
+        let log = output.join("log/baseline.log");
+        let said = match std::fs::read(&log) {
+            Ok(bytes) => format!("its log said: {}", baseline_cause(&text::lossless(&bytes))),
+            Err(e) => format!("its log could not be read: {}: {e}", text::path(log.as_os_str())),
+        };
         return vec![not_run(&format!(
-            "the unmutated baseline of {place} did not pass ({summary}, as cargo-mutants words it; its log is \
-             mutants.out/log/baseline.log), so it tried no mutant"
+            "the unmutated baseline of {place} did not pass ({summary}, as cargo-mutants words it), so it tried no \
+             mutant; {said}"
         ))];
     }
     let prefix = if root.is_empty() { vec![] } else { [root.as_bytes(), b"/"].concat() };
@@ -353,6 +360,30 @@ fn run_findings(done: &Finished, output: &Path, root: &OsStr, budget: u64) -> Ve
 struct Outcome {
     scenario: Value,
     summary: Value,
+}
+
+/// What `log`, the log cargo-mutants writes of an unmutated baseline that failed (mutants.out/log/baseline.log),
+/// says went wrong, in one line, from whichever comes first of: the first line that opens a Rust panic, with what
+/// report::failure_summary keeps of a failing test's detail after it; the first unindented line that opens an error
+/// of rustc's or cargo's (`error:` or `error[`), with the location rustc names on the line after it (`-->
+/// file:line:col`). A build that fails does so before any test runs, and a failing test's panic comes before
+/// nextest's closing error. Without either, the last line but those that open with `*** `, cargo-mutants' own;
+/// "nothing" when there is none. Lines are taken without the whitespace at either end, as nextest indents what a test
+/// printed; that indent is what tells an `error:` a test printed from cargo's.
+fn baseline_cause(log: &str) -> String {
+    let raw: Vec<&str> = log.split('\n').collect();
+    let lines: Vec<&str> = raw.iter().map(|line| text::py_strip(line)).collect();
+    for (k, line) in lines.iter().enumerate() {
+        if line.starts_with("thread '") && line.contains(" panicked at ") {
+            return crate::report::failure_summary(&lines[k..].join("\n"));
+        }
+        if raw[k].starts_with("error:") || raw[k].starts_with("error[") {
+            let at = lines.get(k + 1).filter(|next| next.starts_with("--> "));
+            return at.map_or(line.to_string(), |at| format!("{line} {at}"));
+        }
+    }
+    let last = lines.iter().rev().find(|line| !line.is_empty() && !line.starts_with("*** "));
+    last.map_or("nothing".into(), |line| line.to_string())
 }
 
 /// The outcomes cargo-mutants wrote to outcomes.json in `output`, its mutants.out; cargo-mutants rewrites the file
@@ -681,12 +712,71 @@ mod tests {
             too.");
     }
 
+    /// [`run_findings`] of a run in the workspace at engine whose unmutated baseline failed, having written `log`,
+    /// when given, as its baseline.log.
+    fn failed_baseline(log: Option<&str>) -> Vec<Finding> {
+        let dir = ScratchDir::new();
+        write_outcomes(&dir, &[baseline("Failure")]);
+        if let Some(log) = log {
+            std::fs::create_dir_all(dir.join("log")).unwrap();
+            std::fs::write(dir.join("log/baseline.log"), log).unwrap();
+        }
+        let found = run_findings(&done(4, false), &dir, OsStr::new("engine"), 30);
+        found
+    }
+
+    /// The finding of a failed baseline whose log said `said`.
+    fn baseline_not_run(said: &str) -> Vec<Finding> {
+        vec![not_run(&format!(
+            "the unmutated baseline of the workspace at `engine` did not pass (Failure, as cargo-mutants words it), \
+             so it tried no mutant; its log said: {said}"
+        ))]
+    }
+
     #[test]
-    fn a_baseline_that_fails_is_not_run() {
-        assert_eq!(engine_findings(&done(4, false), Some(&[baseline("Failure")])), vec![not_run(
-            "the unmutated baseline of the workspace at `engine` did not pass (Failure, as cargo-mutants words it; its \
-             log is mutants.out/log/baseline.log), so it tried no mutant"
-        )]);
+    fn a_baseline_that_fails_to_build_is_not_run_and_says_the_compiler_s_error() {
+        let log = "\n*** baseline\n\n*** /bin/cargo nextest run --no-run --verbose --package=calc@0.1.0\n   \
+                   Compiling calc v0.1.0 (/tmp/x)\nerror[E0583]: file not found for module `extra`\n --> \
+                   src/lib.rs:1:1\n  |\n1 | mod extra;\n  | ^^^^^^^^^^\n\nerror: could not compile `calc` (lib) \
+                   due to 1 previous error\n\n*** result: Failure(101)\n";
+        assert_eq!(
+            failed_baseline(Some(log)),
+            baseline_not_run("error[E0583]: file not found for module `extra` --> src/lib.rs:1:1")
+        );
+        let full = "*** /bin/cargo nextest run --no-run\nerror: failed to write /tmp/x/target: No space left on \
+                    device (os error 28)\n*** result: Failure(101)\n";
+        assert_eq!(
+            failed_baseline(Some(full)),
+            baseline_not_run("error: failed to write /tmp/x/target: No space left on device (os error 28)")
+        );
+    }
+
+    #[test]
+    fn a_baseline_whose_test_fails_is_not_run_and_says_its_panic() {
+        let log = "*** /bin/cargo nextest run --verbose\n        FAIL [   0.021s] (1/1) calc t\n  \
+                   stderr ───\n    error: connection refused\n    \
+                   thread 't' (13) panicked at src/lib.rs:4:8:\n    \
+                   assertion `left == right` failed: sums differ\n      left: 3\n    OCTOFLOW_TEST_SEED=7 \
+                   was this failing test's run seed\nerror: test run failed\n\
+                   *** result: Failure(100)\n";
+        assert_eq!(
+            failed_baseline(Some(log)),
+            baseline_not_run(
+                "thread 't' (13) panicked at src/lib.rs:4:8: assertion `left == right` failed: sums differ \
+                 OCTOFLOW_TEST_SEED=7 was this failing test's run seed"
+            )
+        );
+    }
+
+    #[test]
+    fn a_failed_baseline_without_an_error_or_a_panic_says_its_last_line_or_that_its_log_is_missing() {
+        let log = "*** /bin/cargo nextest run\nKilled\n\n*** result: Failure(137)\n";
+        assert_eq!(failed_baseline(Some(log)), baseline_not_run("Killed"));
+        assert_eq!(failed_baseline(Some("*** baseline\n")), baseline_not_run("nothing"));
+        let [missing] = &failed_baseline(None)[..] else { panic!("not one finding") };
+        let said = "so it tried no mutant; its log could not be read: ";
+        let missing_file = "/log/baseline.log: No such file or directory (os error 2); ";
+        assert!(missing.message.contains(said) && missing.message.contains(missing_file), "{}", missing.message);
     }
 
     #[test]

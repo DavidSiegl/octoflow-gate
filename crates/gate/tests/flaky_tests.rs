@@ -508,10 +508,10 @@ fn a_test_that_needs_git_s_metadata_fails_every_run_in_the_copy() {
     let test = "import os\nimport subprocess\n\n\ndef test_head():\n    \
                 subprocess.run(['git', 'rev-parse', 'HEAD'], check=True, cwd=os.path.dirname(__file__))\n";
     let found = failing_in_the_copy(&test.replace("check=True", "check=False"), test, &[]);
-    let message = "`test_head` failed under seeds 1, 2, 3, 4 and 5, every rerun, which ran in a copy of the tracked \
-                   files. If the build failed it too, the failing tests list it. If the build passed it, it needs \
-                   something the copy lacks, such as git's metadata, an untracked or ignored file or a build product, \
-                   so whether it is flaky could not be judged here.";
+    let message = "`test_head` failed under seeds 1, 2, 3, 4 and 5, every rerun, which ran in a copy of the working \
+                   tree. If the build failed it too, the failing tests list it. If the build passed it, it needs \
+                   something the copy lacks, such as git's metadata, a file git ignores or a build product, so \
+                   whether it is flaky could not be judged here.";
     assert_eq!(found, [(Some("tests/test_g.py".into()), Some(5), "failed-every-run".into(), message.into())]);
 }
 
@@ -675,7 +675,7 @@ fn tracked_files_that_cannot_be_copied_are_a_finding() {
     repo.make_uncopyable();
     change_the_tests(&repo);
     let said = whole_not_rerun(findings(&repo));
-    let said = said.strip_prefix("could not copy the tracked files to rerun the changed tests in: cannot copy /");
+    let said = said.strip_prefix("could not copy the working tree to rerun the changed tests in: cannot copy /");
     let said = said.expect("the copy's failure");
     let end = "/vendor/lib/pipe: it is no regular file, link or directory; the changed tests were not rerun.";
     assert!(said.ends_with(end), "{said}");

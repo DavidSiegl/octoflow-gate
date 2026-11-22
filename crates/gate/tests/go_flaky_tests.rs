@@ -102,6 +102,6 @@ fn go_tests_that_do_not_build_are_said_not_to_be_rerun() {
     repo.put("sub/calc_test.go", unbuilt.as_bytes());
     let found = findings(&repo);
     let expected = "go test, rerunning them under seed 1, could not build the package's tests in the copy of the \
-                    tracked files; the changed tests of the package at `sub` were not rerun.";
+                    working tree; the changed tests of the package at `sub` were not rerun.";
     assert_eq!(found, [(None, None, "not-rerun".into(), expected.into())], "{found:?}");
 }

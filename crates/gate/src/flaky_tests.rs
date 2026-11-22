@@ -8,7 +8,7 @@ use std::hash::Hash;
 use std::path::Path;
 use std::time::Duration;
 
-use crate::copies::{copy_tracked, finding, in_scratch_directory, sort_by_place};
+use crate::copies::{copy_working_tree, finding, in_scratch_directory, sort_by_place};
 use crate::gotest::{self, Packages, Ran};
 use crate::junit::{junit_outcomes, Outcome};
 use crate::parser_checks::{GoChange, PythonChange, Sources};
@@ -46,8 +46,8 @@ pub fn flaky_tests(sources: &Sources) -> Vec<Finding> {
 /// build may fail it too, which the failing-tests section lists, or it may need what the copy below lacks, so that
 /// the reruns could not judge it. One that xfails under every seed is not reported.
 ///
-/// The tests run in a temporary copy of the files git tracks (copies::copy_tracked), so that what the project's
-/// addopts write, such as a coverage report, does not replace the build's own; a test that needs an untracked file,
+/// The tests run in a temporary copy of the working tree (copies::copy_working_tree), so that what the project's
+/// addopts write, such as a coverage report, does not replace the build's own; a test that needs a file git ignores,
 /// such as a build product, cannot find it there. A run that skips a test, or does not report it, as when the
 /// project's addopts stop at the first failure, neither passed nor failed it. A test that is not mixed, which fewer
 /// than two runs passed or failed, is reported as one that too few runs judged (`not-rerun`), whether runs skipped it
@@ -76,16 +76,16 @@ fn python_findings(python: &PythonChange) -> Vec<Finding> {
     out
 }
 
-/// [`python_findings`]' findings on `tests`, rerun in a copy of the tracked files of `python`'s tree that it makes in
+/// [`python_findings`]' findings on `tests`, rerun in a copy of `python`'s working tree that it makes in
 /// `tmp`, an empty directory, beside the runs' reports: once for each pytest configuration the changed test files
 /// take, so that a group that cannot run leaves the others' findings.
 fn rerun_findings(python: &PythonChange, tmp: &Path, tests: &Tests) -> Vec<Finding> {
     let change = python.change;
     let whole = |message: String| vec![finding(None, None, "not-rerun", message)];
     let tree = tmp.join("tree");
-    if let Err(e) = copy_tracked(&change.root, &tree) {
+    if let Err(e) = copy_working_tree(change, &tree) {
         return whole(format!(
-            "could not copy the tracked files to rerun the changed tests in: {e}; the changed tests were not rerun."
+            "could not copy the working tree to rerun the changed tests in: {e}; the changed tests were not rerun."
         ));
     }
     let files: BTreeSet<OsString> = tests.keys().map(|(path, _)| path.clone()).collect();
@@ -200,7 +200,7 @@ fn rerun<'a>(
 /// (`failed-every-run`), and one that fewer than two runs passed or failed (`not-rerun`), as [`python_findings`] does
 /// and for the same reasons. The other tests of the package are not run, so only the changed tests' order varies.
 ///
-/// The tests run in a copy of the files git tracks, as Python's do, each package's once its tests are built
+/// The tests run in a copy of the working tree, as Python's do, each package's once its tests are built
 /// (gotest::build). A build that cannot start or takes longer than [`BUILD_TIMEOUT`] is a `not-rerun` finding on the
 /// package's tests. A go test run that cannot start, takes longer than [`RUN_TIMEOUT`] or tells nothing (gotest::run),
 /// or finds that the package's tests do not build in the copy, ends the reruns of that package's tests with a
@@ -222,13 +222,13 @@ fn go_findings(go: &GoChange) -> Vec<Finding> {
     out
 }
 
-/// [`go_findings`]' findings on `packages`, the changed tests by their package's directory, rerun in a copy of the
-/// tracked files of `go`'s tree that it makes in `tmp`, an empty directory, beside the tests it builds.
+/// [`go_findings`]' findings on `packages`, the changed tests by their package's directory, rerun in a copy of `go`'s
+/// working tree that it makes in `tmp`, an empty directory, beside the tests it builds.
 fn go_rerun_findings(go: &GoChange, tmp: &Path, packages: &Packages) -> Vec<Finding> {
     let tree = tmp.join("tree");
-    if let Err(e) = copy_tracked(&go.change.root, &tree) {
+    if let Err(e) = copy_working_tree(go.change, &tree) {
         let message = format!(
-            "could not copy the tracked files to rerun the changed Go tests in: {e}; the changed Go tests were not \
+            "could not copy the working tree to rerun the changed Go tests in: {e}; the changed Go tests were not \
              rerun."
         );
         return vec![finding(None, None, "not-rerun", message)];
@@ -248,7 +248,7 @@ fn go_rerun_findings(go: &GoChange, tmp: &Path, packages: &Packages) -> Vec<Find
             match gotest::run(&dir, &names, &[&format!("-shuffle={seed}")], RUN_TIMEOUT, &doing) {
                 Ok(Ran::Outcomes(outcomes)) => Ok(outcomes),
                 Ok(Ran::Unbuilt) => Err(format!("go test, {doing}, could not build the package's tests in the copy \
-                                                 of the tracked files")),
+                                                 of the working tree")),
                 Err(problem) => Err(problem.clause),
             }
         });
@@ -372,9 +372,9 @@ impl<K: Eq + Hash> Reruns<K> {
             return Some((
                 "failed-every-run",
                 format!(
-                    "`{name}` failed under {}, every rerun{left_out}, which ran in a copy of the tracked files. If \
+                    "`{name}` failed under {}, every rerun{left_out}, which ran in a copy of the working tree. If \
                      the build failed it too, the failing tests list it. If the build passed it, it needs something \
-                     the copy lacks, such as git's metadata, an untracked or ignored file or a build product, so \
+                     the copy lacks, such as git's metadata, a file git ignores or a build product, so \
                      whether it is flaky could not be judged here.",
                     seeds(&judged)
                 ),

@@ -21,9 +21,9 @@ use regex::Regex;
 use serde_json::{json, Value};
 use toml::Table;
 
-use crate::copies::{copy_tracked, finding, in_scratch_directory};
+use crate::copies::{copy_working_tree, finding, in_scratch_directory};
 use crate::glob::fnmatch;
-use crate::change::MUTMUT_STATE;
+use crate::change::{Change, MUTMUT_STATE};
 use crate::mutants::{KILL_WAIT, STOP_GRACE, SURVIVOR_EXAMPLES};
 use crate::parser_checks::{python_test, regular_files_at_base, PythonChange};
 use crate::paths::{normpath, real_path};
@@ -93,7 +93,7 @@ pub struct Mutmut<'a> {
 /// function with mutants its tests did not notice (`survived`), with how many of the mutants tried they were and what the first
 /// mutants::SURVIVOR_EXAMPLES change, as a line before and after; and each one no test calls (`untested`).
 ///
-/// mutmut runs by the project's Python (change::Change::python) on a copy of the files git tracks, without what the
+/// mutmut runs by the project's Python (change::Change::python) on a copy of the working tree, without what the
 /// tree tracks under mutmut's state, so it starts without a cache. It runs there by the `[tool.mutmut]` of
 /// `mutmut.rules`, whatever the copy's says: its source_paths, only_mutate and do_not_mutate decide which files can
 /// be mutated, and a changed function outside them, or one mutmut never mutates, is a `not-mutated` finding saying
@@ -226,7 +226,7 @@ fn mutation_test(python: &PythonChange, functions: &[Function], mutmut: &Mutmut,
     }
     out.extend(in_scratch_directory("not-run", "to run mutmut on a copy of the tree in", |tmp| {
         let copy = TreeCopy { python: &change.python, tree: &tmp.join("tree") };
-        on_copy(&copy, &change.root, tmp, &mutated, &table, seconds, recorded.as_ref())
+        on_copy(&copy, change, tmp, &mutated, &table, seconds, recorded.as_ref())
     }));
     out
 }
@@ -491,14 +491,14 @@ fn time_left(deadline: Instant) -> Option<Duration> {
 /// collects ([`narrowed_table`]), and none collected, it is not started and each function is an `untested` finding.
 fn on_copy(
     copy: &TreeCopy,
-    root: &Path,
+    change: &Change,
     tmp: &Path,
     functions: &[&Function],
     table: &Table,
     seconds: u64,
     recorded: Option<&BTreeSet<String>>,
 ) -> Vec<Finding> {
-    let config = match prepare_copy(copy, root, tmp, functions, table, recorded) {
+    let config = match prepare_copy(copy, change, tmp, functions, table, recorded) {
         Ok(config) => config,
         Err(problem) => return vec![not_run(&problem)],
     };
@@ -526,23 +526,23 @@ fn on_copy(
     out
 }
 
-/// Makes `copy`, in `tmp`, an empty private directory, of the files git tracks in `root`'s working tree
-/// (copies::copy_tracked), but for what it tracks under mutmut's state, and marks it for mutmut to skip all but
+/// Makes `copy`, in `tmp`, an empty private directory, of `change`'s working tree (copies::copy_working_tree), but for
+/// what it holds under mutmut's state, and marks it for mutmut to skip all but
 /// `functions` ([`mark_for_mutmut`] by `table`, the rules' `[tool.mutmut]`). Returns the pytest configuration of the
 /// tests mutmut runs, those `table`'s selection names or, given, those of `recorded` under it ([`test_places`]), as
 /// pytest::groups finds it. Errs with the problem, a clause, when the copy cannot be made or marked, the
 /// configuration cannot be found, or the tests take more than one.
 fn prepare_copy(
     copy: &TreeCopy,
-    root: &Path,
+    change: &Change,
     tmp: &Path,
     functions: &[&Function],
     table: &Table,
     recorded: Option<&BTreeSet<String>>,
 ) -> Result<PathBuf, String> {
-    copy_tracked(root, copy.tree).map_err(not_started)?;
+    copy_working_tree(change, copy.tree).map_err(not_started)?;
     // Before anything reads the copy's pyproject.toml, pytest's configuration among it.
-    own_pyproject(root, copy.tree)?;
+    own_pyproject(&change.root, copy.tree)?;
     // mutmut takes what it finds under its state for its own cache, results included, so it starts without what the
     // tree tracks there.
     let state = copy.state();
@@ -765,7 +765,7 @@ fn not_started(e: impl std::fmt::Display) -> String {
     format!("could not start mutmut: {e}")
 }
 
-/// Makes the pyproject.toml of `copy`, a copy of the tree `root` (copies::copy_tracked), a file of the copy's own
+/// Makes the pyproject.toml of `copy`, a copy of the tree `root` (copies::copy_working_tree), a file of the copy's own
 /// where `root`'s is a symbolic link, which the copy holds as the same link: the file holds what the link names
 /// from `root`, since from the copy's place a relative link names another file or none, and written through, a link
 /// would change the file it names. Anything else is left as it is. Errs with the problem, a clause, when what the

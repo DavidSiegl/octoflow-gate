@@ -146,6 +146,40 @@ fn a_finding_on_an_added_line_fails_the_gate_and_the_report_goes_to_standard_out
 }
 
 #[test]
+fn an_untracked_file_is_judged_as_an_added_one_an_ignored_one_is_not_and_the_index_stays_as_it_was() {
+    let repo = repo();
+    let bin = repo.stub("shellcheck", "echo 'new.sh:2:1: warning: New. [SC2000]'\n\
+                                       echo 'ignored.sh:2:1: warning: Ignored. [SC2001]'\nexit 1");
+    repo.commit(&[(".gitignore", b"ignored.sh\n")], "ignore");
+    repo.put("new.sh", b"#!/bin/sh\necho new\n");
+    repo.put("ignored.sh", b"#!/bin/sh\necho ignored\n");
+    let porcelain_before = repo.git(&["status", "--porcelain", "--untracked-files=all"]);
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    let done = repo.gate_command("HEAD").env("PATH", path).output().unwrap();
+    assert_eq!(done.status.code(), Some(1), "{}", String::from_utf8_lossy(&done.stderr));
+    let out = String::from_utf8(done.stdout).unwrap();
+    assert!(out.contains("1. `new.sh:2` warning shellcheck SC2000: New.\n"), "{out}");
+    assert!(!out.contains("SC2001"), "{out}");
+    assert_eq!(repo.git(&["status", "--porcelain", "--untracked-files=all"]), porcelain_before);
+}
+
+#[test]
+fn a_file_the_test_commands_write_is_not_judged() {
+    let repo = repo();
+    let args = repo.outside.join("shellcheck-args");
+    let bin = repo.stub("shellcheck", &format!("printf '%s\\n' \"$@\" > '{}'", args.display()));
+    repo.put("before.sh", b"#!/bin/sh\n");
+    repo.put("gate.toml", b"[[test]]\nname = \"writes\"\n\
+                           command = [\"sh\", \"-c\", \"echo '#!/bin/sh' > written.sh\"]\n");
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    let done = repo.gate_command("HEAD").env("PATH", path).output().unwrap();
+    assert!(repo.repo.join("written.sh").exists(), "{}", String::from_utf8_lossy(&done.stdout));
+    let given = std::fs::read_to_string(&args).unwrap();
+    assert!(given.lines().any(|a| a == "before.sh"), "{given}");
+    assert!(!given.lines().any(|a| a == "written.sh"), "{given}");
+}
+
+#[test]
 fn a_change_it_cannot_judge_writes_nothing_and_exits_2() {
     let repo = repo();
     let out = repo.outside.join("quality.md");

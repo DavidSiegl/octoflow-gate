@@ -21,18 +21,28 @@ cites them as that decision's history.
 gate --base main --out quality.md
 ```
 
-`gate` is one binary, which a release ships built ([README.md](../README.md), "Running the gate in a project"); it
-runs in the tree it judges, and reads the tree's Rust, Python and Go [itself](#reading-the-source). The tools
-it runs it finds on `PATH`, but for the judged project's Python, in which that project's pytest, pytest-randomly and
-mutmut are installed: `--python PATH` names it, else the `python` key of [the settings](#the-gates-settings), else it
-is `python3`.
+The working tree it judges is the files git tracks and those it neither tracks nor ignores: a file not yet added
+counts as one the change adds, so a change judged before it is committed is judged as it would be committed. The gate
+lists that tree once, before the tests run, and every check takes the list: the linters read it, the changed lines are
+diffed from it, and the tools that run in a copy get a copy of it. A file the tests write is not judged, and git's own
+index is left as it was. An untracked directory that holds a repository of its own goes into the copies whole, as a
+submodule does, and adds no changed line, as `git add` would add it as one entry, not its files. So whatever a tree
+leaves neither tracked nor ignored is judged: a virtual environment or `node_modules/` is linted, a `mutants/` a local
+mutmut run left fails the gate as mutmut state the change commits (below), a `quality.md` an earlier run wrote is
+linted, and a `Cargo.lock` cargo wrote makes clippy run `--locked`. Ignore such files in `.gitignore`.
+
+`gate` is one binary, which a release ships built ([README.md](../README.md), "Running the gate in a project"); it runs
+in the tree it judges, and reads the tree's Rust, Python and Go [itself](#reading-the-source). The tools it runs it
+finds on `PATH`, git 2.34 or later among them, but for the judged project's Python, in which that project's pytest,
+pytest-randomly and mutmut are installed: `--python PATH` names it, else the `python` key of [the
+settings](#the-gates-settings), else it is `python3`.
 
 It first runs the tests, with the commands the project's `gate.toml` lists as `[[test]]`
 ([running the tests](#running-the-tests)). This repository's lists one, `cargo llvm-cov nextest`, which runs the
 workspace's tests and measures their coverage and takes [cargo-llvm-cov and
 cargo-nextest](#rust-tests-and-coverage).
 
-It runs seven linters over the files git tracks outside `mutants/` (below), each over the files it reads, and keeps
+It runs seven linters over the working tree's files outside `mutants/` (below), each over the files it reads, and keeps
 only the findings on lines the change adds, and the lineless ones on files it touches. Findings on older lines are
 counted, never listed and never held against the change, so the gate judges the change rather than the codebase.
 The files in the table are each linter's default, which a project's [settings](#the-gates-settings) can replace.
@@ -55,9 +65,9 @@ drop; an `except` that does nothing (`S110`, `S112`) and `subprocess.run` withou
 `S` and `PLW` rules it selects. `D105` and `D107` are not selected: a class's docstring documents its magic methods
 and its `__init__`. Which rule to mechanize next is a question for the run metrics: the findings that recur.
 
-clippy runs as `cargo clippy --workspace --all-targets --message-format=json -- --cap-lints warn` in each workspace,
-its tests and examples included, and with `--locked` where git tracks the workspace's `Cargo.lock`, so that it judges
-the versions the change commits and never rewrites the file. Which lints are on is the workspace's own choice, as
+clippy runs as `cargo clippy --workspace --all-targets --message-format=json -- --cap-lints warn` in each workspace, its
+tests and examples included, and with `--locked` where the working tree holds the workspace's `Cargo.lock`, so that it
+judges the versions the change commits and never rewrites the file. Which lints are on is the workspace's own choice, as
 ruff's rules are the project's; the gate caps each at warn, so that a lint at `deny` or `forbid`, which would fail its
 crate's build and stop cargo before the crates after it, is a finding like the rest. The cap also lets an
 `#[allow(...)]` override a `forbid`, which rustc otherwise refuses, so such an allow silences its lint for the gate;
@@ -101,7 +111,7 @@ instead, as `test-integrity` does for what a spec can ask for. Either kind is li
 not only on added lines, and names the check that raised it. A check that cannot run says so as one of its
 findings, so a failing check that cannot run fails the gate.
 
-The gate reads the change without what the tree tracks under `mutants/`, mutmut's state (`Change::from_tree` in
+The gate reads the change without what the tree holds under `mutants/`, mutmut's state (`Change::from_tree` in
 `crates/gate/src/judge.rs`), and every part of it reads that one change: no linter finding, suppression, line end or
 coverage counts there, no check selects a test, a function or a changed line there, or counts an edit there as a change
 to the code, and a file moved out of it counts as added. A change that adds or edits files there, or moves files into
@@ -390,7 +400,7 @@ one, and that both flag, is two findings at its `def`.
 **Dependency cycles** finds the import a change adds that closes a cycle between the project's own modules: two
 modules that import each other, directly or through others, can no longer be read, tested or moved apart. It runs on
 the languages the change holds Python or Rust of, `crates/checks/src/cycles.rs` judging the import graphs the front
-ends read (`imports` in `crates/lang-python` and `crates/lang-rust`) over every file of the language the tree tracks
+ends read (`imports` in `crates/lang-python` and `crates/lang-rust`) over every file of the language the gate judges
 outside `mutants/`, named `.py` or `.rs`: once as the base holds them and once as the working tree does, the base's
 files under the names the change gives them. Each node is a file; a `dependency-cycles` finding, which fails the gate,
 lies on an import that closes a cycle where the import is from one file of another the base's file did not import and
@@ -423,8 +433,8 @@ take part in no cycle.
 **Duplicated blocks** finds a block of code a change adds that the tree already holds elsewhere, or that the change adds
 twice: a copy is logic that has to be fixed twice, and a change is where it enters. It runs on each of Python, Rust and
 Go where the change adds a line to a file it judges, `crates/checks/src/duplicates.rs` comparing the tokens the front
-ends read (`code_tokens` in `crates/lang-python`, `crates/lang-rust` and `crates/lang-go`) of every file the working
-tree tracks outside `mutants/` that holds the language as the other checks tell it: a `.py` name or a `#!` line naming
+ends read (`code_tokens` in `crates/lang-python`, `crates/lang-rust` and `crates/lang-go`) of every file the gate
+judges outside `mutants/` that holds the language as the other checks tell it: a `.py` name or a `#!` line naming
 python, a `.rs` name, a `.go` name inside a Go module, generated Go left out. A name stands for what kind of name it is
 and a literal for what kind of literal, so a copy whose names and values were changed is still a copy; keywords,
 operators and punctuation stand for themselves. Comments, `use`, `extern crate` and `import` statements, Go's `package`
@@ -449,8 +459,8 @@ decides which of those are tests. It runs them five times, alone, under pytest-r
 (`-p randomly -p no:cacheprovider --randomly-seed=N`), each run in the judged project's Python (`python -m pytest`
 with the Python that `--python` or the settings' `python` names, whatever `pytest` is on `PATH`) and within 30
 seconds. They run in
-a temporary copy of the files git tracks, so a report the project's `addopts` write, such as `coverage.xml`, lands in
-the copy and the build's own stays as the gate reads it; a test that needs an untracked file, such as a build
+a temporary copy of the working tree, so a report the project's `addopts` write, such as `coverage.xml`, lands in
+the copy and the build's own stays as the gate reads it; a test that needs a file git ignores, such as a build
 product, does not find it there. Each changed test file takes the configuration pytest would find for it: the first
 in its own directory, else in the nearest one above it, up to the copy's top and never above it, in pytest's order
 within a directory (`pytest.toml`, `.pytest.toml`, `pytest.ini`, `.pytest.ini`, then `pyproject.toml`, `tox.ini` and
@@ -467,7 +477,7 @@ cannot run is a finding about its tests alone:
   out of its report (an `addopts` with `--maxfail`, say), neither passed nor failed it;
 - `failed-every-run`: a test that failed under every seed that judged it, at least two, in the copy. It is not
   flaky. If the build failed it too, the failing tests list it; if the build passed it, it needs something the copy
-  lacks, such as git's metadata, an untracked or ignored file or a build product, and the reruns could not judge it.
+  lacks, such as git's metadata, a file git ignores or a build product, and the reruns could not judge it.
   The gate does not compare the two, so the finding says both;
 - `not-rerun`: the reruns could not judge the tests: pytest could not start, took longer than 30 seconds, ended in a
   usage or collection error, or collected tests without listing their ids; a changed test file could not be read or
@@ -485,7 +495,7 @@ installed in the project's Python, so every pytest run there shuffles the tests 
 Go's changed tests are rerun the same way, with go's own shuffling. A test counts when the change adds or removes a line
 of it in a `_test.go` file, from the line above its `func` to the line before its closing brace: a top-level `TestX`,
 `FuzzX` or `ExampleX`, which `go test -run` selects, its subtests running with it. In the same temporary copy of the
-tracked files, each package's tests are first built, as `go test -c`, within five minutes, so that a run's time goes to
+working tree, each package's tests are first built, as `go test -c`, within five minutes, so that a run's time goes to
 the tests; then its changed tests run five times, alone and together, from the package's directory, as `go test -json
 -count=1 -shuffle=N -run '^(TestA|TestB)$' .` with N from 1 to 5, each run within 30 seconds; `-count=1` keeps go's test
 cache from answering in place of a run. A test that failed under some seeds and passed under others is `mixed-results`,
@@ -537,7 +547,7 @@ call the function:
 - `not-narrowed`: `--test-contexts` was given, but its file could not tell which tests reach the changed functions, so
   mutmut was given its whole test selection, with the reason (see below). The other findings stand.
 
-mutmut runs in the project's Python, on a copy of the files git tracks, so the working tree stays as it was; its state,
+mutmut runs in the project's Python, on a copy of the working tree, so the working tree stays as it was; its state,
 `mutants/`, goes into the copy too. Its own selector, mutant names such as `pkg.x_parse__mutmut_*`, picks which mutants
 run only after mutmut has made a mutant of every function, which took minutes for octoflow's Python engine. So in the
 copy, each function and class the change does not touch in the files mutmut mutates gets mutmut's `# pragma: no
@@ -614,7 +624,7 @@ half the budget and cargo-mutants the rest; with Go as well, mutmut a third, car
 gremlins the rest; a change with no Python functions to mutate gives cargo-mutants all of it, or half with Go to mutate.
 A `budget-reached` finding names the seconds of the share its tool was stopped at. cargo-mutants mutates only those
 functions, given as one `--re` each that matches its mutants by their file and line (`^src/lib\.rs:(?:5|6|7):`),
-`--in-place` in the gate's copy of the files git tracks, once per Cargo workspace (that of the nearest `Cargo.toml`
+`--in-place` in the gate's copy of the working tree, once per Cargo workspace (that of the nearest `Cargo.toml`
 above the file, as `cargo locate-project` tells it), with `--test-tool nextest`, `--minimum-test-timeout 60` and
 `--timeout-multiplier 2`: each mutant's tests have twice as long as the unmutated baseline's took, and at least 60
 seconds, while the baseline runs bounded only by the budget, so a workspace whose tests take longer than a minute still
@@ -627,8 +637,10 @@ such as to a `use` or a `const`, gives nothing. The findings are mutmut's kinds:
 - `budget-reached`: the budget ran out, before cargo-mutants started (it needs the 15 seconds of its stop, as mutmut
   does) or while it ran, with how many mutants it had tried; the workspaces after it are `not-run`;
 - `not-run`: cargo-mutants could not start, wrote no outcomes the gate can read, or found the unmutated baseline not
-  passing, as for tests that fail or code that does not build in the copy; the copy could not be made; or a changed
-  `.rs` file could not be parsed;
+  passing, as for tests that fail or code that does not build in the copy, with what its log says went wrong: the first
+  test's panic, cut as a failing test's detail is, or the first compiler or cargo error with its location, whichever
+  comes first, else the log's last line, since the log goes with the gate's copy; the copy could not be made; or a
+  changed `.rs` file could not be parsed;
 - `not-mutated`: a changed `.rs` file with no `Cargo.toml` above it, one whose workspace cargo cannot tell, or one
   whose workspace's directory is not above it, as a `package.workspace` can name;
 - `not-removed`: the copy could not be removed afterwards; the findings stand.
@@ -646,7 +658,7 @@ function of its name with the same declaration, its receiver, parameters, result
 layout, as an edit to its comments or layout alone changes nothing to mutate; a signature edited alone is an edit.
 gremlins runs as `gremlins unleash --silent=false --output-statuses lctkvsr --threshold-efficacy 0 --threshold-mcover 0
 --timeout-coefficient 10 --diff <base> --coverpkg ./... --integration`, with `-count=1` added to `GOFLAGS`, in the
-directory of the go.mod nearest above the functions' files, once per module, in the gate's copy of the files git tracks.
+directory of the go.mod nearest above the functions' files, once per module, in the gate's copy of the working tree.
 It first runs the module's tests for their coverage of the whole module, then each mutant against all of the module's
 tests, so a mutant only another package's tests catch is caught, at the cost of the budget; and mutates only what it
 reads as changed from `git diff --merge-base <base>`: the gate puts a `git` first on its `PATH` that answers that one

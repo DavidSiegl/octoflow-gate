@@ -10,15 +10,16 @@
 //! the allow itself, not a lint added to an existing allow wrapped over lines. That gap is left open: this repository
 //! sets no lint to forbid, and a test command that builds uncapped, as `cargo llvm-cov nextest` does, still fails such
 //! a workspace with E0453. A build that still fails is a failed condition, naming the compiler's first error in
-//! a tracked file, wherever it is, else cargo's own: a change that deletes a function an old line calls breaks the
+//! a judged file, wherever it is, else cargo's own: a change that deletes a function an old line calls breaks the
 //! build on no line it added.
 //!
 //! The cargo commands it runs, each within process::TOOL_TIMEOUT: `cargo clippy --version`, whose failure is clippy
 //! missing; `cargo locate-project` for each Cargo.toml among the files it is given; and `cargo clippy` in each
 //! workspace, which builds what it needs to (target/ in the workspace) and may fetch the crates it uses. That last
-//! runs with `--locked` when git tracks the workspace's Cargo.lock, so that it judges the versions the change commits
-//! and never rewrites the file; without one, cargo writes an untracked Cargo.lock beside the manifest (a workspace that
-//! commits no lock file has cargo resolve one afresh, which `--locked` refuses). passes-at-base follows the same rule.
+//! runs with `--locked` when the workspace's Cargo.lock is among the judged files (Change::judged), so that it
+//! judges the versions the change commits and never rewrites the file; without one, cargo writes a Cargo.lock beside
+//! the manifest (a workspace that commits no lock file has cargo resolve one afresh, which `--locked` refuses), which
+//! the next run judges as the change's unless git ignores it. passes-at-base follows the same rule at the base.
 
 use std::collections::{BTreeSet, HashSet};
 use std::ffi::{OsStr, OsString};
@@ -27,16 +28,16 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::linters::{tool_process, Tracked};
+use crate::linters::{tool_process, JudgedFiles};
 use crate::paths::{normpath, rel_path};
 use crate::report::Finding;
 use crate::text;
 
-/// clippy's findings over `files`, the tracked files it reads, in the tree whose top level is `root`, and the failed
+/// clippy's findings over `files`, the judged files it reads, in the tree whose top level is `root`, and the failed
 /// conditions it caused, as linters::Linter::run says, `name` being the linter's. Of `files` only the manifests play
 /// a part, by which clippy reads crates; without a Rust source among them there is nothing to lint, and cargo does
 /// not run. A finding --all-targets reports twice, for a library checked as itself and as its tests, is kept once.
-pub fn run(name: &str, root: &Path, files: &[OsString], tracked: &Tracked) -> (Vec<Finding>, Vec<String>) {
+pub fn run(name: &str, root: &Path, files: &[OsString], judged: &JudgedFiles) -> (Vec<Finding>, Vec<String>) {
     if !files.iter().any(|f| f.as_bytes().ends_with(b".rs")) {
         return (vec![], vec![]);
     }
@@ -52,7 +53,7 @@ pub fn run(name: &str, root: &Path, files: &[OsString], tracked: &Tracked) -> (V
     let (manifests, mut problems) = workspaces(name, root, files);
     let mut found = vec![];
     for manifest in manifests {
-        let (lints, problem) = lint_workspace(name, root, &manifest, tracked);
+        let (lints, problem) = lint_workspace(name, root, &manifest, judged);
         found.extend(lints);
         problems.extend(problem);
     }
@@ -89,12 +90,12 @@ pub(crate) fn workspaces(name: &str, root: &Path, files: &[OsString]) -> (Vec<Pa
 
 /// The lints clippy finds in the workspace whose root manifest is `manifest`, relative to `root`, and the failed
 /// condition, None when it compiled and clippy ran as it should.
-fn lint_workspace(name: &str, root: &Path, manifest: &Path, tracked: &Tracked) -> (Vec<Finding>, Option<String>) {
+fn lint_workspace(name: &str, root: &Path, manifest: &Path, judged: &JudgedFiles) -> (Vec<Finding>, Option<String>) {
     let workspace = manifest.parent().unwrap_or(Path::new(""));
     let mut argv =
         ["cargo", "clippy", "--workspace", "--all-targets", "--message-format=json"].map(OsStr::new).to_vec();
     let lock = workspace.join("Cargo.lock");
-    if tracked.listed.iter().any(|p| p == lock.as_os_str()) {
+    if judged.listed.iter().any(|p| p == lock.as_os_str()) {
         argv.push(OsStr::new("--locked"));
     }
     argv.extend(["--", "--cap-lints", "warn"].map(OsStr::new));
@@ -103,7 +104,7 @@ fn lint_workspace(name: &str, root: &Path, manifest: &Path, tracked: &Tracked) -
         Ok(done) => done,
     };
     let found: Vec<Finding> =
-        done.stdout.split(|&b| b == b'\n').filter_map(|line| diagnostic(line, workspace, root, tracked)).collect();
+        done.stdout.split(|&b| b == b'\n').filter_map(|line| diagnostic(line, workspace, root, judged)).collect();
     // Capped at warn, a lint never fails the build, so each error is the compiler's.
     let (errors, lints): (Vec<Finding>, Vec<Finding>) = found.into_iter().partition(|f| f.severity == "error");
     if done.status == 0 {
@@ -130,10 +131,10 @@ fn lint_workspace(name: &str, root: &Path, manifest: &Path, tracked: &Tracked) -
 ///
 /// `workspace` is the workspace's directory relative to `root`, which the paths cargo prints are relative to. A
 /// finding inside a macro's definition is placed where the macro was used, at the first expansion that is in a
-/// tracked file. Anything that is not a record of the shape
+/// judged file. Anything that is not a record of the shape
 /// <https://doc.rust-lang.org/cargo/reference/external-tools.html> gives, such as a line a build script printed,
 /// holds no finding.
-fn diagnostic(line: &[u8], workspace: &Path, root: &Path, tracked: &Tracked) -> Option<Finding> {
+fn diagnostic(line: &[u8], workspace: &Path, root: &Path, judged: &JudgedFiles) -> Option<Finding> {
     let record: Value = serde_json::from_slice(line).ok()?;
     if record.get("reason")?.as_str()? != "compiler-message" {
         return None;
@@ -147,7 +148,7 @@ fn diagnostic(line: &[u8], workspace: &Path, root: &Path, tracked: &Tracked) -> 
     let mut span = spans.iter().find(|s| s.get("is_primary").and_then(Value::as_bool) == Some(true));
     let path = loop {
         let file = span?.get("file_name")?.as_str()?;
-        if let Some(path) = tracked.name_of(workspace.join(file).as_os_str().as_bytes(), root) {
+        if let Some(path) = judged.name_of(workspace.join(file).as_os_str().as_bytes(), root) {
             break path;
         }
         span = span?.get("expansion").and_then(|e| e.get("span")).filter(|s| !s.is_null());
@@ -166,14 +167,14 @@ fn diagnostic(line: &[u8], workspace: &Path, root: &Path, tracked: &Tracked) -> 
 mod tests {
     use super::*;
 
-    fn tracked(names: &[&str]) -> Tracked {
-        Tracked::new(names.iter().map(OsString::from).collect())
+    fn judged(names: &[&str]) -> JudgedFiles {
+        JudgedFiles::new(names.iter().map(OsString::from).collect())
     }
 
     #[test]
     fn a_diagnostic_is_read_from_its_primary_span_or_the_expansion_in_a_tracked_file() {
-        let tracked = tracked(&["crate/src/lib.rs"]);
-        let read = |line: &str| diagnostic(line.as_bytes(), Path::new("crate"), Path::new("/top"), &tracked);
+        let judged = judged(&["crate/src/lib.rs"]);
+        let read = |line: &str| diagnostic(line.as_bytes(), Path::new("crate"), Path::new("/top"), &judged);
         let lint = r#"{"reason":"compiler-message","message":{"level":"warning","message":"unneeded `return`",
             "code":{"code":"clippy::needless_return"},
             "spans":[{"is_primary":false,"file_name":"src/lib.rs","line_start":1},

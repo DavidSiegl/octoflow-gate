@@ -3,7 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
-use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -19,10 +19,10 @@ use crate::report::Finding;
 use crate::settings::Settings;
 use crate::text;
 
-/// A linter the gate runs: which tracked files it reads, and how it runs over them and reads its findings.
+/// A linter the gate runs: which judged files it reads, and how it runs over them and reads its findings.
 pub struct Linter {
     pub name: &'static str,
-    /// Globs of the tracked files it reads unless gate.toml gives others ([`Settings::linter_globs`]); the gate does
+    /// Globs of the judged files it reads unless gate.toml gives others ([`Settings::linter_globs`]); the gate does
     /// not run a linter that none of them match.
     globs: &'static [&'static str],
     /// The characters besides `\n` at which the linter ends a line of a file it reads and git does not; a `\r`
@@ -155,9 +155,10 @@ fn argv(words: &[&str], path: Option<&Path>, more: &[&str], files: &[OsString]) 
     out
 }
 
-/// The files a tree tracks, as `git ls-files -z` names them, which a path a linter printed is read against.
-pub struct Tracked {
-    /// In git's order.
+/// The files of a tree the gate judges (Change::judged), which the linters read and a path a linter printed is
+/// read against.
+pub struct JudgedFiles {
+    /// By path, in byte order.
     pub listed: Vec<OsString>,
     names: HashSet<OsString>,
     /// Each name that is not UTF-8 by how a tool that prints U+FFFD for what is not shows it; None for a showing two
@@ -165,18 +166,19 @@ pub struct Tracked {
     lossy: HashMap<String, Option<OsString>>,
 }
 
-impl Tracked {
-    pub fn new(listed: Vec<OsString>) -> Tracked {
+impl JudgedFiles {
+    /// The files `listed`, by path from the tree's top level, in byte order.
+    pub fn new(listed: Vec<OsString>) -> JudgedFiles {
         let mut lossy: HashMap<String, Option<OsString>> = HashMap::new();
         for name in &listed {
             if let std::borrow::Cow::Owned(shown) = String::from_utf8_lossy(name.as_bytes()) {
                 lossy.entry(shown).and_modify(|was| *was = None).or_insert_with(|| Some(name.clone()));
             }
         }
-        Tracked { names: listed.iter().cloned().collect(), listed, lossy }
+        JudgedFiles { names: listed.iter().cloned().collect(), listed, lossy }
     }
 
-    /// The tracked file that `shown`, a path a linter printed, absolute or relative to `root`, names; None when it
+    /// The judged file that `shown`, a path a linter printed, absolute or relative to `root`, names; None when it
     /// names none.
     pub(crate) fn name_of(&self, shown: &[u8], root: &Path) -> Option<OsString> {
         let relative = rel_path(&normpath(&root.join(OsStr::from_bytes(shown))), &normpath(root)).into_os_string();
@@ -196,10 +198,10 @@ impl Linter {
         settings.linter_globs(self.name).or(own).is_some_and(|globs| globs.matches(path))
     }
 
-    /// The files of `tracked` the linter reads, by `settings`, in git's order, none under mutmut's state, which no
+    /// The files of `judged` the linter reads, by `settings`, in byte order, none under mutmut's state, which no
     /// part of the judgement reads.
-    pub fn files(&self, tracked: &Tracked, settings: &Settings) -> Vec<OsString> {
-        tracked
+    pub fn files(&self, judged: &JudgedFiles, settings: &Settings) -> Vec<OsString> {
+        judged
             .listed
             .iter()
             .filter(|f| !under_mutmut_state(f))
@@ -208,7 +210,7 @@ impl Linter {
             .collect()
     }
 
-    /// The linter's findings over `files`, the tracked files it reads ([`Linter::files`]), in the tree whose top
+    /// The linter's findings over `files`, the judged files it reads ([`Linter::files`]), in the tree whose top
     /// level is `root`, an absolute path, wherever they are, and the failed conditions it caused, each a sentence;
     /// none when it ran as it should. `rules` is the pyproject.toml whose rules decide, an absolute path, for a
     /// linter that takes them: with None such a linter runs on its defaults. A linter that is missing, fails or does
@@ -219,23 +221,23 @@ impl Linter {
         root: &Path,
         rules: Option<&Path>,
         files: &[OsString],
-        tracked: &Tracked,
+        judged: &JudgedFiles,
     ) -> (Vec<Finding>, Vec<String>) {
         let (command, apart, detail) = match self.kind {
             Kind::Lines { command, apart, detail } => (command, apart, detail),
-            Kind::Clippy => return crate::clippy::run(self.name, root, files, tracked),
-            Kind::GolangciLint => return crate::golangci::run(self.name, root, files, tracked),
+            Kind::Clippy => return crate::clippy::run(self.name, root, files, judged),
+            Kind::GolangciLint => return crate::golangci::run(self.name, root, files, judged),
         };
         let name = self.name;
         if !apart {
-            return read_run(name, detail, &command(rules, files), root, root, tracked);
+            return read_run(name, detail, &command(rules, files), root, root, judged);
         }
         let dir = match ScratchDirectory::new(&std::env::temp_dir()) {
             Ok(dir) => dir,
             Err(e) => return (vec![], vec![format!("`{name}` did not run: could not make a directory to run it in: {e}.")]),
         };
         let files: Vec<OsString> = files.iter().map(|f| root.join(f).into_os_string()).collect();
-        let (found, mut conditions) = read_run(name, detail, &command(rules, &files), dir.path(), root, tracked);
+        let (found, mut conditions) = read_run(name, detail, &command(rules, &files), dir.path(), root, judged);
         let path = dir.path().to_path_buf();
         if let Err(e) = dir.remove() {
             conditions.push(format!("Could not remove the directory `{name}` ran in, `{}`: {e}.", path.display()));
@@ -245,21 +247,21 @@ impl Linter {
 }
 
 /// [`Linter::run`]'s findings and failed conditions for the line-printing linter `name`, run as `argv` in `cwd`:
-/// what it printed is read by `detail` as [`findings`] reads it, against `root` and `tracked`.
+/// what it printed is read by `detail` as [`findings`] reads it, against `root` and `judged`.
 fn read_run(
     name: &str,
     detail: &str,
     argv: &[OsString],
     cwd: &Path,
     root: &Path,
-    tracked: &Tracked,
+    judged: &JudgedFiles,
 ) -> (Vec<Finding>, Vec<String>) {
     let argv: Vec<&OsStr> = argv.iter().map(OsString::as_os_str).collect();
     let done = match tool_process(name, &argv, cwd) {
         Err(problem) => return (vec![], vec![problem]),
         Ok(done) => done,
     };
-    let found = findings(name, detail, &done.stdout, root, tracked);
+    let found = findings(name, detail, &done.stdout, root, judged);
     // Exit status 1 means it found something, any other but 0 that it failed.
     if done.status == 0 || (done.status == 1 && !found.is_empty()) {
         return (found, vec![]);
@@ -292,10 +294,10 @@ pub(crate) fn tool_process(name: &str, argv: &[&OsStr], cwd: &Path) -> Result<pr
 
 /// The findings in what the linter `name` printed, `output`, a finding a line whose `detail` is as [`Kind::Lines`]
 /// says, its paths made relative to `root`, the tree's top level, and its rules prefixed with its name. A line that is
-/// not a finding on a tracked file, such as a summary, is skipped. Only `\n` ends a line, so a name holding a carriage
+/// not a finding on a judged file, such as a summary, is skipped. Only `\n` ends a line, so a name holding a carriage
 /// return or U+2028 stays whole; a name that is not UTF-8 may be printed as it is, or with U+FFFD for what is not, as
-/// [`Tracked`] reads it.
-fn findings(name: &str, detail: &str, output: &[u8], root: &Path, tracked: &Tracked) -> Vec<Finding> {
+/// [`JudgedFiles`] reads it.
+fn findings(name: &str, detail: &str, output: &[u8], root: &Path, judged: &JudgedFiles) -> Vec<Finding> {
     static AT: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"(?s-u)^(?P<path>[^:]+):(?:(?P<line>[0-9]+):(?:[0-9]+:)?)? (?P<detail>.+)$").expect("valid")
     });
@@ -309,7 +311,7 @@ fn findings(name: &str, detail: &str, output: &[u8], root: &Path, tracked: &Trac
         // A linter run apart names its files by absolute paths, under a root whose own path may hold a colon.
         let line = line.strip_prefix(top.as_slice()).unwrap_or(line);
         let Some(at) = AT.captures(line) else { continue };
-        let Some(path) = tracked.name_of(&at["path"], root) else { continue };
+        let Some(path) = judged.name_of(&at["path"], root) else { continue };
         let Some(found) = detail.captures(&at["detail"]) else { continue };
         let group = |name: &str| found.name(name).map(|m| text::lossless(m.as_bytes()));
         out.push(Finding {
@@ -333,34 +335,31 @@ fn trim_bytes<'a>(bytes: &'a [u8], strip: &[u8]) -> &'a [u8] {
     &bytes[start..end]
 }
 
-/// The tracked files `git ls-files -z` names in `listed`, in its order.
-pub fn tracked_from(listed: &[u8]) -> Tracked {
-    Tracked::new(listed.split(|&b| b == 0).filter(|n| !n.is_empty()).map(|n| OsString::from_vec(n.to_vec())).collect())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::ffi::OsStringExt;
 
     fn linter(name: &str) -> &'static Linter {
         LINTERS.iter().find(|l| l.name == name).unwrap()
     }
 
     /// The findings in `output`, as the line-reading linter `name` prints them.
-    fn read(name: &str, output: &[u8], root: &Path, tracked: &Tracked) -> Vec<Finding> {
+    fn read(name: &str, output: &[u8], root: &Path, judged: &JudgedFiles) -> Vec<Finding> {
         let Kind::Lines { detail, .. } = linter(name).kind else { panic!("{name} prints no finding a line") };
-        findings(name, detail, output, root, tracked)
+        findings(name, detail, output, root, judged)
     }
 
     #[test]
     fn findings_are_read_by_their_location_and_detail() {
-        let tracked = Tracked::new(vec!["a.sh".into(), "d i r/b.sh".into(), OsString::from_vec(b"c\xff.sh".to_vec())]);
+        let judged =
+            JudgedFiles::new(vec!["a.sh".into(), "d i r/b.sh".into(), OsString::from_vec(b"c\xff.sh".to_vec())]);
         let printed = "a.sh:3:1: warning: Quote this. [SC2086]\r\n\
                        /top/d i r/b.sh:7: error: Bad. [SC1000]\n\
                        c\u{fffd}.sh:1: note: Lossy. [SC2001]\n\
-                       untracked.sh:1:1: error: X [SC1]\n\
+                       elsewhere.sh:1:1: error: X [SC1]\n\
                        In total 3 findings\n";
-        let found = read("shellcheck", printed.as_bytes(), Path::new("/top"), &tracked);
+        let found = read("shellcheck", printed.as_bytes(), Path::new("/top"), &judged);
         let got: Vec<_> =
             found.iter().map(|f| (f.path.clone().unwrap(), f.line, f.severity.as_str(), f.rule.as_str())).collect();
         assert_eq!(
@@ -377,15 +376,15 @@ mod tests {
     #[test]
     fn an_absolute_path_is_read_under_a_root_whose_path_holds_a_colon() {
         // pymarkdown runs apart, on absolute paths, which the location's `[^:]+` alone would cut at the root's colon.
-        let tracked = Tracked::new(vec!["README.md".into()]);
-        let found = read("pymarkdown", b"/w/a:b/repo/README.md:3:1: MD047: End", Path::new("/w/a:b/repo"), &tracked);
+        let judged = JudgedFiles::new(vec!["README.md".into()]);
+        let found = read("pymarkdown", b"/w/a:b/repo/README.md:3:1: MD047: End", Path::new("/w/a:b/repo"), &judged);
         assert_eq!(fields(&found), [("README.md", Some(3), "error", "pymarkdown MD047", "End")]);
     }
 
     #[test]
     fn a_finding_without_a_severity_is_an_error() {
-        let tracked = Tracked::new(vec!["README.md".into()]);
-        let found = read("pymarkdown", b"README.md:2:1: MD013: Line length", Path::new("/t"), &tracked);
+        let judged = JudgedFiles::new(vec!["README.md".into()]);
+        let found = read("pymarkdown", b"README.md:2:1: MD013: Line length", Path::new("/t"), &judged);
         assert_eq!((found[0].severity.as_str(), found[0].rule.as_str()), ("error", "pymarkdown MD013"));
     }
 
@@ -401,13 +400,13 @@ mod tests {
 
     #[test]
     fn ruff_s_rule_is_a_code_or_a_name_before_a_colon_and_its_fix_mark_is_left_out() {
-        let tracked = Tracked::new(vec!["orchestrator.py".into()]);
+        let judged = JudgedFiles::new(vec!["orchestrator.py".into()]);
         let printed = "orchestrator.py:595:18: F402 Import `field` from line 55 shadowed\n\
                        orchestrator.py:1:8: invalid-syntax: Expected an expression\n\
                        orchestrator.py:6:8: F401 [*] `os` imported but unused\n\
                        build/x.py:1:1: F401 unused\n\
                        Found 4 errors.\n";
-        let found = read("ruff", printed.as_bytes(), Path::new("/repo"), &tracked);
+        let found = read("ruff", printed.as_bytes(), Path::new("/repo"), &judged);
         assert_eq!(
             fields(&found),
             [
@@ -420,11 +419,11 @@ mod tests {
 
     #[test]
     fn mypy_s_notes_are_dropped_and_an_error_without_a_code_is_mypy_s_own() {
-        let tracked = Tracked::new(vec!["orchestrator.py".into()]);
+        let judged = JudgedFiles::new(vec!["orchestrator.py".into()]);
         let printed = "orchestrator.py:594:5: error: Need type annotation for \"tokens\"  [var-annotated]\n\
                        orchestrator.py:594:5: note: See https://x\n\
                        orchestrator.py:7: error: Bad [x] thing\n";
-        let found = read("mypy", printed.as_bytes(), Path::new("/repo"), &tracked);
+        let found = read("mypy", printed.as_bytes(), Path::new("/repo"), &judged);
         assert_eq!(
             fields(&found),
             [
@@ -438,7 +437,7 @@ mod tests {
     fn a_name_ruff_prints_lossily_is_not_guessed_between_two_files() {
         let names = [&b"a\xe9.py"[..], b"a\xe8.py"].map(|n| OsString::from_vec(n.to_vec()));
         let printed = "a\u{fffd}.py:1:8: F401 `os` imported but unused\n";
-        assert!(read("ruff", printed.as_bytes(), Path::new("/repo"), &Tracked::new(names.to_vec())).is_empty());
+        assert!(read("ruff", printed.as_bytes(), Path::new("/repo"), &JudgedFiles::new(names.to_vec())).is_empty());
     }
 
     #[test]
@@ -454,7 +453,7 @@ mod tests {
         let Kind::Lines { detail, .. } = linter("shellcheck").kind else { unreachable!() };
         let kind = Kind::Lines { command: |_, _| vec!["gate-no-such-program".into()], apart: false, detail };
         let missing = Linter { kind, ..*linter("shellcheck") };
-        let (found, conditions) = missing.run(Path::new("."), None, &[], &Tracked::new(vec![]));
+        let (found, conditions) = missing.run(Path::new("."), None, &[], &JudgedFiles::new(vec![]));
         assert!(found.is_empty());
         assert_eq!(conditions, ["`shellcheck` is not installed: `gate-no-such-program` is not on PATH."]);
         let argv = [OsStr::new("gate-no-such-program")];

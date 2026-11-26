@@ -34,9 +34,8 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   `testing::constants` runs for every Go file (`crates/lang-go/src/lib.rs:78`), and only a test file's are used.
   `mark_for_mutmut` (`crates/gate/src/python_mutants.rs:681-690`) stats every file of the copy, then
   `outside_mutmut` rebuilds the source_paths and pattern vectors for each one. Nothing here gives a wrong result."
-  The gate's own rereads of a change's files are gone (architecture-deepening/01: the checks take them from
-  `Sources`). Closes with each computed once per file or copy: the function's bindings taken from the file's, the
-  constants only where a test may name them, and mutmut's patterns built once.
+  Closes with each computed once per file or copy: the function's bindings taken from the file's, the constants
+  only where a test may name them, and mutmut's patterns built once.
 - **passes-at-base reads every Rust file of the base's copy before it looks at the deadline.** As cross-review 34 put
   it (F9, 2026-11-14): "`CrateLayout::of` (:366-372) reads and parses every `.rs` of the copy before any deadline
   check." In a large tree that spends `--base-run-budget` with no `budget-reached` to show for it, and the work is
@@ -271,7 +270,7 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
 - **dependency-cycles reads and parses every tracked file of a language twice a run.** As cross-review 24 put it (F6,
   2026-11-12): "Every untouched file's bytes are cloned into `base` and each tree is parsed in full by `imports`, so a
   one-line change parses the repository's whole `.py`/`.rs` set twice; `git ls-files -z` repeats `judge_change`'s
-listing" (`trees` in `crates/gate/src/sources.rs`). duplicated-blocks (structural-checks/03) lists and reads the
+  listing" (`trees` in `crates/gate/src/sources.rs`). duplicated-blocks (structural-checks/03) lists and reads the
   working tree's files of each language a third time, and parses them once more (`duplicated_blocks`,
   `crates/gate/src/parser_checks.rs`); and, for Rust, `RustChange::of` (`sources.rs`) reads both trees once more and
   parses them for `lang_rust::test_modules`. Closes with an untouched file's imports and modules read once for both

@@ -101,19 +101,16 @@ pub(crate) fn edits(f: &Function, added: &BTreeSet<u32>, removed: &BTreeSet<u32>
 /// then by line, and a `not-run` finding for each file whose functions cannot be told, as one that does not parse.
 ///
 /// A function counts when it is a `fn` with a body, outside test code (model::Function's `exempt`), of a `.rs` file
-/// that is Rust code under test ([`RustChange::is_code`]) and a regular file of the working tree: not a symlink, a
-/// submodule or a special file, whose reading could block or never end.
+/// that is Rust code under test ([`RustChange::is_code`]) and read in the working tree, so a regular file there
+/// (sources::Sources).
 fn edited_rust(rust: &RustChange) -> (Vec<Edited>, Vec<Finding>) {
     let none = BTreeSet::new();
-    let regular =
-        |p: &OsStr| std::fs::symlink_metadata(rust.change.root.join(p)).is_ok_and(|m| m.file_type().is_file());
     let (mut edited, mut unread) = (vec![], vec![]);
     for file in &rust.files {
         let Some(after) = &file.after else { continue };
         let path = after.path.as_os_str();
         let removed = rust.change.removal_points.get(path).unwrap_or(&none);
-        let rs = path.as_bytes().ends_with(b".rs");
-        if (file.added.is_empty() && removed.is_empty()) || !rs || !rust.is_code(path) || !regular(path) {
+        if (file.added.is_empty() && removed.is_empty()) || !rust.is_code(path) {
             continue;
         }
         match &after.source {

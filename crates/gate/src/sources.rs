@@ -2,14 +2,15 @@
 //! crates/lang-rust, crates/lang-go) for every check that judges or runs it: the parser checks (parser_checks.rs),
 //! passes-at-base, surviving-mutants and flaky-tests. Each language change, [`PythonChange`], [`RustChange`] and
 //! [`GoChange`], answers the same questions of its part: its files read, which paths are its code under test
-//! (`is_code`), which go with its tests in a copy of the base (`beside_tests`), and the bytes it read of a side
-//! (`source_at_base`, `source_now`).
+//! (`is_code`), which go with its tests in a copy of the base (`beside_tests`), and, for Python and Go, whose runner
+//! checks read a file's source again, the bytes it read of a side (`source_at_base`, `source_now`).
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::io::Read;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use checks::{integrity, ChangedFile, Side};
 use lang_python::{Unit, FIRST_LINE_BYTES};
@@ -32,10 +33,13 @@ pub struct Sources<'a> {
     pub rust: RustChange<'a>,
     pub go: GoChange<'a>,
     /// The contents at the base of each of the change's files that is a regular file there, by its base path.
-    at_base: HashMap<OsString, Vec<u8>>,
+    at_base: Blobs,
     /// The base paths the change deletes or renames, where a project's file ([`Language::project`]) may have stood.
     gone: HashSet<PathBuf>,
 }
+
+/// Files' contents by their paths, shared between [`Sources`] and the language changes that read them.
+type Blobs = HashMap<OsString, Rc<[u8]>>;
 
 impl<'a> Sources<'a> {
     /// The source files of `change`. Errs when git cannot list the base's tree or show a file of it, or a file of
@@ -84,11 +88,12 @@ impl<'a> Sources<'a> {
 /// finding can open with, as model::Unreadable's.
 pub type UnreadFiles = Vec<(OsString, String)>;
 
-/// The bytes a language change read of its files' sides, as [`Stored::files`] read them.
+/// The bytes a language change read of its files' sides, as [`Stored::files`] read them: a key for each side of the
+/// change's files that the language read, and for no other path.
 #[derive(Default)]
 struct SideBytes {
     /// Each base side's, by its path at the base.
-    at_base: HashMap<OsString, Vec<u8>>,
+    at_base: Blobs,
     /// Each working-tree side's, by its path in the working tree.
     now: HashMap<OsString, Vec<u8>>,
 }
@@ -102,6 +107,7 @@ pub struct PythonChange<'a> {
     pub files: Vec<ChangedFile>,
     /// The paths on a side of the change that are Python code under test, as [`PythonChange::is_code`] says.
     code: HashSet<OsString>,
+    /// The bytes of each side of `files`, which [`PythonChange::source_at_base`] and [`PythonChange::source_now`] give.
     bytes: SideBytes,
 }
 
@@ -155,7 +161,7 @@ impl<'a> PythonChange<'a> {
     ///
     /// [`files`]: PythonChange::files
     pub fn source_at_base(&self, base_path: &OsStr) -> Option<&[u8]> {
-        self.bytes.at_base.get(base_path).map(Vec::as_slice)
+        self.bytes.at_base.get(base_path).map(|blob| &blob[..])
     }
 
     /// The bytes of the working-tree side of [`files`] at `path`; None where no file of the change was read as
@@ -184,7 +190,11 @@ impl<'a> PythonChange<'a> {
             if (file.added.is_empty() && removed.is_empty()) || !in_scope(path) {
                 continue;
             }
-            let Some(source) = self.source_now(path) else { continue };
+            // Every working-tree side of `files` has its bytes (SideBytes); one without would go untested unseen.
+            let Some(source) = self.source_now(path) else {
+                unreadable.push((path.clone(), "could not be read".into()));
+                continue;
+            };
             match lang_python::units(source) {
                 Ok(read) => {
                     let touched = read.into_iter().filter(|unit| touched(unit, &file.added, removed));
@@ -210,7 +220,6 @@ pub struct RustChange<'a> {
     test_modules_at_base: HashSet<OsString>,
     /// The same of the working tree's .rs files.
     test_modules_now: HashSet<OsString>,
-    bytes: SideBytes,
 }
 
 impl<'a> RustChange<'a> {
@@ -223,16 +232,9 @@ impl<'a> RustChange<'a> {
             test_modules_at_base = lang_rust::test_modules(&base);
             test_modules_now = lang_rust::test_modules(&now);
         }
-        let mut rust = RustChange {
-            change,
-            files: vec![],
-            code: HashSet::new(),
-            test_modules_at_base,
-            test_modules_now,
-            bytes: SideBytes::default(),
-        };
-        let read = stored.files(&RUST, &|path, _, at_base| rust.among_tests(path, at_base))?;
-        (rust.files, rust.bytes) = (read.files, read.bytes);
+        let mut rust =
+            RustChange { change, files: vec![], code: HashSet::new(), test_modules_at_base, test_modules_now };
+        rust.files = stored.files(&RUST, &|path, _, at_base| rust.among_tests(path, at_base))?.files;
         rust.code = rust.code_paths(&stored.gone);
         Ok(rust)
     }
@@ -294,22 +296,6 @@ impl<'a> RustChange<'a> {
             || self.among_tests(path, false)
             || (path.as_bytes().ends_with(b".rs") && !self.is_code(path))
     }
-
-    /// The bytes of the base side of [`files`] at `base_path`, its path at the base; None where no file of the
-    /// change was read as Rust there.
-    ///
-    /// [`files`]: RustChange::files
-    pub fn source_at_base(&self, base_path: &OsStr) -> Option<&[u8]> {
-        self.bytes.at_base.get(base_path).map(Vec::as_slice)
-    }
-
-    /// The bytes of the working-tree side of [`files`] at `path`; None where no file of the change was read as Rust
-    /// there.
-    ///
-    /// [`files`]: RustChange::files
-    pub fn source_now(&self, path: &OsStr) -> Option<&[u8]> {
-        self.bytes.now.get(path).map(Vec::as_slice)
-    }
 }
 
 /// A change's Go: the files, and which of the change's paths are the code under test rather than its tests.
@@ -320,6 +306,7 @@ pub struct GoChange<'a> {
     pub files: Vec<ChangedFile>,
     /// The paths on a side of the change that are Go code under test, as [`GoChange::is_code`] says.
     code: HashSet<OsString>,
+    /// The bytes of each side of `files`, which [`GoChange::source_at_base`] and [`GoChange::source_now`] give.
     bytes: SideBytes,
 }
 
@@ -371,7 +358,7 @@ impl<'a> GoChange<'a> {
     ///
     /// [`files`]: GoChange::files
     pub fn source_at_base(&self, base_path: &OsStr) -> Option<&[u8]> {
-        self.bytes.at_base.get(base_path).map(Vec::as_slice)
+        self.bytes.at_base.get(base_path).map(|blob| &blob[..])
     }
 
     /// The bytes of the working-tree side of [`files`] at `path`; None where no file of the change was read as Go
@@ -413,7 +400,7 @@ pub(crate) type TreeFiles = Vec<(OsString, Vec<u8>)>;
 /// tree's files cannot be read.
 fn trees(
     change: &Change,
-    at_base: &HashMap<OsString, Vec<u8>>,
+    at_base: &Blobs,
     suffix: &[u8],
 ) -> Result<(TreeFiles, TreeFiles), Unjudged> {
     let now = working_tree_files(change, |path| path.as_bytes().ends_with(suffix))?;
@@ -422,7 +409,7 @@ fn trees(
     let mut base: TreeFiles =
         now.iter().filter(|(path, _)| !touched.contains(path.as_os_str())).cloned().collect();
     let changed = at_base.iter().filter(|(path, _)| path.as_bytes().ends_with(suffix));
-    base.extend(changed.map(|(path, bytes)| (path.clone(), bytes.clone())));
+    base.extend(changed.map(|(path, bytes)| (path.clone(), bytes.to_vec())));
     Ok((base, now))
 }
 
@@ -496,7 +483,7 @@ pub(crate) const GO_MANIFEST: &str = "go.mod";
 struct Stored<'a> {
     change: &'a Change,
     /// The contents at the base of each of the change's files that is a regular file there, by its base path.
-    at_base: HashMap<OsString, Vec<u8>>,
+    at_base: Blobs,
     /// The lines of its base the change removed from each file, by the file's path in the working tree.
     removed: ChangedLines,
     /// The base paths the change deletes or renames, where a project's file ([`Language::project`]) may have stood.
@@ -510,7 +497,7 @@ impl<'a> Stored<'a> {
         let gone = change.files.iter().filter(|f| f.before != f.after).filter_map(|f| f.before.as_deref());
         Ok(Stored {
             change,
-            at_base: regular_files_at_base(change, &base_paths)?,
+            at_base: regular_files_at_base(change, &base_paths)?.into_iter().map(|(p, b)| (p, b.into())).collect(),
             removed: removed_lines(&change.diff),
             gone: gone.map(PathBuf::from).collect(),
         })
@@ -549,8 +536,9 @@ impl<'a> Stored<'a> {
                 if !holds {
                     bases_holding_none.insert(path.clone());
                 }
-                bytes.at_base.insert(path.clone(), blob.to_vec());
-                Some(side(path, &file.after, blob, true))
+                let before = side(path, &file.after, blob, true);
+                bytes.at_base.insert(path.clone(), Rc::clone(blob));
+                Some(before)
             });
             if before.is_none() && after.is_none() {
                 continue;
@@ -565,13 +553,13 @@ impl<'a> Stored<'a> {
     /// The bytes of the base's file at `path`, when it is a regular file there that holds `language`'s source or
     /// `whatever_it_holds`, lies in one of the language's projects ([`in_its_project`]) and is not generated
     /// ([`Language::generated`]), with whether it holds that source.
-    fn at_base(&self, path: &OsStr, language: &Language, whatever_it_holds: bool) -> Option<(&[u8], bool)> {
+    fn at_base(&self, path: &OsStr, language: &Language, whatever_it_holds: bool) -> Option<(&Rc<[u8]>, bool)> {
         let blob = self.at_base.get(path)?;
         let holds = (language.holds)(path.as_bytes(), &|| blob[..blob.len().min(FIRST_LINE_BYTES)].to_vec());
         if (!whatever_it_holds && !holds) || !in_its_project(self.change, &self.gone, path, language) {
             return None;
         }
-        Some((blob.as_slice(), holds)).filter(|(blob, _)| !(language.generated)(blob))
+        Some((blob, holds)).filter(|(blob, _)| !(language.generated)(blob))
     }
 
     /// The bytes of the working tree's regular file at `path`, when it holds `language`'s source in one of its
@@ -589,7 +577,9 @@ impl<'a> Stored<'a> {
 
 /// One language's part of a change, as [`Stored::files`] reads it.
 struct LanguageRead {
+    /// Each file of the change that holds the language's source on a side, each such side read.
     files: Vec<ChangedFile>,
+    /// The bytes of each side of `files`.
     bytes: SideBytes,
     /// The base paths of `files` that held none of the language's source by their name or first line, each read as
     /// the base of the language's file it became ([`Language::base_of_any_name`]).

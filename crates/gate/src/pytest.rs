@@ -12,10 +12,10 @@ use std::time::Duration;
 use lang_python::Unit;
 use regex::Regex;
 
-use crate::parser_checks::{python_test, PythonChange, UnreadFiles};
 use crate::paths::rel_path;
 use crate::process::{run_with, Extras, Finished};
 use crate::report::Finding;
+use crate::sources::{python_test, PythonChange, UnreadFiles};
 use crate::text;
 
 /// The changed tests a check runs: the line of each one's def, by its file's path and its qualified name, `test_f`

@@ -33,6 +33,7 @@ pub mod report;
 mod scratch;
 pub mod scratch_directory;
 pub mod settings;
+pub mod sources;
 pub mod suppressions;
 pub mod test_commands;
 pub mod text;

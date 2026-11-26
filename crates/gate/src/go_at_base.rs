@@ -1,8 +1,6 @@
 //! Go's half of the passes-at-base check: the Go tests a change adds or edits, run with go test against the code the
 //! change started from.
 
-use std::ffi::OsStr;
-use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::time::Instant;
 
@@ -12,7 +10,7 @@ use crate::base_findings::{budget_reached, not_reached, submodules_left_empty, u
 use crate::copies::{copy_base_with_tests, finding, in_scratch_directory, Budget};
 use crate::gotest::{self, Packages, Ran};
 use crate::junit::Outcome;
-use crate::parser_checks::GoChange;
+use crate::sources::GoChange;
 
 /// Go's findings of the passes-at-base check on `go`, in no order.
 ///
@@ -22,7 +20,7 @@ use crate::parser_checks::GoChange;
 /// change" to run them in.
 ///
 /// The tests run in a copy of the base (copies::copy_base_with_tests) with the change's files that go with the tests
-/// ([`beside_tests`]) in place of the base's: each package's changed tests together, once, from the package's
+/// (GoChange::beside_tests) in place of the base's: each package's changed tests together, once, from the package's
 /// directory, as `go test -json -count=1 -run '^(TestA|TestB)$' .`. A package whose tests do not build there counts
 /// as failing each of them, which is what the check expects of a test that needs the change, and gives nothing; so
 /// does a test that fails or skips there, or that the run does not report.
@@ -45,20 +43,10 @@ pub fn go_at_base(go: &GoChange, budget: &Budget) -> Vec<Finding> {
     out
 }
 
-/// Whether a repository path belongs with Go's tests rather than with the code they test, as the copy the tests run
-/// in at the base takes it from the working tree: a file gate.toml's `test-support` names, a `_test.go` file, and a
-/// file under a `testdata` directory, which holds the tests' inputs.
-fn beside_tests(go: &GoChange, path: &OsStr) -> bool {
-    let bytes = path.as_bytes();
-    go.change.settings.test_support.matches(path)
-        || lang_go::among_tests(bytes)
-        || bytes.split(|&b| b == b'/').any(|part| part == b"testdata")
-}
-
 /// The findings on `packages`, run within `budget` in a copy of the base made in `dir`, an empty directory.
 fn base_run_findings(go: &GoChange, dir: &Path, packages: &Packages, budget: &Budget) -> Vec<Finding> {
     let tree = dir.join("tree");
-    let empty = match copy_base_with_tests(go.change, &tree, &dir.join("base.tar"), |p| beside_tests(go, p)) {
+    let empty = match copy_base_with_tests(go.change, &tree, &dir.join("base.tar"), |p| go.beside_tests(p)) {
         Ok(empty) => empty,
         Err(e) => {
             let message = format!("could not copy the base to run the changed Go tests in: {e}; they were not run \

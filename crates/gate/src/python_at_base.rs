@@ -15,7 +15,7 @@ use crate::base_findings::budget_reached;
 use crate::copies::{copy_base_with_tests, failed, finding, in_scratch_directory, Budget};
 use crate::change::Change;
 use crate::junit::{junit_outcomes, Outcome};
-use crate::parser_checks::{python_test, PythonChange};
+use crate::sources::PythonChange;
 use crate::paths::{real_path, rel_path};
 use crate::process::Finished;
 use crate::pytest::{self, changed_tests, junit_case, labels, listed_tests, node_parts, Group, Setup, Tests};
@@ -39,10 +39,10 @@ const COLLECTING: &str = "collecting the changed tests at the base";
 /// in, and one to docs alone none that a test could see.
 ///
 /// The tests run with pytest, by the judged project's Python (change::Change::python), in a copy of the base
-/// (copies::copy_base_with_tests) that holds every file of the tests the change touches ([`beside_tests`]), conftest.py
-/// and data included, as the working tree has it. pytest first collects the changed test files there, then runs
-/// those of the changed tests it collected. A test passes there when pytest passed each of its cases that it did not
-/// skip, all its parameter sets included. One that fails or errors there tests the change, which is what the check
+/// (copies::copy_base_with_tests) that holds every file of the tests the change touches (PythonChange::beside_tests),
+/// conftest.py and data included, as the working tree has it. pytest first collects the changed test files there, then
+/// runs those of the changed tests it collected. A test passes there when pytest passed each of its cases that it did
+/// not skip, all its parameter sets included. One that fails or errors there tests the change, which is what the check
 /// expects, and gives nothing; so does one that pytest does not collect there ([`collect`]).
 ///
 /// The base's code is what the copy's import roots, its top and its src/, and its own configuration, such as
@@ -68,17 +68,10 @@ pub fn python_at_base(python: &PythonChange, seconds: u64) -> Vec<Finding> {
     let mut out: Vec<Finding> = unreadable.into_iter().map(not_run).collect();
     if !tests.is_empty() {
         out.extend(in_scratch_directory("not-run", "to run the changed tests at the base in", |tmp| {
-            base_run_findings(python.change, tmp, &tests, seconds)
+            base_run_findings(python, tmp, &tests, seconds)
         }));
     }
     out
-}
-
-/// Whether a repository path belongs with Python's tests rather than with the code they test, as the copy the tests
-/// run in at the base takes it from the working tree: a Python test file by gate.toml's `test-files.python`, or a
-/// file that goes with the tests by its `test-files.support`, such as a conftest.py or a fixture's data.
-fn beside_tests(change: &Change, path: &OsStr) -> bool {
-    python_test(&change.settings, path) || change.settings.test_support.matches(path)
 }
 
 /// The copy of the base that one check's pytest runs share, as [`base_run_findings`] sets it up.
@@ -100,10 +93,11 @@ struct BaseCopy<'a> {
 /// The runs import the base's code from the copy's import roots, its top and its src/ when it has one, which are put
 /// on PYTHONPATH ahead of what was there: so they come before site-packages, and before what an editable install
 /// puts there, which would import the working tree's code.
-fn base_run_findings(change: &Change, tmp: &Path, tests: &Tests, seconds: u64) -> Vec<Finding> {
+fn base_run_findings(python: &PythonChange, tmp: &Path, tests: &Tests, seconds: u64) -> Vec<Finding> {
+    let change = python.change;
     let whole = |message: String| vec![finding(None, None, "not-run", message)];
     let (tree, scratch, plugins) = (tmp.join("tree"), tmp.join("tmp"), tmp.join("plugins"));
-    let copied = copy_base_with_tests(change, &tree, &tmp.join("base.tar"), |path| beside_tests(change, path))
+    let copied = copy_base_with_tests(change, &tree, &tmp.join("base.tar"), |path| python.beside_tests(path))
         .and_then(|empty| write_beside_the_copy(&scratch, &plugins).map(|()| empty));
     let empty = match copied {
         Ok(empty) => empty,
@@ -531,6 +525,7 @@ mod tests {
             base: "b".into(),
             diff: vec![],
             changed: [].into(),
+            removal_points: [].into(),
             files: vec![ChangedFile { before: None, after: Some("new/sub.py".into()) }],
             mutmut_state: vec![],
             judged: vec![],

@@ -247,7 +247,7 @@ order. The findings are Python's, read of Rust:
 test code whole: the go tool fixes which files are tests, so the settings have no key for them. Go code outside the
 tests is any other `.go` file of a module outside a `testdata` directory, and a change that touches one edits it, also
 where the gate does not judge it: a vendored, generated or symlinked file is code the tests run (`GoChange::is_code` in
-`crates/gate/src/parser_checks.rs`). A test is a function `TestX(t *testing.T)`, `BenchmarkX(b *testing.B)` or
+`crates/gate/src/sources.rs`). A test is a function `TestX(t *testing.T)`, `BenchmarkX(b *testing.B)` or
 `FuzzX(f *testing.F)`, as `go test` finds them, and a subtest, `t.Run("name", func(t *testing.T) {...})`, named by its
 string literal after the test holding it, as `TestAdd/negative`, with `_` for a space as `go test` writes it. A subtest
 named by any other expression, as a table-driven test's `t.Run(tc.name, ...)`, is part of the test holding it. An

@@ -13,11 +13,10 @@ use checks::{ChangedFile, Finding, Side};
 use regex::bytes::Regex;
 
 use crate::copies::{copy_working_tree, finding, in_scratch_directory, Budget};
-use crate::diff::removal_points;
-use crate::git::{self, shell_quote_bytes};
+use crate::git::shell_quote_bytes;
 use crate::change::Change;
 use crate::mutants::{dir_name, edits, Edited, KILL_WAIT, STOP_GRACE, SURVIVOR_EXAMPLES};
-use crate::parser_checks::{project_dir, GoChange, GO_MANIFEST};
+use crate::sources::{project_dir, GoChange, GO_MANIFEST};
 use crate::paths::rel_path;
 use crate::process::{run_with, Extras, Finished};
 use crate::text;
@@ -45,15 +44,14 @@ const TIMEOUT_COEFFICIENT: u32 = 10;
 /// whatever its comments and layout ([`unchanged_declarations`]), does not count: an edit to its comments or layout
 /// alone changes nothing gremlins mutates, while one to its signature alone can change what its body does.
 pub(crate) fn edited_functions(go: &GoChange) -> (Vec<Edited>, Vec<Finding>) {
-    let removals = removal_points(&go.change.diff);
     let (mut edited, mut unread) = (vec![], vec![]);
     let none = BTreeSet::new();
     for file in &go.files {
         let Some(after) = file.after.as_ref().filter(|side| !side.among_tests && go.is_code(&side.path)) else {
             continue;
         };
-        let removed = removals.get(&after.path).unwrap_or(&none);
-        match edited_in(go.change, file, after, removed) {
+        let removed = go.change.removal_points.get(&after.path).unwrap_or(&none);
+        match edited_in(go, file, after, removed) {
             Ok(functions) => edited.extend(functions),
             Err(not_run) => unread.push(not_run),
         }
@@ -63,9 +61,9 @@ pub(crate) fn edited_functions(go: &GoChange) -> (Vec<Edited>, Vec<Finding>) {
 
 /// The functions of `file`, whose working-tree side is `after`, that the change edits, as [`edited_functions`] counts
 /// them, in line order; `removed` is the lines of `after` that lines removed from the base lay between, as
-/// [`removal_points`] gives them. Errs with the `not-run` finding for `after` where it cannot be read as Go.
+/// Change::removal_points gives them. Errs with the `not-run` finding for `after` where it cannot be read as Go.
 fn edited_in(
-    change: &Change,
+    go: &GoChange,
     file: &ChangedFile,
     after: &Side,
     removed: &BTreeSet<u32>,
@@ -86,7 +84,7 @@ fn edited_in(
         base.is_some_and(|base| base.functions.iter().any(|b| b.name == f.name && b.body == f.body))
     };
     let unchanged =
-        if touched.iter().any(|(_, f)| same_body(f)) { unchanged_declarations(change, file) } else { vec![] };
+        if touched.iter().any(|(_, f)| same_body(f)) { unchanged_declarations(go, file) } else { vec![] };
     let edited = touched.into_iter().filter(|(k, _)| !unchanged.get(*k).copied().unwrap_or(false));
     Ok(edited
         .map(|(_, f)| Edited::of(&after.path, f))
@@ -95,16 +93,14 @@ fn edited_in(
 
 /// For each function of `file`'s working-tree side, in the order lang_go::read gives them, whether its base side has
 /// a function of its name with the same declaration (lang_go::declarations): an edit of it, if any, touched only its
-/// comments and layout. Both sides are read anew, the working tree's from `change`'s tree and the base's from git;
-/// where either cannot be read or parsed, as where the file has no base, none is unchanged, so its functions count as
+/// comments and layout. Both sides' declarations are read anew from the bytes `go` read of them; where either side
+/// was not read as Go or does not parse, as where the file has no base, none is unchanged, so its functions count as
 /// edited.
-fn unchanged_declarations(change: &Change, file: &ChangedFile) -> Vec<bool> {
+fn unchanged_declarations(go: &GoChange, file: &ChangedFile) -> Vec<bool> {
     let (Some(before), Some(after)) = (&file.before, &file.after) else { return vec![] };
-    let mut spec = OsString::from(format!("{}:", change.base));
-    spec.push(&before.path);
-    let base = git::output(&change.root, &[OsStr::new("cat-file"), OsStr::new("blob"), &spec]).ok();
-    let base = base.and_then(|bytes| lang_go::declarations(&bytes).ok());
-    let now = std::fs::read(change.root.join(&after.path)).ok().and_then(|bytes| lang_go::declarations(&bytes).ok());
+    let declarations = |source: Option<&[u8]>| source.and_then(|bytes| lang_go::declarations(bytes).ok());
+    let base = declarations(go.source_at_base(&before.path));
+    let now = declarations(go.source_now(&after.path));
     let (Some(base), Some(now)) = (base, now) else { return vec![] };
     now.iter().map(|declared| base.contains(declared)).collect()
 }

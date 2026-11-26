@@ -15,11 +15,10 @@ use serde_json::Value;
 
 use crate::clippy::workspaces;
 use crate::copies::{copy_working_tree, finding, in_scratch_directory, sort_by_place, Budget};
-use crate::diff::removal_points;
 use crate::go_mutants::{edited_functions, go_mutants};
-use crate::parser_checks::{project_dir, RustChange, Sources};
 use crate::process::{run_with, Extras, Finished};
 use crate::python_mutants::{python_mutants, Mutmut};
+use crate::sources::{project_dir, RustChange, Sources};
 use crate::text;
 
 /// How each outcome cargo-mutants 27 writes in mutants.out/outcomes.json (a scenario's "summary") counts: a missed
@@ -93,7 +92,7 @@ impl Edited {
 
 /// Whether a change edits the function `f`: it adds one of `added`, the lines it adds to `f`'s file, from `f`'s `fn` or
 /// `func` line to its closing brace, or removes lines from between two of those, at one of `removed`, as
-/// diff::removal_points gives them. A deleted guard clause needs a test as much as an added one.
+/// change::Change::removal_points gives them. A deleted guard clause needs a test as much as an added one.
 pub(crate) fn edits(f: &Function, added: &BTreeSet<u32>, removed: &BTreeSet<u32>) -> bool {
     added.range(f.line..=f.lines.last).next().is_some() || removed.iter().any(|&n| f.line <= n && n < f.lines.last)
 }
@@ -105,7 +104,6 @@ pub(crate) fn edits(f: &Function, added: &BTreeSet<u32>, removed: &BTreeSet<u32>
 /// that is Rust code under test ([`RustChange::is_code`]) and a regular file of the working tree: not a symlink, a
 /// submodule or a special file, whose reading could block or never end.
 fn edited_rust(rust: &RustChange) -> (Vec<Edited>, Vec<Finding>) {
-    let removals = removal_points(&rust.change.diff);
     let none = BTreeSet::new();
     let regular =
         |p: &OsStr| std::fs::symlink_metadata(rust.change.root.join(p)).is_ok_and(|m| m.file_type().is_file());
@@ -113,7 +111,7 @@ fn edited_rust(rust: &RustChange) -> (Vec<Edited>, Vec<Finding>) {
     for file in &rust.files {
         let Some(after) = &file.after else { continue };
         let path = after.path.as_os_str();
-        let removed = removals.get(path).unwrap_or(&none);
+        let removed = rust.change.removal_points.get(path).unwrap_or(&none);
         let rs = path.as_bytes().ends_with(b".rs");
         if (file.added.is_empty() && removed.is_empty()) || !rs || !rust.is_code(path) || !regular(path) {
             continue;

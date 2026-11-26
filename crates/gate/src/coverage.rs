@@ -8,7 +8,7 @@ use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
-use crate::parser_checks::{project_dir, GO_MANIFEST};
+use crate::sources::{project_dir, GO_MANIFEST};
 use crate::paths::{real_path, rel_path};
 use crate::text::{self, floor_tenth, series};
 use crate::xml;

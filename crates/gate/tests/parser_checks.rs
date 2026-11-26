@@ -10,10 +10,9 @@ use std::time::Duration;
 
 use gate::change::Change;
 use gate::judge::{judge_change, Given};
-use gate::parser_checks::{
-    dependency_cycles, duplicated_blocks, too_complex, vague_names, weakened_tests, Sources,
-};
+use gate::parser_checks::{dependency_cycles, duplicated_blocks, too_complex, vague_names, weakened_tests};
 use gate::settings::Settings;
+use gate::sources::Sources;
 
 use common::Repo;
 

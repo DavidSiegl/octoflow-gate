@@ -11,8 +11,8 @@ use serde::Deserialize;
 
 use crate::changed_tests::{changed_tests as changed_tests_of, ChangedTest};
 use crate::junit::Outcome;
-use crate::parser_checks::GoChange;
 use crate::process::{run_with, Extras, Finished};
+use crate::sources::GoChange;
 
 /// Go tests by the directory of their package, from the tree's top, `.` for the top.
 pub type Packages = BTreeMap<PathBuf, Vec<ChangedTest>>;

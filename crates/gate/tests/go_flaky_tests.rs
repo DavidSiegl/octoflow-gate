@@ -105,3 +105,49 @@ fn go_tests_that_do_not_build_are_said_not_to_be_rerun() {
                     working tree; the changed tests of the package at `sub` were not rerun.";
     assert_eq!(found, [(None, None, "not-rerun".into(), expected.into())], "{found:?}");
 }
+
+#[test]
+fn python_and_go_tests_are_rerun_in_one_copy() {
+    // Each rerun of each test appends its language and working directory to a file outside the tree. The copies
+    // are removed afterwards, so the directories they ran in tell how many there were.
+    let repo = Repo::with(&[
+        ("gate.toml", b"[linters]\ngolangci-lint = []\nruff = []\nmypy = []\n"),
+        ("go.mod", b"module example.com/calc\n\ngo 1.22\n"),
+        ("sub/calc.go", CALC.as_bytes()),
+    ]);
+    let log = repo.outside.join("where");
+    let python = format!(
+        "import os\n\n\ndef test_where():\n    with open({log:?}, 'a') as f:\n        \
+         f.write('python ' + os.getcwd() + '\\n')\n"
+    );
+    repo.put("tests/test_where.py", python.as_bytes());
+    let go = format!(
+        "package calc\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\nfunc TestWhere(t *testing.T) {{\n\
+         \twd, err := os.Getwd()\n\tif err != nil {{\n\t\tt.Fatal(err)\n\t}}\n\
+         \tf, err := os.OpenFile({log:?}, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)\n\tif err != nil {{\n\
+         \t\tt.Fatal(err)\n\t}}\n\tdefer f.Close()\n\
+         \tif _, err := f.WriteString(\"go \" + wd + \"\\n\"); err != nil {{\n\t\tt.Fatal(err)\n\t}}\n}}\n"
+    );
+    repo.put("sub/where_test.go", go.as_bytes());
+    let tmp = repo.outside.join("tmp");
+    std::fs::create_dir(&tmp).unwrap();
+    let tmp = tmp.canonicalize().unwrap();
+    repo.git(&["add", "-A"]);
+    let json = repo.outside.join("quality.json");
+    let mut command = repo.gate_command("HEAD");
+    command.arg("--python").arg(common::python()).arg("--json").arg(&json).env("TMPDIR", &tmp);
+    let done = command.output().unwrap();
+    assert!(matches!(done.status.code(), Some(0 | 1)), "{}", String::from_utf8_lossy(&done.stderr));
+    let logged = std::fs::read_to_string(&log).unwrap();
+    let mut languages = std::collections::BTreeSet::new();
+    let mut copies = std::collections::BTreeSet::new();
+    for line in logged.lines() {
+        let (language, cwd) = line.split_once(' ').unwrap();
+        let (copy, _) = cwd.split_once("/tree").unwrap_or_else(|| panic!("{line}"));
+        assert!(copy.starts_with(tmp.to_str().unwrap()), "{line}");
+        languages.insert(language);
+        copies.insert(copy);
+    }
+    assert_eq!(languages.into_iter().collect::<Vec<_>>(), ["go", "python"], "{logged}");
+    assert_eq!(copies.len(), 1, "{logged}");
+}

@@ -36,18 +36,3 @@ pub fn unread_not_run((path, unreadable): (&OsStr, &Unreadable)) -> Finding {
     let message = format!("{}, so its tests were not run at the base.", unreadable.why);
     finding(Some(path), unreadable.line, "not-run", message)
 }
-
-/// The `not-run` finding on `empty`, the submodules a copy of the base leaves empty, each with its path and why, as
-/// copies::copy_base_with_tests gives them, which a changed test of `language`, as "Rust", may need; None for none.
-pub fn submodules_left_empty(empty: &[(String, String)], language: &str) -> Option<Finding> {
-    if empty.is_empty() {
-        return None;
-    }
-    let named: Vec<String> = empty.iter().map(|(path, why)| format!("`{path}`, {why}")).collect();
-    let message = format!(
-        "the copy of the base leaves submodules empty, so a changed {language} test that needs one, if any does, was \
-         not judged: {}.",
-        named.join("; ")
-    );
-    Some(finding(None, None, "not-run", message))
-}

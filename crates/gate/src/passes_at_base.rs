@@ -11,9 +11,9 @@ use std::time::Instant;
 use checks::Finding;
 use serde::Deserialize;
 
-use crate::base_findings::{budget_reached, not_reached, submodules_left_empty, unread_not_run};
+use crate::base_findings::{budget_reached, not_reached, unread_not_run};
 use crate::changed_tests::{changed_tests, ChangedTest};
-use crate::copies::{copy_base_with_tests, failed, finding, in_scratch_directory, sort_by_place, Budget};
+use crate::copies::{failed, finding, in_base_copy, sort_by_place, Budget, OnCopy, ScratchCopy};
 use crate::go_at_base::go_at_base;
 use crate::junit::{junit_outcomes, Outcome};
 use crate::process::{run_with, Extras};
@@ -36,41 +36,62 @@ const NEXTEST_BUILD_FAILED: i32 = 101;
 ///
 /// Runs the tests the change adds or edits against the base's code and reports each one that passed there (rule
 /// `passes-at-base`): Python's as python_at_base::python_at_base says, then Rust's as [`rust_at_base`] does, then Go's
-/// as go_at_base::go_at_base does. Each language's runs may take `budget` seconds, Python's counted from when its copy
-/// of the base is made, and Rust's and Go's from the start of the check, so that Rust's have what Python's left of
-/// them, and Go's what both left.
+/// as go_at_base::go_at_base does. Each language's runs may take `budget` seconds, Python's counted from when they
+/// start, and Rust's and Go's from the start of the check, so that Rust's have what Python's left of them, and Go's
+/// what both left.
+///
+/// The three run in turn in one copy of the base (copies::in_base_copy), made only when one of them has tests to run
+/// there, with the change's files that go with the tests in place of the base's: those gate.toml places with them
+/// (`test-files.support`), and those that go with the tests of any of the three languages (PythonChange::beside_tests,
+/// RustChange::beside_tests, GoChange::beside_tests) but for one that a language with tests to run there counts as
+/// code under test (PythonChange::is_code, RustChange::is_code, GoChange::is_code). So a Go test that reads a `.py`
+/// file under its package's `testdata/` sees the working tree's, unless a changed Python test runs there too, and then
+/// one that imports it the base's. A copy that cannot be made is a `not-run` finding in place of all their runs,
+/// submodules it leaves empty one more, and a copy that cannot be removed afterwards a `not-removed` one.
 pub fn passes_at_base(sources: &Sources, budget: u64) -> Vec<Finding> {
     let budget = Budget::starting_now(budget);
-    let mut out = python_at_base(&sources.python, budget.seconds);
-    out.extend(rust_at_base(&sources.rust, &budget));
-    out.extend(go_at_base(&sources.go, &budget));
+    let (mut out, python) = python_at_base(&sources.python, budget.seconds);
+    let (rust_found, rust) = rust_at_base(&sources.rust, &budget);
+    let (go_found, go) = go_at_base(&sources.go, &budget);
+    out.extend(rust_found.into_iter().chain(go_found));
+    let (python_runs, rust_runs, go_runs) = (python.is_some(), rust.is_some(), go.is_some());
+    let runs = python.into_iter().chain(rust).chain(go).collect();
+    let beside = |p: &OsStr| {
+        let support = sources.rust.change.settings.test_support.matches(p);
+        let tests = sources.python.beside_tests(p) || sources.rust.beside_tests(p) || sources.go.beside_tests(p);
+        let code = (python_runs && sources.python.is_code(p))
+            || (rust_runs && sources.rust.is_code(p))
+            || (go_runs && sources.go.is_code(p));
+        support || (tests && !code)
+    };
+    let unjudged = "the changed tests were not run at the base";
+    out.extend(in_base_copy(sources.rust.change, beside, "not-run", unjudged, runs));
     sort_by_place(&mut out);
     out
 }
 
-/// Rust's findings of the check on `rust`, in no order.
+/// Rust's findings of the check on `rust`, in no order: those it gives before the run at the base, and that run on the
+/// check's copy of the base, None when there is no test to run there.
 ///
 /// When the change edits Rust code under test ([`RustChange::edits_code`]), runs the Rust tests it adds or edits
 /// (changed_tests::changed_tests) against the base's code with cargo-nextest, by `budget`'s deadline, and reports at
 /// its fn each one that passed there (rule `passes-at-base`): it does not test the change. A change to the tests
 /// alone has no "without the change" to run them in.
 ///
-/// The tests run in a copy of the base (copies::copy_base_with_tests) with the change's files that go with the tests
-/// (RustChange::beside_tests) in place of the base's. A test in a file the change also edits outside its test code, its
-/// items marked `#[cfg(test)]`, cannot be separated from the code it tests: it is a `not-run` finding at its fn. Each
-/// Cargo target the tests are in ([`CrateLayout::targets`]) is built and run on its own, `cargo nextest run` filtered
-/// to its tests, `--locked` when the base tracks its workspace's Cargo.lock (the rule of crate::clippy), with a target
-/// directory of its own outside the copy; one whose tests do not compile there counts as failing, which is what the
-/// check expects of a test that needs the change, and gives nothing. A test the run did not report, as one a cfg leaves
-/// out at the base, gives nothing, and one built in several targets is reported only when it passed in each.
+/// A test in a file the change also edits outside its test code, its items marked `#[cfg(test)]`, cannot be separated
+/// from the code it tests: it is a `not-run` finding at its fn. Each Cargo target the tests are in
+/// ([`CrateLayout::targets`]) is built and run on its own, `cargo nextest run` filtered to its tests, `--locked` when
+/// the base tracks its workspace's Cargo.lock (the rule of crate::clippy), with a target directory of its own outside
+/// the copy; one whose tests do not compile there counts as failing, which is what the check expects of a test that
+/// needs the change, and gives nothing. A test the run did not report, as one a cfg leaves out at the base, gives
+/// nothing, and one built in several targets is reported only when it passed in each.
 ///
 /// The budget running out is a `budget-reached` finding, and each target after it a `not-run` one. A changed test
-/// file that does not parse, a test whose target cannot be placed, a copy that cannot be made, submodules the copy
-/// leaves empty, and a cargo-nextest that cannot start or fails otherwise are `not-run` findings saying so; a copy
-/// that cannot be removed afterwards is a `not-removed` one.
-fn rust_at_base(rust: &RustChange, budget: &Budget) -> Vec<Finding> {
+/// file that does not parse, a test whose target cannot be placed, and a cargo-nextest that cannot start or fails
+/// otherwise are `not-run` findings saying so.
+fn rust_at_base<'a>(rust: &'a RustChange, budget: &'a Budget) -> (Vec<Finding>, Option<OnCopy<'a>>) {
     if !rust.edits_code() {
-        return vec![];
+        return (vec![], None);
     }
     let (tests, unread) = changed_tests(rust.change, &rust.files, |_| true);
     let mut out: Vec<Finding> = unread.into_iter().map(unread_not_run).collect();
@@ -87,30 +108,23 @@ fn rust_at_base(rust: &RustChange, budget: &Budget) -> Vec<Finding> {
             out.push(finding(Some(t.path.as_os_str()), Some(t.line), "not-run", message));
         }
     }
-    if !separable.is_empty() {
-        out.extend(in_scratch_directory("not-run", "to run the changed Rust tests at the base in", |dir| {
-            base_run_findings(rust, dir, &separable, budget)
-        }));
-    }
-    out
+    let run = (!separable.is_empty())
+        .then(|| -> OnCopy { Box::new(move |copy| base_run_findings(copy, &separable, budget)) });
+    (out, run)
 }
 
-/// The findings on `tests`, built and run within `budget` in a copy of the base made in `dir`, an empty directory,
-/// beside the runs' target directory and nextest configuration.
-fn base_run_findings(rust: &RustChange, dir: &Path, tests: &[ChangedTest], budget: &Budget) -> Vec<Finding> {
-    let (tree, store) = (dir.join("tree"), dir.join("nextest"));
-    let copied = copy_base_with_tests(rust.change, &tree, &dir.join("base.tar"), |p| rust.beside_tests(p))
-        .and_then(|empty| write_nextest_config(&dir.join("nextest.toml"), &store).map(|()| empty));
-    let empty = match copied {
-        Ok(empty) => empty,
-        Err(e) => {
-            let message = format!("could not copy the base to run the changed Rust tests in: {e}; they were not run \
-                                   there.");
-            return vec![finding(None, None, "not-run", message)];
-        }
-    };
-    let mut out: Vec<Finding> = submodules_left_empty(&empty, "Rust").into_iter().collect();
-    let layout = match CrateLayout::of(&tree, budget) {
+/// The findings on `tests`, built and run within `budget` in `copy`, a copy of the base, with the runs' target
+/// directory and nextest configuration in its scratch directory.
+fn base_run_findings(copy: &ScratchCopy, tests: &[ChangedTest], budget: &Budget) -> Vec<Finding> {
+    let (tree, dir) = (&copy.tree, &copy.scratch);
+    let (config, store) = (dir.join("nextest.toml"), dir.join("nextest"));
+    if let Err(e) = write_nextest_config(&config, &store) {
+        let message = format!("could not configure nextest for the run at the base: {e}; the changed Rust tests were \
+                               not run there.");
+        return vec![finding(None, None, "not-run", message)];
+    }
+    let mut out = vec![];
+    let layout = match CrateLayout::of(tree, budget) {
         Ok(layout) => layout,
         Err(e) => {
             let message = format!("could not read the copy of the base's Rust files: {e}; the changed Rust tests were \
@@ -121,7 +135,7 @@ fn base_run_findings(rust: &RustChange, dir: &Path, tests: &[ChangedTest], budge
     };
     let (placed, groups) = group_by_target(layout, tests, budget);
     out.extend(placed);
-    let run = Run { tree: &tree, target_dir: &dir.join("target"), config: &dir.join("nextest.toml"), store: &store };
+    let run = Run { tree, target_dir: &dir.join("cargo-target"), config: &config, store: &store };
     out.extend(run_groups(&run, &groups, tests, budget));
     out
 }

@@ -12,7 +12,7 @@ use std::time::Instant;
 use regex::bytes::Regex;
 
 use crate::base_findings::budget_reached;
-use crate::copies::{copy_base_with_tests, failed, finding, in_scratch_directory, Budget};
+use crate::copies::{failed, finding, Budget, OnCopy, ScratchCopy};
 use crate::change::Change;
 use crate::junit::{junit_outcomes, Outcome};
 use crate::sources::PythonChange;
@@ -31,19 +31,20 @@ const IMPORTS_PLUGIN_SOURCE: &str = include_str!("_octoflow_gate_base_imports.py
 const COLLECTING: &str = "collecting the changed tests at the base";
 
 /// Python's findings of the passes-at-base check on `python`, in no order; each rule is the check's own, without its
-/// name, and each severity "warning".
+/// name, and each severity "warning". They are those it gives before the run at the base, and that run on the check's
+/// copy of the base, None when there is no test to run there.
 ///
 /// When the change edits Python code under test (PythonChange::edits_code), runs the Python tests it touched
 /// (pytest::changed_tests) against the base's code, and reports at its def each one that passed there (rule
 /// `passes-at-base`): it does not test the change. A change to tests alone has no "without the change" to run them
 /// in, and one to docs alone none that a test could see.
 ///
-/// The tests run with pytest, by the judged project's Python (change::Change::python), in a copy of the base
-/// (copies::copy_base_with_tests) that holds every file of the tests the change touches (PythonChange::beside_tests),
-/// conftest.py and data included, as the working tree has it. pytest first collects the changed test files there, then
-/// runs those of the changed tests it collected. A test passes there when pytest passed each of its cases that it did
-/// not skip, all its parameter sets included. One that fails or errors there tests the change, which is what the check
-/// expects, and gives nothing; so does one that pytest does not collect there ([`collect`]).
+/// The tests run with pytest, by the judged project's Python (change::Change::python), in a copy of the base that holds
+/// every file of the tests the change touches (PythonChange::beside_tests), conftest.py and data included, as the
+/// working tree has it. pytest first collects the changed test files there, then runs those of the changed tests it
+/// collected. A test passes there when pytest passed each of its cases that it did not skip, all its parameter sets
+/// included. One that fails or errors there tests the change, which is what the check expects, and gives nothing; so
+/// does one that pytest does not collect there ([`collect`]).
 ///
 /// The base's code is what the copy's import roots, its top and its src/, and its own configuration, such as
 /// pytest's pythonpath, import, ahead of what is installed into the project's Python, an editable install of the
@@ -51,27 +52,23 @@ const COLLECTING: &str = "collecting the changed tests at the base";
 /// ([`imported_from_working_tree`]) judges none of its tests and is a `not-run` finding naming the package.
 ///
 /// The collections and runs together, one of each for every configuration the changed tests fall under
-/// (pytest::groups), may take `seconds`, counted from when the copy is made; a stop there is a `budget-reached`
-/// finding saying when, and none of that configuration's outcomes is reported; the configurations after it are not
-/// run, each a `not-run` finding saying so. A pytest that cannot start, stops before it collects, fails to load a
-/// conftest.py through no file the change edits, stops with another usage error, or writes no readable report, a
-/// changed test file that cannot be read or parsed, submodules the copy leaves empty, and a copy that cannot be made
-/// are `not-run` findings saying so; a copy that cannot be removed afterwards is a `not-removed` one.
-pub fn python_at_base(python: &PythonChange, seconds: u64) -> Vec<Finding> {
+/// (pytest::groups), may take `seconds`, counted from when the run on the copy starts; a stop there is a
+/// `budget-reached` finding saying when, and none of that configuration's outcomes is reported; the configurations
+/// after it are not run, each a `not-run` finding saying so. A pytest that cannot start, stops before it collects,
+/// fails to load a conftest.py through no file the change edits, stops with another usage error, or writes no readable
+/// report, and a changed test file that cannot be read or parsed are `not-run` findings saying so.
+pub fn python_at_base<'a>(python: &'a PythonChange, seconds: u64) -> (Vec<Finding>, Option<OnCopy<'a>>) {
     if !python.edits_code() {
-        return vec![];
+        return (vec![], None);
     }
     let (tests, unreadable) = changed_tests(python);
     let not_run = |(path, why): (OsString, String)| {
         finding(Some(&path), None, "not-run", format!("{why}, so its tests were not run at the base."))
     };
-    let mut out: Vec<Finding> = unreadable.into_iter().map(not_run).collect();
-    if !tests.is_empty() {
-        out.extend(in_scratch_directory("not-run", "to run the changed tests at the base in", |tmp| {
-            base_run_findings(python, tmp, &tests, seconds)
-        }));
-    }
-    out
+    let out = unreadable.into_iter().map(not_run).collect();
+    let run = (!tests.is_empty())
+        .then(|| -> OnCopy { Box::new(move |copy| base_run_findings(python, copy, &tests, seconds)) });
+    (out, run)
 }
 
 /// The copy of the base that one check's pytest runs share, as [`base_run_findings`] sets it up.
@@ -85,30 +82,27 @@ struct BaseCopy<'a> {
     budget: Budget,
 }
 
-/// [`python_at_base`]'s findings on `tests`, collected and then run, within `seconds` for all of it, in a copy of
-/// the base that it makes in `tmp`, an empty directory, beside the runs' reports, their TMPDIR and the plugin
-/// [`IMPORTS_PLUGIN`] names: once for each pytest configuration the changed test files take there, one after another
-/// while the budget lasts.
+/// [`python_at_base`]'s findings on `tests`, collected and then run, within `seconds` for all of it, in `copy`, a copy
+/// of the base, with the runs' reports, their TMPDIR and the plugin [`IMPORTS_PLUGIN`] names in its scratch directory:
+/// once for each pytest configuration the changed test files take there, one after another while the budget lasts.
 ///
 /// The runs import the base's code from the copy's import roots, its top and its src/ when it has one, which are put
 /// on PYTHONPATH ahead of what was there: so they come before site-packages, and before what an editable install
 /// puts there, which would import the working tree's code.
-fn base_run_findings(python: &PythonChange, tmp: &Path, tests: &Tests, seconds: u64) -> Vec<Finding> {
+fn base_run_findings(python: &PythonChange, copy: &ScratchCopy, tests: &Tests, seconds: u64) -> Vec<Finding> {
     let change = python.change;
     let whole = |message: String| vec![finding(None, None, "not-run", message)];
-    let (tree, scratch, plugins) = (tmp.join("tree"), tmp.join("tmp"), tmp.join("plugins"));
-    let copied = copy_base_with_tests(change, &tree, &tmp.join("base.tar"), |path| python.beside_tests(path))
-        .and_then(|empty| write_beside_the_copy(&scratch, &plugins).map(|()| empty));
-    let empty = match copied {
-        Ok(empty) => empty,
-        Err(e) => {
-            return whole(format!(
-                "could not copy the base to run the changed tests in: {e}; the changed tests were not run there."
-            ));
-        }
-    };
+    let (tree, tmp) = (&copy.tree, &copy.scratch);
+    let (scratch, plugins) = (tmp.join("pytest-tmp"), tmp.join("pytest-plugins"));
+    if let Err(e) = write_beside_the_copy(&scratch, &plugins) {
+        let message = format!(
+            "could not make pytest's TMPDIR and plugin directory beside the copy of the base: {e}; the changed tests \
+             were not run there."
+        );
+        return whole(message);
+    }
     let files: BTreeSet<OsString> = tests.keys().map(|(path, _)| path.clone()).collect();
-    let groups = match pytest::groups(&change.python, &tree, tmp, &files) {
+    let groups = match pytest::groups(&change.python, tree, tmp, &files) {
         Ok(groups) => groups,
         Err(e) => {
             return whole(format!(
@@ -130,20 +124,10 @@ fn base_run_findings(python: &PythonChange, tmp: &Path, tests: &Tests, seconds: 
         ("PYTHONDONTWRITEBYTECODE", OsStr::new("1")),
         ("PYTHONPATH", python_path.as_os_str()),
     ];
-    let base_copy = BaseCopy { change, tree: &tree, env: &env, budget: Budget::starting_now(seconds) };
+    let base_copy = BaseCopy { change, tree, env: &env, budget: Budget::starting_now(seconds) };
     let mut out = vec![];
-    if !empty.is_empty() {
-        let (noun, pronoun) = if empty.len() == 1 { ("a submodule", "it") } else { ("submodules", "them") };
-        let named: Vec<String> = empty.iter().map(|(path, why)| format!("`{path}`, {why}")).collect();
-        let message = format!(
-            "the copy of the base leaves {noun} empty, so a changed test that imports from {pronoun}, if any does, \
-             was not judged: {}.",
-            named.join("; ")
-        );
-        out.push(finding(None, None, "not-run", message));
-    }
     for (n, (group, label)) in groups.iter().zip(labels(&groups)).enumerate() {
-        let reports = tmp.join(format!("base-{n}"));
+        let reports = tmp.join(format!("pytest-reports-{n}"));
         let (found, stopped) = group_findings(&base_copy, group, &group.own(tests), &reports, label.as_deref());
         out.extend(found.into_iter().map(|f| group.in_tree(f)));
         if stopped {

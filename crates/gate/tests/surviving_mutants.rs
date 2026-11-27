@@ -193,6 +193,7 @@ fn cargo_mutants_runs_in_the_copy_uncoloured_on_the_edited_functions_and_is_stop
     // A SIGINT is recorded, and ends the stub.
     let script = format!(
         "{{ pwd; printf '%s\\n' \"$@\"; echo \"color=$CARGO_TERM_COLOR token=${{JENKINS_TOKEN-unset}}\"; \
+         echo \"target=${{CARGO_TARGET_DIR-unset}}\"; \
          }} > '{0}'\ntrap 'echo interrupted >> \"{0}\"; exit 3' INT\nsleep 30 & wait",
         record.display()
     );
@@ -211,14 +212,17 @@ fn cargo_mutants_runs_in_the_copy_uncoloured_on_the_edited_functions_and_is_stop
     let lines: Vec<&str> = recorded.lines().collect();
     let (cwd, argv) = (Path::new(lines[0]), &lines[1..]);
     assert_eq!(cwd.file_name().unwrap(), "tree");
-    let scratch = cwd.parent().unwrap().join("run-0");
+    let scratch = cwd.parent().unwrap().join("scratch/cargo-mutants-0");
     let dir = cwd.join("engine");
+    // cargo-mutants builds outside the copy, which the other tools then run in, and its tests' environment is the
+    // gate's.
+    let target = format!("--cargo-arg=--target-dir={}", scratch.join("target").display());
     // checked and unchecked, by their lines in the workspace's src/lib.rs.
     let expected = [
         "mutants", "--in-place", "--no-shuffle", "--dir", dir.to_str().unwrap(), "--re", r"^src/lib\.rs:(?:5|6|7):",
         "--re", r"^src/lib\.rs:(?:9|10|11):", "--test-tool", "nextest", "--minimum-test-timeout", "60",
-        "--timeout-multiplier", "2", "--output", scratch.to_str().unwrap(), "--colors", "never",
-        "color=never token=unset", "interrupted",
+        "--timeout-multiplier", "2", "--output", scratch.to_str().unwrap(), "--colors", "never", &target,
+        "color=never token=unset", "target=unset", "interrupted",
     ];
     assert_eq!(argv, expected);
 }
@@ -324,7 +328,7 @@ fn a_tree_that_cannot_be_copied_is_not_run() {
     assert_eq!(found.len(), 1, "{found:?}");
     let (path, line, rule, message) = &found[0];
     assert_eq!((path.as_deref(), *line, rule.as_str()), (None, None, "not-run"), "{message}");
-    assert!(message.starts_with("could not copy the tree for cargo-mutants: cannot copy /"), "{message}");
+    assert!(message.starts_with("could not copy the working tree: cannot copy /"), "{message}");
     assert!(message.contains("/vendor/lib/pipe: it is no regular file, link or directory; "), "{message}");
 }
 
@@ -348,8 +352,8 @@ fn no_room_for_cargo_mutants_is_a_finding() {
     let missing: PathBuf = repo.outside.join("missing");
     assert_eq!(findings(&repo, None, &[("TMPDIR", missing.into())]), vec![lineless(
         "not-run",
-        "could not make a directory to run cargo-mutants on a copy of the tree in: No such file or directory (os \
-         error 2); nothing ran, so the check judged nothing.",
+        "could not make a directory to copy the working tree into: No such file or directory (os error 2); the \
+         change's functions were not mutation-tested.",
     )]);
 }
 
@@ -372,4 +376,51 @@ fn cargo_tells_the_workspace_of_a_package_once_however_many_of_its_files_the_cha
     assert_eq!(findings(&repo, None, &[("PATH", path), ("REAL_CARGO", real)]), vec![]);
     let located = std::fs::read_to_string(&log).unwrap();
     assert_eq!(located.lines().count(), 1, "{located}");
+}
+
+#[test]
+fn mutmut_cargo_mutants_and_gremlins_run_in_one_copy() {
+    // The Python, cargo-mutants and gremlins the gate starts each append their name and working directory to a file
+    // outside the tree. The copies are removed afterwards, so the directories they ran in tell how many there were.
+    let mut files = vec![
+        ("gate.toml".to_string(), "[linters]\nclippy = []\nruff = []\nmypy = []\ngolangci-lint = []\n".to_string()),
+        ("pyproject.toml".into(), "[tool.mutmut]\nsource_paths = [\"calc.py\"]\n".into()),
+        ("calc.py".into(), "def add(a, b):\n    return a + b\n".into()),
+        ("go/go.mod".into(), "module example.com/calc\n\ngo 1.22\n".into()),
+        ("go/calc.go".into(), "package calc\n\n// Add adds.\nfunc Add(a, b int) int {\n\treturn a + b\n}\n".into()),
+        (".gitignore".into(), "target/\n".into()),
+    ];
+    files.extend(package("", "calc"));
+    let files: Vec<(&str, &[u8])> = files.iter().map(|(p, t)| (p.as_str(), t.as_bytes())).collect();
+    let repo = Repo::with(&files);
+    repo.put("calc.py", b"def add(a, b):\n    return a - b\n");
+    repo.put("go/calc.go", b"package calc\n\n// Add adds.\nfunc Add(a, b int) int {\n\treturn a - b\n}\n");
+    repo.put("src/lib.rs", format!("{LIB}{ADDED}").as_bytes());
+    let log = repo.outside.join("where");
+    let logs = |name: &str| format!("echo \"{name} $(pwd -P)\" >> '{}'", log.display());
+    repo.stub("gremlins", &format!("{}\nexit 1", logs("gremlins")));
+    let path = cargo_stub(&repo, "mutants", &format!("{}\nexit 1", logs("cargo-mutants")));
+    let python = common::python_after(&repo, &logs("python"));
+    let tmp = repo.outside.join("tmp");
+    std::fs::create_dir(&tmp).unwrap();
+    let tmp = tmp.canonicalize().unwrap();
+    repo.git(&["add", "-A"]);
+    let json = repo.outside.join("quality.json");
+    let mut command = repo.gate_command("HEAD");
+    command.arg("--python").arg(python).arg("--json").arg(&json).args(["--base-run-budget", "1"]);
+    command.env("CARGO_NET_OFFLINE", "true").env("PATH", path).env("TMPDIR", &tmp);
+    let done = command.output().unwrap();
+    assert!(matches!(done.status.code(), Some(0 | 1)), "{}", String::from_utf8_lossy(&done.stderr));
+    let logged = std::fs::read_to_string(&log).unwrap();
+    let mut tools = std::collections::BTreeSet::new();
+    let mut copies = std::collections::BTreeSet::new();
+    // The Python the gate runs outside the copy, as for its other checks, is left out.
+    for line in logged.lines().filter(|line| line.contains(tmp.to_str().unwrap())) {
+        let (tool, cwd) = line.split_once(' ').unwrap();
+        let (copy, _) = cwd.split_once("/tree").unwrap_or_else(|| panic!("{line}"));
+        tools.insert(tool);
+        copies.insert(copy);
+    }
+    assert_eq!(tools.into_iter().collect::<Vec<_>>(), ["cargo-mutants", "gremlins", "python"], "{logged}");
+    assert_eq!(copies.len(), 1, "{logged}");
 }

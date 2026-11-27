@@ -123,6 +123,41 @@ fn a_change_to_go_tests_alone_runs_nothing_at_the_base() {
     assert_eq!(findings(&repo), []);
 }
 
+#[test]
+fn a_python_file_under_testdata_is_the_working_tree_s_when_no_python_test_runs_at_the_base() {
+    let repo = repo("");
+    // Python, read as Python code under test elsewhere, but here an input of a Go test, and no Python test changes.
+    let settings = "[linters]\ngolangci-lint = []\nruff = []\nmypy = []\n";
+    repo.commit(&[("gate.toml", settings.as_bytes()), ("testdata/case.py", b"x = 1\n")], "a Python input");
+    repo.put("calc.go", FIXED.as_bytes());
+    repo.put("testdata/case.py", b"x = 2\n");
+    let test = "package calc\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\nfunc TestCase(t *testing.T) {\n\
+                \tb, err := os.ReadFile(\"testdata/case.py\")\n\
+                \tif err != nil || string(b) != \"x = 2\\n\" || Abs(3) != 3 {\n\t\tt.Fatal(\"wrong\")\n\t}\n}\n";
+    repo.put("calc_test.go", test.as_bytes());
+    let found = findings(&repo);
+    let message = "`TestCase` passes without the change, so it does not test it.";
+    assert_eq!(found, [(Some("calc_test.go".into()), Some(8), "passes-at-base".into(), message.into())], "{found:?}");
+}
+
+#[test]
+fn go_code_that_goes_with_the_tests_is_the_working_tree_s_at_the_base() {
+    let repo = repo("");
+    // testutil is Go code, which `test-files.support` places with the tests, and the changed test needs its Three.
+    let settings = "[linters]\ngolangci-lint = []\n\n[test-files]\nsupport = [\"testutil/**\"]\n";
+    let helper = "package testutil\n\n// Two is 2.\nfunc Two() int {\n\treturn 2\n}\n";
+    repo.commit(&[("gate.toml", settings.as_bytes()), ("testutil/util.go", helper.as_bytes())], "a test helper");
+    repo.put("calc.go", FIXED.as_bytes());
+    let three = "\n// Three is 3.\nfunc Three() int {\n\treturn 3\n}\n";
+    repo.put("testutil/util.go", format!("{helper}{three}").as_bytes());
+    let test = "package calc\n\nimport (\n\t\"testing\"\n\n\t\"example.com/calc/testutil\"\n)\n\n\
+                func TestThree(t *testing.T) {\n\tif Abs(testutil.Three()) != 3 {\n\t\tt.Fatal(\"wrong\")\n\t}\n}\n";
+    repo.put("calc_test.go", test.as_bytes());
+    let found = findings(&repo);
+    let message = "`TestThree` passes without the change, so it does not test it.";
+    assert_eq!(found, [(Some("calc_test.go".into()), Some(9), "passes-at-base".into(), message.into())], "{found:?}");
+}
+
 /// The test sleeps at the base alone, where Abs(-1) is -1, so that flaky-tests' reruns of it in the working tree are
 /// quick.
 #[test]

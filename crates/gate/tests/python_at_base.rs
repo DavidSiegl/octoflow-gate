@@ -270,8 +270,8 @@ fn no_room_for_the_run_at_the_base_is_a_finding() {
     let how = Gate { env: vec![("TMPDIR", repo.outside.join("missing").into())], ..Gate::default() };
     assert_eq!(
         whole_not_run(findings(&repo, how)),
-        "could not make a directory to run the changed tests at the base in: No such file or directory (os error 2); \
-         nothing ran, so the check judged nothing."
+        "could not make a directory to copy the base into: No such file or directory (os error 2); the changed tests \
+         were not run at the base."
     );
 }
 
@@ -290,7 +290,7 @@ fn a_base_run_directory_left_behind_is_a_finding_beside_the_results() {
     assert_eq!(found.len(), 1, "{found:?}");
     let (path, line, rule, message) = &found[0];
     assert_eq!((path.as_deref(), *line, rule.as_str()), (None, None, "not-removed"), "{message}");
-    let named = message.strip_prefix("could not remove the directory to run the changed tests at the base in, `");
+    let named = message.strip_prefix("could not remove the directory of the copy of the base, `");
     let (dir, why) = named.expect(message).split_once("`: ").expect(message);
     assert!(Command::new("chmod").args(["-R", "u+rwX", dir]).status().unwrap().success());
     std::fs::remove_dir_all(dir).unwrap();
@@ -305,8 +305,8 @@ fn a_base_that_cannot_be_copied_is_a_finding() {
     let how = Gate { env: vec![("PATH", path_after(&bin))], ..Gate::default() };
     assert_eq!(
         whole_not_run(findings(&repo, how)),
-        "could not copy the base to run the changed tests in: tar could not unpack the base: tar: no space; the \
-         changed tests were not run there."
+        "could not copy the base: tar could not unpack the base: tar: no space; the changed tests were not run at \
+         the base."
     );
 }
 
@@ -323,14 +323,32 @@ fn tests_with_no_pytest_configuration_run_at_the_base_with_an_empty_one() {
 fn the_run_at_the_base_has_a_tmpdir_of_its_own_and_the_gate_s_pythonpath_after_the_copy() {
     let repo = calc();
     std::fs::write(repo.outside.join("extra_mod.py"), "TWO = 2\n").unwrap();
-    // The first passes only in the run at the base: its TMPDIR lies beside the copy it runs in, which is its cwd.
+    // The first passes only in the run at the base: its TMPDIR lies in the scratch directory beside the copy it runs
+    // in, which is its cwd.
     let tests = "\n\ndef test_tmpdir():\n    import os\n    \
-                 assert os.path.dirname(os.environ['TMPDIR']) == os.path.dirname(os.getcwd())\n\
+                 assert os.environ['TMPDIR'] == os.path.join(os.path.dirname(os.getcwd()), 'scratch', 'pytest-tmp')\n\
                  \n\ndef test_inherited_path():\n    from extra_mod import TWO\n    assert mul(TWO, 1) == 2\n";
     fix_add(&repo, tests);
     let how = Gate { env: vec![("PYTHONPATH", repo.outside.clone().into())], ..Gate::default() };
     let found: Vec<_> = findings(&repo, how).into_iter().map(|(_, line, rule, _)| (line, rule)).collect();
     assert_eq!(found, vec![(Some(12), "passes-at-base".into()), (Some(17), "passes-at-base".into())]);
+}
+
+#[test]
+fn python_code_under_a_testdata_directory_is_the_base_s_in_the_run_at_the_base() {
+    // Go's tests take what lies under a testdata directory from the working tree, which the one copy of the base
+    // serves too; a Python file there is code under test all the same.
+    let repo = Repo::with(&[
+        common::NO_PYTHON_LINTERS,
+        ("pyproject.toml", b"[tool.ruff]\n"),
+        ("testdata/calc.py", CALC.as_bytes()),
+        ("tests/test_calc.py", TESTS.as_bytes()),
+        ("pytest.ini", b"[pytest]\npythonpath = testdata\n"),
+    ]);
+    repo.put("testdata/calc.py", fixed_calc("").as_bytes());
+    let tests = TESTS.replace("import mul", "import add, mul") + "\n\ndef test_add():\n    assert add(2, 2) == 4\n";
+    repo.put("tests/test_calc.py", tests.as_bytes());
+    assert_eq!(found(&repo), vec![]);
 }
 
 #[test]
@@ -722,8 +740,8 @@ fn add_submodule(repo: &Repo) -> String {
 }
 
 /// What the finding on submodules the copy leaves empty opens with, for one of them.
-const ONE_EMPTY: &str = "the copy of the base leaves a submodule empty, so a changed test that imports from it, if any \
-                         does, was not judged: ";
+const ONE_EMPTY: &str =
+    "the copy of the base leaves a submodule empty, so a changed test that needs it, if any does, was not judged: ";
 
 #[test]
 fn a_test_importing_from_a_submodule_is_judged_at_the_base() {
@@ -752,9 +770,9 @@ fn two_submodules_not_initialised_are_one_finding() {
     repo.git(&["submodule", "--quiet", "deinit", "--force", "--all"]);
     assert_eq!(
         whole_not_run(findings(&repo, Gate::default())),
-        "the copy of the base leaves submodules empty, so a changed test that imports from them, if any does, was not \
-         judged: `vendor/lib`, which is not initialised in the working tree; `vendor/two`, which is not initialised \
-         in the working tree."
+        "the copy of the base leaves submodules empty, so a changed test that needs one of them, if any does, was \
+         not judged: `vendor/lib`, which is not initialised in the working tree; `vendor/two`, which is not \
+         initialised in the working tree."
     );
 }
 

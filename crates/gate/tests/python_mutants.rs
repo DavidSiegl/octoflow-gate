@@ -247,6 +247,28 @@ fn a_mutant_the_tests_do_not_notice_is_reported_and_a_killed_one_is_not() {
 }
 
 #[test]
+fn gremlins_finds_none_of_mutmut_s_state_in_the_copy() {
+    let repo = calc();
+    // A Go module at the top, which gremlins runs in after mutmut: its `./...` would take a Go package under mutmut's
+    // state for one of the module's.
+    let settings = "[linters]\nruff = []\nmypy = []\ngolangci-lint = []\n";
+    let go = "package calc\n\n// Add adds.\nfunc Add(a, b int) int {\n\treturn a + b\n}\n";
+    let module = "module example.com/calc\n\ngo 1.22\n";
+    repo.commit(&[("gate.toml", settings.as_bytes()), ("go.mod", module.as_bytes()), ("calc.go", go.as_bytes())], "Go");
+    change_the_functions(&repo, &["unchecked"]);
+    repo.put("calc.go", go.replace("a + b", "a - b").as_bytes());
+    let seen = repo.outside.join("seen");
+    let bin = repo.stub("gremlins", &format!("ls -A > '{}'\nexit 1", seen.display()));
+    let path: OsString = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()).into();
+    let found = findings(&repo, Gate { env: vec![("PATH", path)], ..Gate::default() });
+    let mutated = |(path, _, rule, _): &Found| path.as_deref() == Some("calc.py") && rule == "survived";
+    assert!(found.iter().any(mutated), "{found:?}");
+    let listed = std::fs::read_to_string(&seen).unwrap();
+    assert!(listed.lines().any(|name| name == "calc.go"), "{listed}");
+    assert!(!listed.lines().any(|name| name == "mutants"), "{listed}");
+}
+
+#[test]
 fn a_source_file_with_a_byte_order_mark_is_read_as_python_reads_it() {
     let repo = calc();
     repo.put("calc.py", format!("\u{feff}{}", changed(&[])).as_bytes());
@@ -442,8 +464,8 @@ fn a_directory_for_the_copy_that_cannot_be_made_is_a_finding() {
             None,
             None,
             "not-run".to_string(),
-            "could not make a directory to run mutmut on a copy of the tree in: No such file or directory (os error \
-             2); nothing ran, so the check judged nothing."
+            "could not make a directory to copy the working tree into: No such file or directory (os error 2); the \
+             change's functions were not mutation-tested."
                 .to_string()
         )]
     );
@@ -852,7 +874,7 @@ fn unreached_functions_are_named_with_their_files() {
 /// The directory a `not-removed` finding's `message` names, made removable again and removed, and why the gate
 /// could not remove it.
 fn left_behind(message: &str) -> String {
-    let named = message.strip_prefix("could not remove the directory to run mutmut on a copy of the tree in, `");
+    let named = message.strip_prefix("could not remove the directory of the copy of the working tree, `");
     let (dir, why) = named.expect(message).split_once("`: ").expect(message);
     assert!(Command::new("chmod").args(["-R", "u+rwX", dir]).status().unwrap().success());
     std::fs::remove_dir_all(dir).unwrap();

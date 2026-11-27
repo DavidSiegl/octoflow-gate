@@ -8,6 +8,11 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
 
 ## Open issues
 
+- **`a_save_the_stop_cut_off_loses_that_module_s_results_alone` fails under load.** The test
+  (`crates/gate/tests/python_mutants.rs:877`) runs a real mutmut within a 40-second budget; Jenkins PR-114 build 1
+  failed it after 87 seconds with `left: [(None, None, "not-run")]`, while the node also built octoflow-ai. Closes
+  with a test that does not depend on mutmut finishing within a wall-clock budget, such as a fake mutmut that writes
+  the cut-off `.meta` itself.
 - **The octoflow stage downloads all of octoflow's CI tools where its scenario needs only gitleaks.** As
   cross-review 43 put it (F6, 2026-11-18): "octoflow-ai's `ci/install-tools.sh` also downloads cargo-llvm-cov,
   cargo-nextest, cargo-mutants and cargo-about. That is four more GitHub downloads per build, any of which can fail
@@ -95,14 +100,14 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   between gate runs outside every workspace, as the lock file of octoflow-ai's `ci/cargo-lock.sh` does. Moved from
   octoflow-ai on 2026-11-05.
 - **`surviving-mutants` splits its budget by language, not by work, and builds Rust anew.** `surviving_mutants`
-  (`crates/gate/src/mutants.rs`) gives mutmut half the `--mutation-budget` when the change has Rust to mutate too, and
-  cargo-mutants (`on_copy` there) what is left by the check's deadline, however many functions each language has; and
-  cargo-mutants runs `--in-place` in a copy of its own without `target/`, beside mutmut's, so each run copies the tree
-  again and compiles the workspace and its dependencies before its baseline. Not measured on Jenkins: gate-rust-checks
-  ticket 06 asked for the Gate stage's added time on a Rust change, which needs a Jenkins build on the branch. Found by
-  ticket 06 (2026-10-30). Closes, if the run metrics show either language starved, with the budget split by each
-  language's changed functions, one copy for both tools, and a target directory that lasts between gate runs (the same
-  as passes-at-base's above). Moved from octoflow-ai on 2026-11-05.
+  (`crates/gate/src/mutants.rs`) gives mutmut, cargo-mutants and gremlins in turn an equal share of what is left of the
+  `--mutation-budget` among the languages still to run, however many functions each language has; and cargo-mutants
+  builds into a new target directory outside the check's copy of the working tree on every run, so it compiles the
+  workspace and its dependencies before its baseline. Not measured on Jenkins: gate-rust-checks ticket 06 asked for the
+  Gate stage's added time on a Rust change, which needs a Jenkins build on the branch. Found by ticket 06 (2026-10-30).
+  Closes, if the run metrics show any language starved, with the budget split by each language's changed functions, and
+  a target directory that lasts between gate runs (the same as passes-at-base's above). Moved from octoflow-ai on
+  2026-11-05.
 - **`vague-names` reports a name an undecorated override cannot change.** A `def handle(self)` in a
   `socketserver.BaseRequestHandler` subclass, or a parameter the overridden signature names, has no fix; only a method
   marked `@override` is skipped (`marked_override` in `crates/lang-python/src/lib.rs`). Raised by the cross-review of
@@ -127,10 +132,6 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   would pass there. Accepted: the check reports only, and splitting the file's tests from its imports would mean
   rewriting them. Closes, if its run metrics show these files are common, by importing such names inside the tests that
   use them, or by running each test with the failing import stubbed. Moved from octoflow-ai on 2026-11-05.
-- **flaky-tests copies the tracked tree twice when a change touches both Python and Go tests.** As cross-review 39
-  put it (R1-11, 2026-11-14): "`crates/gate/src/flaky_tests.rs:228` (Go's `copy_tracked` at `:231`) beside Python's
-  own copy; one copy could serve both reruns." Costs a second copy of the tree's tracked files, and its time, on such
-  a change; nothing is judged wrongly. Closes with one copy that both halves rerun in.
 - **A test file whose name is not UTF-8 is never rerun by `flaky-tests`.** pytest-randomly 5.0.0 hashes each node id as
   strict UTF-8 (`pytest_randomly._crc32`, called from `pytest_runtest_setup` and its neighbours) and stops with an
   internal error, exit status 3. `run` in `crates/gate/src/pytest.rs` already lets pytest print such an id

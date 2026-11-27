@@ -13,26 +13,110 @@ use crate::report::Finding;
 use crate::scratch_directory::ScratchDirectory;
 use crate::{git, text, Unjudged};
 
-/// The findings of `run(dir)`, `dir` a [`ScratchDirectory`], which is removed afterwards whatever `run` finds, and when
-/// `run` panics or the gate is stopped meanwhile; `purpose` says what it is for, as a clause such as "to run
-/// cargo-mutants in". When the directory cannot be made, `run` is not called, and the one finding is of `rule`, of the
-/// check whose run it is, saying so; when it cannot be removed, a `not-removed` finding naming it follows `run`'s. The
-/// findings' rules are the check's own, without its name.
-pub fn in_scratch_directory(rule: &str, purpose: &str, run: impl FnOnce(&Path) -> Vec<Finding>) -> Vec<Finding> {
+/// What a check runs in a copy of a tree, set up before the copy is made: the findings it gives there, in no order.
+pub type OnCopy<'a> = Box<dyn FnOnce(&ScratchCopy) -> Vec<Finding> + 'a>;
+
+/// A copy of a tree that a check's runs share, made by [`in_working_tree_copy`] or [`in_base_copy`], which remove it
+/// with all it holds once the runs are done. A run may change the copy, so a copy never serves two checks.
+pub struct ScratchCopy {
+    /// The copy's top.
+    pub tree: PathBuf,
+    /// A private directory beside the copy, empty when the first run starts, for what the runs write outside the copy:
+    /// reports, built tests, configuration. The runs on one copy share it, so each names what it writes there after
+    /// its own tool, as `gremlins-0`.
+    pub scratch: PathBuf,
+}
+
+/// The findings of `runs`, each run in turn on one copy of the files the gate judges in `change`'s working tree
+/// (Change::judged), as they are there now: a symbolic link is copied as a link, a submodule, or a directory holding a
+/// repository git does not track, as its directory, and a listed file the working tree no longer holds is left out.
+/// No copy is made when `runs` is empty.
+///
+/// The copy is removed afterwards, also when a run panics or the gate is stopped meanwhile. `rule` is the check's own,
+/// without its name, for a copy that cannot be made, which is then the one finding, no run having been called: it ends
+/// in `unjudged`, a clause saying what was not judged, as "the changed tests were not rerun". A copy that cannot be
+/// removed is a `not-removed` finding after the runs'.
+pub fn in_working_tree_copy(change: &Change, rule: &str, unjudged: &str, runs: Vec<OnCopy>) -> Vec<Finding> {
+    in_copy("working tree", rule, unjudged, runs, |_, tree| copy_working_tree(change, tree).map(|()| vec![]))
+}
+
+/// The findings of `runs`, each run in turn on one copy of the base of `change` with each file of the change's that
+/// `beside` accepts, a repository path that belongs with the tests rather than with the code they test, as the
+/// working tree has it, as [`copy_base_with_tests`] writes them. No copy is made when `runs` is empty.
+///
+/// Submodules the copy leaves empty are one finding of `rule` before the runs', naming each and why. Otherwise as
+/// [`in_working_tree_copy`] says.
+pub fn in_base_copy(
+    change: &Change,
+    beside: impl Fn(&OsStr) -> bool,
+    rule: &str,
+    unjudged: &str,
+    runs: Vec<OnCopy>,
+) -> Vec<Finding> {
+    in_copy("base", rule, unjudged, runs, |dir, tree| {
+        let empty = copy_base_with_tests(change, tree, &dir.join("base.tar"), beside)?;
+        Ok(submodules_left_empty(&empty, rule).into_iter().collect())
+    })
+}
+
+/// The findings of `runs` on a copy of `what`, as "base", that `make(dir, tree)` writes to `tree` in `dir`, a
+/// [`ScratchDirectory`], giving its own findings or why it could not, a clause; as [`in_working_tree_copy`] says.
+fn in_copy(
+    what: &str,
+    rule: &str,
+    unjudged: &str,
+    runs: Vec<OnCopy>,
+    make: impl FnOnce(&Path, &Path) -> Result<Vec<Finding>, String>,
+) -> Vec<Finding> {
+    if runs.is_empty() {
+        return vec![];
+    }
+    let no_room = |e: &dyn std::fmt::Display| {
+        let message = format!("could not make a directory to copy the {what} into: {e}; {unjudged}.");
+        vec![finding(None, None, rule, message)]
+    };
     let dir = match ScratchDirectory::new(&std::env::temp_dir()) {
         Ok(dir) => dir,
-        Err(e) => {
-            let why = format!("could not make a directory {purpose}: {e}");
-            return vec![finding(None, None, rule, format!("{why}; nothing ran, so the check judged nothing."))];
-        }
+        Err(e) => return no_room(&e),
     };
-    let mut out = run(dir.path());
+    let copy = ScratchCopy { tree: dir.path().join("tree"), scratch: dir.path().join("scratch") };
+    let made = std::fs::create_dir(&copy.scratch).map_err(|e| no_room(&failed("make", &copy.scratch, &e)));
+    let copied = made.and_then(|()| {
+        make(dir.path(), &copy.tree)
+            .map_err(|e| vec![finding(None, None, rule, format!("could not copy the {what}: {e}; {unjudged}."))])
+    });
+    let mut out = match copied {
+        Ok(mut out) => {
+            for run in runs {
+                out.extend(run(&copy));
+            }
+            out
+        }
+        Err(found) => found,
+    };
     let path = dir.path().to_path_buf();
     if let Err(e) = dir.remove() {
-        let message = format!("could not remove the directory {purpose}, `{}`: {e}", path.display());
+        let message = format!("could not remove the directory of the copy of the {what}, `{}`: {e}", path.display());
         out.push(finding(None, None, "not-removed", message));
     }
     out
+}
+
+/// The finding of `rule` on `empty`, the submodules a copy of the base leaves empty, each with its path and why, as
+/// [`copy_base_with_tests`] gives them; None for none.
+fn submodules_left_empty(empty: &[(String, String)], rule: &str) -> Option<Finding> {
+    let (noun, pronoun) = match empty.len() {
+        0 => return None,
+        1 => ("a submodule", "it"),
+        _ => ("submodules", "one of them"),
+    };
+    let named: Vec<String> = empty.iter().map(|(path, why)| format!("`{path}`, {why}")).collect();
+    let message = format!(
+        "the copy of the base leaves {noun} empty, so a changed test that needs {pronoun}, if any does, was not \
+         judged: {}.",
+        named.join("; ")
+    );
+    Some(finding(None, None, rule, message))
 }
 
 /// The time a check's tool runs may take.
@@ -77,7 +161,7 @@ pub fn finding(path: Option<&OsStr>, line: Option<u32>, rule: &str, message: Str
 /// or a directory holding a repository git does not track, as its directory; a listed file the working tree no longer
 /// holds is left out. Errs, a clause, when `dest` exists or a file cannot be copied; `dest` may then hold part of the
 /// copy.
-pub fn copy_working_tree(change: &Change, dest: &Path) -> Result<(), String> {
+fn copy_working_tree(change: &Change, dest: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dest.parent().unwrap_or(Path::new("/"))).map_err(|e| failed("make", dest, &e))?;
     std::fs::create_dir(dest).map_err(|e| failed("make", dest, &e))?;
     for name in &change.judged {
@@ -132,7 +216,7 @@ pub fn failed(what: &str, path: &Path, e: &std::io::Error) -> String {
 /// Gives back the submodules left empty, as [`unpack_commit`] does, of the base's and of those taken from the working
 /// tree. Errs, a clause, when git cannot list or write a commit, `tar` cannot unpack it, `dest` exists or a file cannot
 /// be written.
-pub fn copy_base_with_tests(
+fn copy_base_with_tests(
     change: &Change,
     dest: &Path,
     archive: &Path,
@@ -286,32 +370,94 @@ mod tests {
         assert_eq!(spent.share(2).seconds, 0);
     }
 
-    #[test]
-    fn a_scratch_directory_is_private_and_removed_afterwards() {
-        use std::os::unix::fs::PermissionsExt;
-        let mut seen = None;
-        let found = in_scratch_directory("not-run", "to test in", |dir| {
-            assert_eq!(dir.metadata().unwrap().permissions().mode() & 0o777, 0o700);
-            std::fs::write(dir.join("f"), "x").unwrap();
-            seen = Some(dir.to_path_buf());
-            vec![finding(None, None, "r", "m".into())]
-        });
-        assert_eq!(found.iter().map(|f| f.rule.as_str()).collect::<Vec<_>>(), ["r"]);
-        assert!(!seen.unwrap().exists());
+    use std::cell::RefCell;
+
+    /// A run on the copy that records the copy's top in `seen` and gives one finding of rule `rule`.
+    fn recording<'a>(seen: &'a RefCell<Vec<PathBuf>>, rule: &'a str) -> OnCopy<'a> {
+        Box::new(move |copy| {
+            seen.borrow_mut().push(copy.tree.clone());
+            vec![finding(None, None, rule, "m".into())]
+        })
     }
 
     #[test]
-    fn a_scratch_directory_is_removed_when_its_check_panics() {
-        let mut seen = None;
+    fn the_runs_share_one_private_copy_that_is_removed_afterwards() {
+        use std::os::unix::fs::PermissionsExt;
+        let seen = RefCell::new(vec![]);
+        let make = |dir: &Path, tree: &Path| {
+            assert_eq!(dir.metadata().unwrap().permissions().mode() & 0o777, 0o700);
+            assert!(dir.join("scratch").is_dir());
+            std::fs::create_dir(tree).unwrap();
+            Ok(vec![finding(None, None, "made", "m".into())])
+        };
+        let runs = vec![recording(&seen, "first"), recording(&seen, "second")];
+        let found = in_copy("base", "not-run", "nothing was judged", runs, make);
+        let rules: Vec<&str> = found.iter().map(|f| f.rule.as_str()).collect();
+        assert_eq!(rules, ["made", "first", "second"]);
+        let seen = seen.into_inner();
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[0], seen[1]);
+        assert!(!seen[0].parent().unwrap().exists());
+    }
+
+    #[test]
+    fn a_copy_that_cannot_be_made_is_the_one_finding_and_no_run_is_called() {
+        let (seen, dir) = (RefCell::new(vec![]), RefCell::new(None));
+        let make = |at: &Path, _: &Path| {
+            *dir.borrow_mut() = Some(at.to_path_buf());
+            Err("cannot copy x: why".to_string())
+        };
+        let found = in_copy("base", "not-rerun", "the changed tests were not rerun", vec![recording(&seen, "r")], make);
+        assert_eq!(found.len(), 1);
+        assert_eq!((found[0].rule.as_str(), found[0].path.as_ref(), found[0].line), ("not-rerun", None, None));
+        assert_eq!(found[0].message, "could not copy the base: cannot copy x: why; the changed tests were not rerun.");
+        assert!(seen.borrow().is_empty());
+        assert!(!dir.into_inner().unwrap().exists());
+    }
+
+    #[test]
+    fn no_copy_is_made_for_no_run() {
+        let made = std::cell::Cell::new(false);
+        let found = in_copy("working tree", "not-run", "x", vec![], |_, _| {
+            made.set(true);
+            Ok(vec![])
+        });
+        assert!(found.is_empty() && !made.get());
+    }
+
+    #[test]
+    fn the_copy_is_removed_when_a_run_panics() {
+        let dir = RefCell::new(None);
         let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            in_scratch_directory("not-run", "to test in", |dir| {
-                std::fs::write(dir.join("f"), "x").unwrap();
-                seen = Some(dir.to_path_buf());
+            let make = |at: &Path, tree: &Path| {
+                *dir.borrow_mut() = Some(at.to_path_buf());
+                std::fs::create_dir(tree).map(|()| vec![]).map_err(|e| e.to_string())
+            };
+            let run: OnCopy = Box::new(|copy| {
+                std::fs::write(copy.tree.join("f"), "x").unwrap();
                 panic!("a check's bug")
-            })
+            });
+            in_copy("working tree", "not-run", "x", vec![run], make)
         }));
         assert!(panicked.is_err());
-        assert!(!seen.unwrap().exists());
+        assert!(!dir.into_inner().unwrap().exists());
+    }
+
+    #[test]
+    fn submodules_left_empty_are_one_finding_worded_by_their_number() {
+        assert!(submodules_left_empty(&[], "not-run").is_none());
+        let one = [("lib".to_string(), "which is not initialised in the working tree".to_string())];
+        let found = submodules_left_empty(&one, "not-run").unwrap();
+        assert_eq!(
+            found.message,
+            "the copy of the base leaves a submodule empty, so a changed test that needs it, if any does, was not \
+             judged: `lib`, which is not initialised in the working tree."
+        );
+        let two = [one[0].clone(), ("vendor/x".to_string(), "why".to_string())];
+        let found = submodules_left_empty(&two, "not-run").unwrap();
+        assert!(found.message.starts_with("the copy of the base leaves submodules empty, so a changed test that needs \
+                                           one of them,"), "{}", found.message);
+        assert!(found.message.ends_with(": `lib`, which is not initialised in the working tree; `vendor/x`, why."));
     }
 
     #[test]

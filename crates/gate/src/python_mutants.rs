@@ -21,7 +21,7 @@ use regex::Regex;
 use serde_json::{json, Value};
 use toml::Table;
 
-use crate::copies::{copy_working_tree, finding, in_scratch_directory};
+use crate::copies::{finding, OnCopy, ScratchCopy};
 use crate::glob::fnmatch;
 use crate::change::{Change, MUTMUT_STATE};
 use crate::mutants::{KILL_WAIT, STOP_GRACE, SURVIVOR_EXAMPLES};
@@ -80,7 +80,8 @@ pub struct Mutmut<'a> {
 }
 
 /// Python's findings of the surviving-mutants check on `python`, in no order; each rule is the check's own, without
-/// its name, and each severity "warning".
+/// its name, and each severity "warning". They are those it gives before mutmut runs, and the run on the check's copy
+/// of the working tree that gives the others, None when there is nothing for mutmut to run on.
 ///
 /// Mutation-tests with mutmut each top-level function and method of a top-level class (lang_python::Unit) that the
 /// change adds lines to, decorators included, or removes lines from, in a Python file outside the tests that it leaves
@@ -90,11 +91,12 @@ pub struct Mutmut<'a> {
 /// parameters, defaults, annotations and body, whatever its comments and layout, in a file that holds no mutmut pragma
 /// on either side ([`edited`]): an edit to those alone changes nothing mutmut mutates, while one to its signature alone
 /// can change what its body does, and one to a pragma which of its lines mutmut mutates. Reports at its def each such
-/// function with mutants its tests did not notice (`survived`), with how many of the mutants tried they were and what the first
-/// mutants::SURVIVOR_EXAMPLES change, as a line before and after; and each one no test calls (`untested`).
+/// function with mutants its tests did not notice (`survived`), with how many of the mutants tried they were and what
+/// the first mutants::SURVIVOR_EXAMPLES change, as a line before and after; and each one no test calls (`untested`).
 ///
-/// mutmut runs by the project's Python (change::Change::python) on a copy of the working tree, without what the
-/// tree tracks under mutmut's state, so it starts without a cache. It runs there by the `[tool.mutmut]` of
+/// mutmut runs by the project's Python (change::Change::python) on the copy, without what the tree tracks under
+/// mutmut's state, so it starts without a cache; it changes the copy's Python files, its pyproject.toml's
+/// `[tool.mutmut]` and its mutants/ alone. It runs there by the `[tool.mutmut]` of
 /// `mutmut.rules`, whatever the copy's says: its source_paths, only_mutate and do_not_mutate decide which files can
 /// be mutated, and a changed function outside them, or one mutmut never mutates, is a `not-mutated` finding saying
 /// why; its test selection says which tests run. mutmut may run `seconds`; a run stopped there is a
@@ -109,10 +111,13 @@ pub struct Mutmut<'a> {
 ///
 /// mutmut's pytest runs take the configuration pytest finds for the tests they run (pytest::groups), which must be
 /// one: tests under more than one are a `not-run` finding naming them. A mutmut that cannot start, fails, or whose
-/// results cannot be listed, rules that name no source_paths or no rules at all, a changed file that cannot be read
-/// or parsed, and a copy that cannot be made are `not-run` findings too, saying so; a copy that cannot be removed
-/// afterwards is a `not-removed` one.
-pub fn python_mutants(python: &PythonChange, mutmut: &Mutmut, seconds: u64) -> Vec<Finding> {
+/// results cannot be listed, rules that name no source_paths or no rules at all, and a changed file that cannot be
+/// read or parsed are `not-run` findings too, saying so.
+pub fn python_mutants<'a>(
+    python: &'a PythonChange,
+    mutmut: &Mutmut,
+    seconds: u64,
+) -> (Vec<Finding>, Option<OnCopy<'a>>) {
     let in_scope = |path: &OsStr| !python_test(&python.change.settings, path);
     let (units, unreadable) = python.changed_units(in_scope, |unit, added, removal_points| {
         added.iter().any(|&n| unit.lines.first <= n && n <= unit.lines.last)
@@ -123,10 +128,12 @@ pub fn python_mutants(python: &PythonChange, mutmut: &Mutmut, seconds: u64) -> V
     };
     let mut out: Vec<Finding> = unreadable.into_iter().map(not_read).collect();
     let functions = edited(python, units);
-    if !functions.is_empty() {
-        out.extend(mutation_test(python, &functions, mutmut, seconds));
+    if functions.is_empty() {
+        return (out, None);
     }
-    out
+    let (found, run) = mutation_test(python, functions, mutmut, seconds);
+    out.extend(found);
+    (out, run)
 }
 
 /// Those of `units`, each with its file's path as PythonChange::changed_units gives them, whose code the change
@@ -184,17 +191,21 @@ impl Function {
     }
 }
 
-/// [`python_mutants`]'s findings on `functions`, the change's changed functions: those mutmut does not mutate, then
-/// what a run of mutmut of `seconds` found of the others.
-fn mutation_test(python: &PythonChange, functions: &[Function], mutmut: &Mutmut, seconds: u64) -> Vec<Finding> {
+/// [`python_mutants`]'s findings on `functions`, the change's changed functions: those mutmut does not mutate, and
+/// the run of mutmut of `seconds` on the others, None when it would have none to mutate or no test to run.
+fn mutation_test<'a>(
+    python: &'a PythonChange,
+    functions: Vec<Function>,
+    mutmut: &Mutmut,
+    seconds: u64,
+) -> (Vec<Finding>, Option<OnCopy<'a>>) {
     let table = match mutmut.rules.map(mutmut_table) {
         Some(Ok(table)) => table,
-        Some(Err(problem)) => return vec![not_run(&problem)],
+        Some(Err(problem)) => return (vec![not_run(&problem)], None),
         None => {
-            return vec![not_run(
-                "there is no pyproject.toml beside the gate's settings, so no [tool.mutmut] names source_paths and \
-                 what mutmut mutates is unknown",
-            )]
+            let problem = "there is no pyproject.toml beside the gate's settings, so no [tool.mutmut] names \
+                           source_paths and what mutmut mutates is unknown";
+            return (vec![not_run(problem)], None);
         }
     };
     let (mut out, mut mutated) = (vec![], vec![]);
@@ -208,25 +219,27 @@ fn mutation_test(python: &PythonChange, functions: &[Function], mutmut: &Mutmut,
         }
     }
     if mutated.is_empty() {
-        return out;
+        return (out, None);
     }
     let change = python.change;
     let mut recorded = None;
     if let Some(data_file) = mutmut.test_contexts {
-        match recorded_tests(&change.python, &change.root, &mutated, data_file) {
+        let refs: Vec<&Function> = mutated.iter().collect();
+        match recorded_tests(&change.python, &change.root, &refs, data_file) {
             Err(why) => out.push(not_narrowed(&why)),
             Ok(tests) if tests.is_empty() => {
-                out.extend(untested_by_contexts(&mutated));
-                return out;
+                out.extend(untested_by_contexts(&refs));
+                return (out, None);
             }
             Ok(tests) => recorded = Some(tests),
         }
     }
-    out.extend(in_scratch_directory("not-run", "to run mutmut on a copy of the tree in", |tmp| {
-        let copy = TreeCopy { python: &change.python, tree: &tmp.join("tree") };
-        on_copy(&copy, change, tmp, &mutated, &table, seconds, recorded.as_ref())
-    }));
-    out
+    let run: OnCopy = Box::new(move |scratch: &ScratchCopy| {
+        let copy = TreeCopy { python: &change.python, tree: &scratch.tree };
+        let refs: Vec<&Function> = mutated.iter().collect();
+        on_copy(&copy, change, &scratch.scratch, &refs, &table, seconds, recorded.as_ref())
+    });
+    (out, Some(run))
 }
 
 /// A `not-run` finding: `problem`, a clause, and that the change's functions were not mutation-tested.
@@ -482,10 +495,10 @@ fn time_left(deadline: Instant) -> Option<Duration> {
     deadline.checked_duration_since(Instant::now() + STOP_GRACE + KILL_WAIT).filter(|left| !left.is_zero())
 }
 
-/// The findings of mutmut run on `functions` for `seconds` in `copy`, made as [`prepare_copy`] says, with `table`, the
-/// rules' `[tool.mutmut]`, in place of its own, and its pytest runs taking the configuration of the tests they run
-/// and no configuration or conftest.py from above the copy ([`give_mutmut`]). `recorded`, when given, are the node
-/// ids of the tests `--test-contexts` records reaching `functions`: mutmut is then given those of them its selection
+/// The findings of mutmut run on `functions` for `seconds` in `copy`, readied as [`prepare_copy`] says, with `table`,
+/// the rules' `[tool.mutmut]`, in place of its own, and its pytest runs taking the configuration of the tests they run
+/// and no configuration or conftest.py from above the copy ([`give_mutmut`]). `recorded`, when given, are the node ids
+/// of the tests `--test-contexts` records reaching `functions`: mutmut is then given those of them its selection
 /// collects ([`narrowed_table`]), and none collected, it is not started and each function is an `untested` finding.
 fn on_copy(
     copy: &TreeCopy,
@@ -524,12 +537,12 @@ fn on_copy(
     out
 }
 
-/// Makes `copy`, in `tmp`, an empty private directory, of `change`'s working tree (copies::copy_working_tree), but for
-/// what it holds under mutmut's state, and marks it for mutmut to skip all but
-/// `functions` ([`mark_for_mutmut`] by `table`, the rules' `[tool.mutmut]`). Returns the pytest configuration of the
-/// tests mutmut runs, those `table`'s selection names or, given, those of `recorded` under it ([`test_places`]), as
-/// pytest::groups finds it. Errs with the problem, a clause, when the copy cannot be made or marked, the
-/// configuration cannot be found, or the tests take more than one.
+/// Readies `copy`, a copy of `change`'s working tree with `tmp`, a private directory, beside it: removes what it holds
+/// under mutmut's state, and marks it for mutmut to skip all but `functions` ([`mark_for_mutmut`] by `table`, the
+/// rules' `[tool.mutmut]`). Returns the pytest configuration of the tests mutmut runs, those `table`'s selection names
+/// or, given, those of `recorded` under it ([`test_places`]), as pytest::groups finds it. Errs with the problem, a
+/// clause, when the copy cannot be readied or marked, the configuration cannot be found, or the tests take more than
+/// one.
 fn prepare_copy(
     copy: &TreeCopy,
     change: &Change,
@@ -538,7 +551,6 @@ fn prepare_copy(
     table: &Table,
     recorded: Option<&BTreeSet<String>>,
 ) -> Result<PathBuf, String> {
-    copy_working_tree(change, copy.tree).map_err(not_started)?;
     // Before anything reads the copy's pyproject.toml, pytest's configuration among it.
     own_pyproject(&change.root, copy.tree)?;
     // mutmut takes what it finds under its state for its own cache, results included, so it starts without what the
@@ -763,11 +775,11 @@ fn not_started(e: impl std::fmt::Display) -> String {
     format!("could not start mutmut: {e}")
 }
 
-/// Makes the pyproject.toml of `copy`, a copy of the tree `root` (copies::copy_working_tree), a file of the copy's own
-/// where `root`'s is a symbolic link, which the copy holds as the same link: the file holds what the link names
+/// Makes the pyproject.toml of `copy`, a copy of the tree `root` (copies::in_working_tree_copy), a file of the copy's
+/// own where `root`'s is a symbolic link, which the copy holds as the same link: the file holds what the link names
 /// from `root`, since from the copy's place a relative link names another file or none, and written through, a link
-/// would change the file it names. Anything else is left as it is. Errs with the problem, a clause, when what the
-/// link names cannot be read, a link to no file among it, or the copy's file cannot be written.
+/// would change the file it names. Anything else is left as it is. Errs with the problem, a clause, when what the link
+/// names cannot be read, a link to no file among it, or the copy's file cannot be written.
 fn own_pyproject(root: &Path, copy: &Path) -> Result<(), String> {
     let path = copy.join("pyproject.toml");
     if !path.is_symlink() {

@@ -2,7 +2,7 @@
 //! quality.json: with the workspace's own mutmut (common::python), or a `--python` that is a shell script standing
 //! in for it. Where a test needs mutmut or the system to go wrong, it gives the binary such a `--python`, or a
 //! TMPDIR; what a `--python` cannot vary, the gate's own waits and a scratch directory that cannot be removed among
-//! it, is the unit tests' in python_mutants.rs, copies.rs and process.rs. The gate runs its flaky-tests and
+//! it, is the unit tests' in surviving_mutants/python.rs, copies.rs and process.rs. The gate runs its flaky-tests and
 //! passes-at-base checks on the same change with the same Python, so a fake mutmut answers nothing to what is not
 //! mutmut's.
 
@@ -730,7 +730,8 @@ fn calc_and_more(header_comment: &str) -> Repo {
 #[test]
 fn a_run_whose_output_outlives_it_ends_within_the_stated_bound() {
     // mutmut ignores SIGINT here, so it is killed after the grace, and a helper in a session of its own keeps its
-    // output open after that: the gate waits for neither longer than it says (TreeCopy::mutmut in python_mutants.rs).
+    // output open after that: the gate waits for neither longer than it says (TreeCopy::mutmut in
+    // surviving_mutants/python.rs).
     let repo = calc();
     change_the_functions(&repo, &[]);
     let helper_pid = repo.outside.join("helper.pid");

@@ -11,11 +11,11 @@ use crate::coverage::new_coverage;
 use crate::diff::ChangedLines;
 use crate::flaky_tests::flaky_tests;
 use crate::linters::{JudgedFiles, Linter, LINTERS};
-use crate::mutants::surviving_mutants;
+use crate::surviving_mutants::surviving_mutants;
 use crate::parser_checks::{dependency_cycles, duplicated_blocks, too_complex, vague_names, weakened_tests};
 use crate::passes_at_base::passes_at_base;
 use crate::process::tool_env;
-use crate::python_mutants::Mutmut;
+use crate::surviving_mutants::Mutmut;
 use crate::report::{Finding, QualityReport};
 use crate::sources::{RustChange, Sources};
 use crate::settings::JudgedBy;
@@ -41,7 +41,7 @@ pub struct Given {
     /// directory, or a name without a slash, which PATH finds.
     pub python: Option<PathBuf>,
     /// A coverage.py data file of the tree's test run with a context per test, by which the surviving-mutants check
-    /// narrows mutmut's tests (python_mutants::Mutmut::test_contexts): absolute or relative to the current directory.
+    /// narrows mutmut's tests (surviving_mutants::Mutmut::test_contexts): absolute or relative to the current directory.
     pub test_contexts: Option<PathBuf>,
 }
 

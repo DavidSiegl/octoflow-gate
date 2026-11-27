@@ -1,8 +1,8 @@
 //! The surviving-mutants check over a real git repository's Cargo package, through the `gate` binary and its
-//! quality.json: with a real cargo-mutants, or a stub `cargo` ahead of PATH where a test needs cargo-mutants to do
-//! what the real one cannot be made to. What a stub `cargo` cannot vary either is held by mutants.rs's own tests.
-//! cargo runs offline, so it never reaches for the registry, and the passes-at-base check, which the gate runs too,
-//! has a budget of a second.
+//! quality.json: with a real cargo-mutants, or a stub `cargo` ahead of PATH where a test needs cargo-mutants to do what
+//! the real one cannot be made to. What a stub `cargo` cannot vary either is held by surviving_mutants/rust.rs's own
+//! tests. cargo runs offline, so it never reaches for the registry, and the passes-at-base check, which the gate runs
+//! too, has a budget of a second.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -132,8 +132,8 @@ fn the_budget_running_out_is_a_finding() {
     // The unmutated tests pass at once, and each of checked's mutants makes them wait for cargo-mutants' timeout, 60
     // seconds for so quick a baseline: of the 60 seconds, less the 15 the stop may take, the baseline, a build of the
     // package, has 45 however loaded the machine is, and the first such mutant outlasts what is left. The numbers are
-    // mutants.rs's MINIMUM_TEST_TIMEOUT and STOP_GRACE plus KILL_WAIT; a shorter MINIMUM_TEST_TIMEOUT can let the
-    // mutants all finish inside the budget.
+    // surviving_mutants/rust.rs's MINIMUM_TEST_TIMEOUT and STOP_GRACE plus KILL_WAIT; a shorter MINIMUM_TEST_TIMEOUT
+    // can let the mutants all finish inside the budget.
     let wait = "while calc::checked(3) != 6 {\n        std::thread::sleep(std::time::Duration::from_secs(1));\n    }";
     add_functions(&repo, "", "calc", wait);
     let found = findings(&repo, Some(60), &[]);

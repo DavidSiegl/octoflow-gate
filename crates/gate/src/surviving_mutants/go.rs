@@ -1,5 +1,5 @@
 //! The surviving-mutants check's Go half: gremlins (<https://gremlins.dev>) mutates the Go functions a change edits
-//! and runs each mutant against all of its module's tests. The check itself, and its Rust half, are mutants.rs.
+//! and runs each mutant against all of its module's tests. The check itself is mod.rs.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
@@ -15,11 +15,12 @@ use regex::bytes::Regex;
 use crate::change::MUTMUT_STATE;
 use crate::copies::{finding, Budget, ScratchCopy};
 use crate::git::shell_quote_bytes;
-use crate::mutants::{dir_name, edits, Edited, KILL_WAIT, STOP_GRACE, SURVIVOR_EXAMPLES};
 use crate::sources::{project_dir, GoChange, GO_MANIFEST};
 use crate::paths::rel_path;
 use crate::process::{run_with, Extras, Finished};
 use crate::text;
+
+use super::{dir_name, edits, Edited, KILL_WAIT, STOP_GRACE, SURVIVOR_EXAMPLES};
 
 /// How each status gremlins 0.6 prints for a mutant counts: a mutant that LIVED survived its module's tests; a
 /// KILLED one, and one whose tests outlived gremlins' timeout, did not; one NOT COVERED is on a line no test runs, so
@@ -38,12 +39,13 @@ const TIMEOUT_COEFFICIENT: u32 = 10;
 /// The Go functions the change that `go` reads edits, in path and line order, and a `not-run` finding for each file
 /// whose functions cannot be told, as one that does not parse.
 ///
-/// A function counts when the change edits it (mutants::edits): a function or method, with a body, of a Go file that
-/// is code under test (GoChange::is_code) and read in the working tree, so not generated, vendored or a symlink. One
-/// whose file's base has a function of its name with the same declaration, its receiver, parameters, results and body,
-/// whatever its comments and layout ([`unchanged_declarations`]), does not count: an edit to its comments or layout
-/// alone changes nothing gremlins mutates, while one to its signature alone can change what its body does.
-pub(crate) fn edited_functions(go: &GoChange) -> (Vec<Edited>, Vec<Finding>) {
+/// A function counts when the change edits it (surviving_mutants::edits): a function or method, with a body, of a Go
+/// file that is code under test (GoChange::is_code) and read in the working tree, so not generated, vendored or a
+/// symlink. One whose file's base has a function of its name with the same declaration, its receiver, parameters,
+/// results and body, whatever its comments and layout ([`unchanged_declarations`]), does not count: an edit to its
+/// comments or layout alone changes nothing gremlins mutates, while one to its signature alone can change what its body
+/// does.
+pub(super) fn edited_functions(go: &GoChange) -> (Vec<Edited>, Vec<Finding>) {
     let (mut edited, mut unread) = (vec![], vec![]);
     let none = BTreeSet::new();
     for file in &go.files {
@@ -122,7 +124,7 @@ fn unchanged_declarations(go: &GoChange, file: &ChangedFile) -> Vec<bool> {
 /// copy, as where the change deletes it, a `not-mutated` one; a run that cannot be made or fails, and mutmut's state
 /// that cannot be removed, a `not-run` one saying why. A run the deadline stops is a `budget-reached` finding beside
 /// what the mutants it had tried showed, and each module after it a `not-run` one.
-pub(crate) fn go_mutants(copy: &ScratchCopy, base: &str, functions: &[Edited], budget: &Budget) -> Vec<Finding> {
+pub(super) fn go_mutants(copy: &ScratchCopy, base: &str, functions: &[Edited], budget: &Budget) -> Vec<Finding> {
     let tree = &copy.tree;
     let mut out = vec![];
     let mut modules: BTreeMap<PathBuf, Vec<&Edited>> = BTreeMap::new();

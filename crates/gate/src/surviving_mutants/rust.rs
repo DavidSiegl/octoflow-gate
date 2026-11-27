@@ -1,25 +1,22 @@
-//! The surviving-mutants check: a function the change touches whose mutants its tests do not notice is a finding.
-//! Here is the check and its Rust half, in which cargo-mutants mutates the functions the change edits in Rust code
-//! under test; the Python half, which runs mutmut, is python_mutants.rs, and the Go half, which runs gremlins,
-//! go_mutants.rs.
+//! Rust's half of the surviving-mutants check (mod.rs): cargo-mutants mutates the functions the change edits in Rust
+//! code under test.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use checks::Finding;
-use model::Function;
 use serde_json::Value;
 
 use crate::clippy::workspaces;
-use crate::copies::{finding, in_working_tree_copy, sort_by_place, Budget, OnCopy, ScratchCopy};
-use crate::go_mutants::{edited_functions, go_mutants};
+use crate::copies::{finding, Budget, ScratchCopy};
 use crate::process::{run_with, Extras, Finished};
-use crate::python_mutants::{python_mutants, Mutmut};
-use crate::sources::{project_dir, RustChange, Sources};
+use crate::sources::{project_dir, RustChange};
 use crate::text;
+
+use super::{dir_name, edits, Edited, KILL_WAIT, STOP_GRACE, SURVIVOR_EXAMPLES};
 
 /// How each outcome cargo-mutants 27 writes in mutants.out/outcomes.json (a scenario's "summary") counts: a missed
 /// mutant survived; a caught one, and one whose tests outlived cargo-mutants' timeout ([`MINIMUM_TEST_TIMEOUT`]), did
@@ -37,88 +34,13 @@ const MINIMUM_TEST_TIMEOUT: u64 = 60;
 /// than the baseline's, without a mutant that hangs them taking five times the baseline (cargo-mutants' default).
 const TIMEOUT_MULTIPLIER: u64 = 2;
 
-/// How long cargo-mutants has, after the SIGINT that stops a run at the deadline, to write what it found and exit
-/// before it is killed, and mutmut as long.
-pub(crate) const STOP_GRACE: Duration = Duration::from_secs(10);
-
-/// What a run is given beyond [`STOP_GRACE`] after the deadline: the most process::run_with waits for what a killed
-/// process printed (its KILL_WAIT).
-pub(crate) const KILL_WAIT: Duration = Duration::from_secs(5);
-
-/// How many of a function's surviving mutants its finding shows, in the order the mutation tool made them.
-pub(crate) const SURVIVOR_EXAMPLES: usize = 3;
-
-/// The surviving-mutants check's findings on `sources`, by path and line, a finding on no path or line first; each
-/// rule is the check's own, without its name, and each severity "warning".
-///
-/// Mutation-tests the Python functions the change touches with mutmut, set up as `mutmut` says
-/// (python_mutants::python_mutants), then the Rust functions it edits with cargo-mutants ([`rust_mutants`]),
-/// then the Go functions it edits with gremlins (go_mutants::go_mutants), all within `budget` seconds. Each language
-/// in turn has an equal share of what the ones before it left, among itself and the languages after it that have
-/// something to mutate: with all three, mutmut has a third of the budget, cargo-mutants half of what is left, and
-/// gremlins the rest. Each one's findings name its share as the seconds it was stopped at.
-///
-/// The three run in turn on one copy of the working tree (copies::in_working_tree_copy), made only when one of them has
-/// something to mutate. cargo-mutants builds outside the copy, and gremlins runs once mutmut's state, `mutants/`, is
-/// removed from it (go_mutants::go_mutants), so that neither takes another's files for its own. A copy that cannot be
-/// made is a `not-run` finding in place of all their runs, and one that cannot be removed afterwards a `not-removed`
-/// one.
-pub fn surviving_mutants(sources: &Sources, mutmut: &Mutmut, budget: u64) -> Vec<Finding> {
-    let budget = Budget::starting_now(budget);
-    let (rust, mut out) = edited_rust(&sources.rust);
-    let (go, unread) = edited_functions(&sources.go);
-    out.extend(unread);
-    let (has_rust, has_go) = (!rust.is_empty(), !go.is_empty());
-    let share = |later: &[bool]| budget.share(1 + later.iter().map(|&has| u32::from(has)).sum::<u32>());
-    let python = share(&[has_rust, has_go]);
-    let (found, mutmut_run) = python_mutants(&sources.python, mutmut, python.seconds);
-    out.extend(found);
-    let mut runs: Vec<OnCopy> = mutmut_run.into_iter().collect();
-    if has_rust {
-        runs.push(Box::new(|copy| rust_mutants(copy, &rust, &share(&[has_go]))));
-    }
-    if has_go {
-        runs.push(Box::new(|copy| go_mutants(copy, &sources.go.change.base, &go, &share(&[]))));
-    }
-    let unjudged = "the change's functions were not mutation-tested";
-    out.extend(in_working_tree_copy(sources.rust.change, "not-run", unjudged, runs));
-    sort_by_place(&mut out);
-    out
-}
-
-/// A function the change edits, which the mutation tool of its language mutates.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Edited {
-    /// Its file, from the tree's top.
-    pub(crate) path: OsString,
-    /// Its name, as model::Function's, a Go method's as `Stack.Push`.
-    pub(crate) name: String,
-    /// The lines from its `fn` or `func` to its closing brace, its doc comment and attributes left out.
-    pub(crate) line: u32,
-    pub(crate) last: u32,
-}
-
-impl Edited {
-    /// `f`, of the file at `path`, from the tree's top, as an edited function.
-    pub(crate) fn of(path: &OsStr, f: &Function) -> Edited {
-        Edited { path: path.to_os_string(), name: f.name.clone(), line: f.line, last: f.lines.last }
-    }
-}
-
-/// Whether a change edits the function `f`: it adds one of `added`, the lines it adds to `f`'s file, from `f`'s `fn` or
-/// `func` line to its closing brace, or removes lines from between two of those, at one of `removed`, as
-/// change::Change::removal_points gives them. A deleted guard clause needs a test as much as an added one.
-pub(crate) fn edits(f: &Function, added: &BTreeSet<u32>, removed: &BTreeSet<u32>) -> bool {
-    added.range(f.line..=f.lines.last).next().is_some() || removed.iter().any(|&n| f.line <= n && n < f.lines.last)
-}
-
 /// The Rust functions the change that `rust` reads edits, as [`edits`] says, in the change's order of their files and
 /// then by line, and a `not-run` finding for each file whose functions cannot be told, as one that does not parse.
 ///
 /// A function counts when it is a `fn` with a body, outside test code (model::Function's `exempt`), of a `.rs` file
 /// that is Rust code under test ([`RustChange::is_code`]) and read in the working tree, so a regular file there
 /// (sources::Sources).
-fn edited_rust(rust: &RustChange) -> (Vec<Edited>, Vec<Finding>) {
+pub(super) fn edited_rust(rust: &RustChange) -> (Vec<Edited>, Vec<Finding>) {
     let none = BTreeSet::new();
     let (mut edited, mut unread) = (vec![], vec![]);
     for file in &rust.files {
@@ -156,7 +78,7 @@ fn edited_rust(rust: &RustChange) -> (Vec<Edited>, Vec<Finding>) {
 /// run the deadline stops is a `budget-reached` finding beside what the mutants it had tried showed, and each workspace
 /// after it a `not-run` one. A cargo-mutants killed past its grace may leave one of the copy's `.rs` files mutated,
 /// which gremlins, the one tool to run in the copy after it, never builds.
-fn rust_mutants(copy: &ScratchCopy, functions: &[Edited], budget: &Budget) -> Vec<Finding> {
+pub(super) fn rust_mutants(copy: &ScratchCopy, functions: &[Edited], budget: &Budget) -> Vec<Finding> {
     let tree = &copy.tree;
     let mut out = vec![];
     let mut by_path: BTreeMap<&OsStr, Vec<&Edited>> = BTreeMap::new();
@@ -223,16 +145,6 @@ fn package_root(tree: &Path, package: &Path) -> Result<OsString, String> {
         (Some(manifest), _) => Ok(manifest.parent().unwrap_or(Path::new("")).as_os_str().to_os_string()),
         (None, Some(problem)) => Err(problem.strip_suffix('.').unwrap_or(problem).to_string()),
         (None, None) => Err(format!("cargo cannot tell the workspace of `{}`", text::path(nearest.as_os_str()))),
-    }
-}
-
-/// The directory `dir`, from the tree's top, as findings name it, as a Cargo workspace's or a Go module's: `.` for the
-/// top.
-pub(crate) fn dir_name(dir: &OsStr) -> String {
-    if dir.is_empty() {
-        ".".to_string()
-    } else {
-        text::path(dir)
     }
 }
 
@@ -502,6 +414,8 @@ fn not_run(problem: &str) -> Finding {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use serde_json::json;
 
     use super::*;

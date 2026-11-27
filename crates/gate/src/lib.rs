@@ -2,7 +2,6 @@
 //! makes since a base commit and reports on it twice, as the quality file and quality.json (report.rs).
 //! docs/port-differences.md lists where its reports differ from those of the gate up to 0.6.0.
 
-pub mod base_findings;
 pub mod change;
 pub mod changed_tests;
 pub mod clippy;
@@ -13,21 +12,16 @@ pub mod diff;
 pub mod flaky_tests;
 pub mod git;
 pub mod glob;
-pub mod go_at_base;
-pub mod go_mutants;
 pub mod golangci;
 pub mod gotest;
 pub mod judge;
 pub mod junit;
 pub mod linters;
-pub mod mutants;
 pub mod parser_checks;
 pub mod passes_at_base;
 pub mod paths;
 pub mod process;
 pub mod pytest;
-pub mod python_at_base;
-pub mod python_mutants;
 pub mod report;
 #[cfg(test)]
 mod scratch;
@@ -35,6 +29,7 @@ pub mod scratch_directory;
 pub mod settings;
 pub mod sources;
 pub mod suppressions;
+pub mod surviving_mutants;
 pub mod test_commands;
 pub mod text;
 pub mod xml;

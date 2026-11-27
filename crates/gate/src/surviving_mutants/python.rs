@@ -1,4 +1,4 @@
-//! Python's half of the surviving-mutants check (mutants.rs): mutmut mutates the functions a change touches in
+//! Python's half of the surviving-mutants check (mod.rs): mutmut mutates the functions a change touches in
 //! Python code under test, and a function whose mutants its tests do not notice is a finding.
 //!
 //! mutmut 3 (3.8.0 here) is bounded to the functions the change edits like this. Its own selector, `mutmut run` with
@@ -24,13 +24,14 @@ use toml::Table;
 use crate::copies::{finding, OnCopy, ScratchCopy};
 use crate::glob::fnmatch;
 use crate::change::{Change, MUTMUT_STATE};
-use crate::mutants::{KILL_WAIT, STOP_GRACE, SURVIVOR_EXAMPLES};
 use crate::sources::{python_test, PythonChange};
 use crate::paths::{normpath, real_path};
 use crate::process::{self, run_with, Extras, Finished};
 use crate::pytest::{self, truthy, Setup};
 use crate::report::Finding;
 use crate::text;
+
+use super::{KILL_WAIT, STOP_GRACE, SURVIVOR_EXAMPLES};
 
 /// What the end of a header's line gets for mutmut to skip the def or class whole.
 const SKIP: &[u8] = b"  # pragma: no mutate block";
@@ -92,7 +93,8 @@ pub struct Mutmut<'a> {
 /// on either side ([`edited`]): an edit to those alone changes nothing mutmut mutates, while one to its signature alone
 /// can change what its body does, and one to a pragma which of its lines mutmut mutates. Reports at its def each such
 /// function with mutants its tests did not notice (`survived`), with how many of the mutants tried they were and what
-/// the first mutants::SURVIVOR_EXAMPLES change, as a line before and after; and each one no test calls (`untested`).
+/// the first surviving_mutants::SURVIVOR_EXAMPLES change, as a line before and after; and each one no test calls
+/// (`untested`).
 ///
 /// mutmut runs by the project's Python (change::Change::python) on the copy, without what the tree tracks under
 /// mutmut's state, so it starts without a cache; it changes the copy's Python files, its pyproject.toml's
@@ -113,7 +115,7 @@ pub struct Mutmut<'a> {
 /// one: tests under more than one are a `not-run` finding naming them. A mutmut that cannot start, fails, or whose
 /// results cannot be listed, rules that name no source_paths or no rules at all, and a changed file that cannot be
 /// read or parsed are `not-run` findings too, saying so.
-pub fn python_mutants<'a>(
+pub(super) fn python_mutants<'a>(
     python: &'a PythonChange,
     mutmut: &Mutmut,
     seconds: u64,
@@ -462,10 +464,11 @@ impl TreeCopy<'_> {
     /// mutmut with `args`, run at the copy's top for at most `timeout`, and what it printed; `stopped` when the
     /// timeout ended it. Errs when it cannot be started.
     ///
-    /// It is stopped softly, with SIGINT and mutants::STOP_GRACE: on SIGINT mutmut stops trying mutants and keeps
-    /// the results it has. So it returns within `timeout`, mutants::STOP_GRACE and mutants::KILL_WAIT. Its temporary
-    /// files, and those of the tests it runs, go into the copy's .tmp, so that what a test it killed left goes with
-    /// the copy. Its mutant names and diffs hold paths and source lines, in which only `\n` ends a line.
+    /// It is stopped softly, with SIGINT and surviving_mutants::STOP_GRACE: on SIGINT mutmut stops trying mutants and
+    /// keeps the results it has. So it returns within `timeout`, surviving_mutants::STOP_GRACE and
+    /// surviving_mutants::KILL_WAIT. Its temporary files, and those of the tests it runs, go into the copy's .tmp, so
+    /// that what a test it killed left goes with the copy. Its mutant names and diffs hold paths and source lines, in
+    /// which only `\n` ends a line.
     fn mutmut(&self, args: &[&str], timeout: Duration) -> std::io::Result<Finished> {
         let tmp = self.tree.join(".tmp");
         std::fs::create_dir_all(&tmp)?;
@@ -1129,8 +1132,9 @@ fn mutmut_pragma(comment: &str) -> Option<&'static str> {
     Some(["block", "start", "end"].into_iter().find(|form| word == Some(form)).unwrap_or("bare"))
 }
 
-/// The finding for the mutants `survived` of `f`, of the `tried` ones mutmut ran against its tests: how many, and
-/// what the first mutants::SURVIVOR_EXAMPLES of them change, each as `mutmut show` gives it in `copy` by `deadline`.
+/// The finding for the mutants `survived` of `f`, of the `tried` ones mutmut ran against its tests: how many, and what
+/// the first surviving_mutants::SURVIVOR_EXAMPLES of them change, each as `mutmut show` gives it in `copy` by
+/// `deadline`.
 fn survivors(copy: &TreeCopy, f: &Function, survived: &[&str], tried: usize, deadline: Instant) -> Finding {
     let shown = survived.iter().take(SURVIVOR_EXAMPLES).filter_map(|mutant| example(copy, &f.unit, mutant, deadline));
     let examples: Vec<String> = shown.collect();

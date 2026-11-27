@@ -19,13 +19,13 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   the gate's build although real_gate does not use it." `ci/octoflow-check.sh` runs it; octoflow's script takes only
   a directory. Closes with an option there to install named tools only (an octoflow-ai change), which the check then
   passes `gitleaks`.
-- **A Python function a removed mutmut pragma frees is mutated only when the diff touches its lines.** As
-  cross-review 38 put it (round 3, 2026-11-14): "a pragma change only selects functions whose lines the diff
-  touches. Deleting a `start`/`end` pair around f2, f3, f4 puts removal points next to f2 and f4 but none in f3. f3
-  becomes mutable and is never tried. The same goes for a block pragma removed with a blank line between it and the
-  def, or an `end` moved up." Selection is the `touched` closure of `python_mutants` in
-  `crates/gate/src/python_mutants.rs`; it behaved so before todo/33 too. Closes with a function counted as touched
-  when the span of a pragma the change adds, removes or moves covers it.
+- **A Python function a removed mutmut pragma frees is mutated only when the diff touches its lines.** As cross-review
+  38 put it (round 3, 2026-11-14): "a pragma change only selects functions whose lines the diff touches. Deleting a
+  `start`/`end` pair around f2, f3, f4 puts removal points next to f2 and f4 but none in f3. f3 becomes mutable and is
+  never tried. The same goes for a block pragma removed with a blank line between it and the def, or an `end` moved up."
+  Selection is the `touched` closure of `python_mutants` in `crates/gate/src/surviving_mutants/python.rs`; it behaved so
+  before todo/33 too. Closes with a function counted as touched when the span of a pragma the change adds, removes or
+  moves covers it.
 - **A Go test helper is followed only in the calling test's file.** As cross-review 37 put it (F5, 2026-11-14):
   "`Walk` is per file, and `keep_helper_calls` drops a test's call of a function not among this file's helpers.
   Base: calc_test.go holds `check` (with `t.Errorf`) and `TestAdd` calling `check(t, Add(1, 2), 3)`. The change moves
@@ -37,7 +37,7 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   2026-11-14): "`Walk::function` (`testing.rs:154`) recomputes `binds::bindings` for every top-level function,
   helpers whose assertions are dropped included, although `lang_go::read` already computes the file's bindings.
   `testing::constants` runs for every Go file (`crates/lang-go/src/lib.rs:78`), and only a test file's are used.
-  `mark_for_mutmut` (`crates/gate/src/python_mutants.rs:681-690`) stats every file of the copy, then
+  `mark_for_mutmut` (`crates/gate/src/surviving_mutants/python.rs`) stats every file of the copy, then
   `outside_mutmut` rebuilds the source_paths and pattern vectors for each one. Nothing here gives a wrong result."
   Closes with each computed once per file or copy: the function's bindings taken from the file's, the constants
   only where a test may name them, and mutmut's patterns built once.
@@ -45,12 +45,12 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   it (F9, 2026-11-14): "`CrateLayout::of` (:366-372) reads and parses every `.rs` of the copy before any deadline
   check." In a large tree that spends `--base-run-budget` with no `budget-reached` to show for it, and the work is
   done even when every changed test's target could be told from its package alone. `CrateLayout::of` is in
-  `crates/gate/src/passes_at_base.rs`. Closes by checking the deadline while the files are read, or by parsing only
+  `crates/gate/src/passes_at_base/rust.rs`. Closes by checking the deadline while the files are read, or by parsing only
   the packages that hold a changed test.
 - **surviving-mutants takes an option's value given apart from it for a path of the test selection.** As
   cross-review 33 put it (F3, 2026-11-13): "an option's value counts as a path:
   `pytest_add_cli_args_test_selection = ["tests/", "--ignore", "tests/legacy"]` with `tests/legacy/pytest.ini` gives
-  two groups and `not-run`." `test_places` (`crates/gate/src/python_mutants.rs`) cannot tell which of pytest's
+  two groups and `not-run`." `test_places` (`crates/gate/src/surviving_mutants/python.rs`) cannot tell which of pytest's
   options take a value. docs/quality-gate.md says so. Closes by asking pytest for the paths it starts from, or by
   skipping the value of the options that take one, as `--ignore`, `--deselect` and `-k`.
 - **Rust and Go `expected-value-changed` keep a literal's sign and brackets out of the literal.** As cross-review 33
@@ -91,23 +91,23 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   the last CamelCase word is matched too (its `camel`, gate-rust-checks ticket 04), which is Rust's counterpart. Closes,
   if the run metrics show such names recur, with Python's matched the same way. Moved from octoflow-ai on 2026-11-05.
 - **`passes-at-base` builds a Rust package's dependencies anew on every run.** `base_run_findings`
-  (`crates/gate/src/passes_at_base.rs`) gives each run a target directory in its scratch directory, outside the copy, so
-  every gate run compiles the base's dependencies before it runs a test, within `--base-run-budget`; on a package of
-  many crates that may use the whole budget, which is a `budget-reached` finding. Not measured on Jenkins:
+  (`crates/gate/src/passes_at_base/rust.rs`) gives each run a target directory in its scratch directory, outside the
+  copy, so every gate run compiles the base's dependencies before it runs a test, within `--base-run-budget`; on a
+  package of many crates that may use the whole budget, which is a `budget-reached` finding. Not measured on Jenkins:
   gate-rust-checks ticket 05 asked for the Gate stage's added time, which needs a Jenkins build of a Rust change on the
   branch. Decided against for now: the working tree's own `target/`, where the base's build would overwrite the binaries
   Cargo copies up to `target/debug`. Closes, if the budget runs out on real changes, with a target directory that lasts
   between gate runs outside every workspace, as the lock file of octoflow-ai's `ci/cargo-lock.sh` does. Moved from
   octoflow-ai on 2026-11-05.
 - **`surviving-mutants` splits its budget by language, not by work, and builds Rust anew.** `surviving_mutants`
-  (`crates/gate/src/mutants.rs`) gives mutmut, cargo-mutants and gremlins in turn an equal share of what is left of the
-  `--mutation-budget` among the languages still to run, however many functions each language has; and cargo-mutants
-  builds into a new target directory outside the check's copy of the working tree on every run, so it compiles the
-  workspace and its dependencies before its baseline. Not measured on Jenkins: gate-rust-checks ticket 06 asked for the
-  Gate stage's added time on a Rust change, which needs a Jenkins build on the branch. Found by ticket 06 (2026-10-30).
-  Closes, if the run metrics show any language starved, with the budget split by each language's changed functions, and
-  a target directory that lasts between gate runs (the same as passes-at-base's above). Moved from octoflow-ai on
-  2026-11-05.
+  (`crates/gate/src/surviving_mutants/mod.rs`) gives mutmut, cargo-mutants and gremlins in turn an equal share of what
+  is left of the `--mutation-budget` among the languages still to run, however many functions each language has; and
+  cargo-mutants builds into a new target directory outside the check's copy of the working tree on every run, so it
+  compiles the workspace and its dependencies before its baseline. Not measured on Jenkins: gate-rust-checks ticket 06
+  asked for the Gate stage's added time on a Rust change, which needs a Jenkins build on the branch. Found by ticket 06
+  (2026-10-30). Closes, if the run metrics show any language starved, with the budget split by each language's changed
+  functions, and a target directory that lasts between gate runs (the same as passes-at-base's above). Moved from
+  octoflow-ai on 2026-11-05.
 - **`vague-names` reports a name an undecorated override cannot change.** A `def handle(self)` in a
   `socketserver.BaseRequestHandler` subclass, or a parameter the overridden signature names, has no fix; only a method
   marked `@override` is skipped (`marked_override` in `crates/lang-python/src/lib.rs`). Raised by the cross-review of
@@ -128,10 +128,10 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   Moved from octoflow-ai on 2026-11-05.
 - **A test file that cannot be imported at the base hides all its changed tests from `passes-at-base`.** A module-level
   import of something the change adds makes pytest's collection of the whole file fail at the base, which `collect`
-  (`crates/gate/src/python_at_base.rs`) takes as the expected outcome for every changed test in it, including ones that
-  would pass there. Accepted: the check reports only, and splitting the file's tests from its imports would mean
-  rewriting them. Closes, if its run metrics show these files are common, by importing such names inside the tests that
-  use them, or by running each test with the failing import stubbed. Moved from octoflow-ai on 2026-11-05.
+  (`crates/gate/src/passes_at_base/python.rs`) takes as the expected outcome for every changed test in it, including
+  ones that would pass there. Accepted: the check reports only, and splitting the file's tests from its imports would
+  mean rewriting them. Closes, if its run metrics show these files are common, by importing such names inside the tests
+  that use them, or by running each test with the failing import stubbed. Moved from octoflow-ai on 2026-11-05.
 - **A test file whose name is not UTF-8 is never rerun by `flaky-tests`.** pytest-randomly 5.0.0 hashes each node id as
   strict UTF-8 (`pytest_randomly._crc32`, called from `pytest_runtest_setup` and its neighbours) and stops with an
   internal error, exit status 3. `run` in `crates/gate/src/pytest.rs` already lets pytest print such an id
@@ -140,17 +140,18 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   of `flaky-tests` (F10, 2026-10-23). Closes when pytest-randomly hashes the id's bytes, or when the reruns can seed
   such a test without it. Moved from octoflow-ai on 2026-11-05.
 - **`--test-contexts` collects mutmut's selection in a fuller copy than mutmut runs it in.** `narrowed_table`
-  (`crates/gate/src/python_mutants.rs`) runs `pytest --collect-only` in the gate's copy of the tree, which holds every
-  tracked file; mutmut's own `mutants/` holds only `source_paths`, `also_copy`, `tests/`, `test/` and a few top-level
-  files. A selection that reaches outside those, such as none in a project with tests under `other/`, can name a
-  recorded test there that mutmut's pytest cannot find, and mutmut's run fails as `not-run`. Closes with the collection
-  run in a copy laid out as mutmut lays out `mutants/`, or by mutmut itself. Moved from octoflow-ai on 2026-11-05.
+  (`crates/gate/src/surviving_mutants/python.rs`) runs `pytest --collect-only` in the gate's copy of the tree, which
+  holds every tracked file; mutmut's own `mutants/` holds only `source_paths`, `also_copy`, `tests/`, `test/` and a few
+  top-level files. A selection that reaches outside those, such as none in a project with tests under `other/`, can name
+  a recorded test there that mutmut's pytest cannot find, and mutmut's run fails as `not-run`. Closes with the
+  collection run in a copy laid out as mutmut lays out `mutants/`, or by mutmut itself. Moved from octoflow-ai on
+  2026-11-05.
 - **mutmut reads a symlinked `.py` file in the surviving-mutants copy.** `copy_tracked` (`crates/gate/src/copies.rs`)
-  copies a tracked symlink as a link, `mark_for_mutmut` (`crates/gate/src/python_mutants.rs`) leaves links unmarked, and
-  mutmut 3.8.0's `walk_all_files` lists a symlink to a file and `create_mutants_for_file` opens it. So once any changed
-  function starts mutmut, a change adding `x.py -> calc.py` has every function of `calc.py` mutated a second time, as
-  `x.py`, spending the budget on mutants no finding reports; and `x.py -> /dev/zero` or a FIFO reads without end or
-  blocks until the budget runs out. The gate's own selection skips such links (`Stored::files` in
+  copies a tracked symlink as a link, `mark_for_mutmut` (`crates/gate/src/surviving_mutants/python.rs`) leaves links
+  unmarked, and mutmut 3.8.0's `walk_all_files` lists a symlink to a file and `create_mutants_for_file` opens it. So
+  once any changed function starts mutmut, a change adding `x.py -> calc.py` has every function of `calc.py` mutated a
+  second time, as `x.py`, spending the budget on mutants no finding reports; and `x.py -> /dev/zero` or a FIFO reads
+  without end or blocks until the budget runs out. The gate's own selection skips such links (`Stored::files` in
   `crates/gate/src/sources.rs`). Raised by the cross-review of `gate-python-files` (R2-F1, 2026-10-26); rests on
   mutmut's source, not on a run. Closes with the copy or `mark_for_mutmut` keeping links out of mutmut's walk, without
   breaking a tracked link the tests import through, and a test that also edits a real function. Moved from octoflow-ai
@@ -171,8 +172,8 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   own parser refuses to parse such a file. Found with gate-standalone/15 (2026-11-10). Closes with the walk on a
   worklist throughout, or a depth past which the file is `not-scored`.
 - **The gate's copies still hold other linked configuration as links.** `own_pyproject`
-  (`crates/gate/src/python_mutants.rs`) makes only mutmut's copy's `pyproject.toml` a file. As cross-review 14 noted
-  (round 4, 2026-11-10, not recorded as a finding): "the other files `pytest::inifile` looks for (pytest.toml,
+  (`crates/gate/src/surviving_mutants/python.rs`) makes only mutmut's copy's `pyproject.toml` a file. As cross-review 14
+  noted (round 4, 2026-11-10, not recorded as a finding): "the other files `pytest::inifile` looks for (pytest.toml,
   pytest.ini, tox.ini, setup.cfg; `pytest.rs:182`) are still copied as the tree's links, so one that is a relative link
   out of the tree is taken for no configuration in mutmut's copy, as F16 was for pyproject.toml; and flaky-tests' and
   passes-at-base's copies still hold a linked pyproject.toml as the link." And `own_pyproject` "reads what the tree's
@@ -184,14 +185,11 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
     `Sources::read` did, and is reached three times a run (flaky_tests, python_at_base, python_mutants)". It now takes
     the bytes `Sources::read` read (architecture-deepening/01), but still parses them into units on each call.
     Closes with the three checks given the units read once.
-  - F9, `crates/gate/src/mutants.rs`: "The Python halves and the Rust halves' modules import each other (...
-    `mutants` <-> `python_mutants` for `KILL_WAIT`, `STOP_GRACE`, `SURVIVOR_EXAMPLES`), consts widened to `pub(crate)`
-    to cross the cycle." Go's half, `go_mutants`, imports those and more from `mutants` the same way. Closes with what
-    the halves of a check share in a module none of them is, as passes-at-base's findings are in `base_findings.rs`.
-    The dependency-cycles check (structural-checks/01) fails a change that closes such a cycle from now on, but not one
-    the base has that the change adds no import of a new file to, so these stay until a change breaks them; an import
-    a change adds between two files of such a cycle that were not yet joined does fail it. The run over 50 commits
-    found one more such cycle in `crates/gate`, `golangci` <-> `linters`.
+  - F9's remnant, `crates/gate/src/golangci.rs` and `crates/gate/src/linters.rs`: the run of the dependency-cycles
+    check over 50 commits found these two importing each other, the cycle of F9's kind left in `crates/gate` once each
+    runner check's halves import only their check's `mod.rs` (architecture-deepening/03). The check fails a change
+    that closes such a cycle, but not one the base has that the change adds no import of a new file to, so it stays
+    until a change breaks it. Closes with what the two share in a module neither of them is.
   - F12, `crates/gate/src/glob.rs`: "`fnmatch` arrives as an `across_slashes` flag through `translate_name` and
     `bracket` with two added match arms, the bolted-on flag the user's CLAUDE.md design rule names; it also compiles a
     Regex on each call." Closes with fnmatch's translation a function of its own, compiled once a pattern.

@@ -885,7 +885,7 @@ fn an_unparsable_test_file_leaves_the_others_judged() {
 #[test]
 fn the_imports_plugin_writes_a_worker_s_report_beside_the_controller_s() {
     let repo = calc();
-    let src = concat!(env!("CARGO_MANIFEST_DIR"), "/src");
+    let src = concat!(env!("CARGO_MANIFEST_DIR"), "/src/passes_at_base");
     let report = repo.outside.join("imports.json");
     // A pytest the gate runs inside an xdist worker of its own inherits PYTEST_XDIST_WORKER, but is no worker.
     let driver = "\

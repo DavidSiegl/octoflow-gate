@@ -1,4 +1,4 @@
-//! Python's half of the passes-at-base check (passes_at_base.rs): the Python tests a change adds or edits, run with
+//! Python's half of the passes-at-base check (mod.rs): the Python tests a change adds or edits, run with
 //! pytest against the code the change started from.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -11,7 +11,6 @@ use std::time::Instant;
 
 use regex::bytes::Regex;
 
-use crate::base_findings::budget_reached;
 use crate::copies::{failed, finding, Budget, OnCopy, ScratchCopy};
 use crate::change::Change;
 use crate::junit::{junit_outcomes, Outcome};
@@ -21,6 +20,8 @@ use crate::process::Finished;
 use crate::pytest::{self, changed_tests, junit_case, labels, listed_tests, node_parts, Group, Setup, Tests};
 use crate::report::Finding;
 use crate::text;
+
+use super::budget_reached;
 
 /// The module name of the pytest plugin each run at the base loads with `-p`, written as `<name>.py` to a directory
 /// on the run's path; the file itself says what it reports, and how.
@@ -57,7 +58,7 @@ const COLLECTING: &str = "collecting the changed tests at the base";
 /// after it are not run, each a `not-run` finding saying so. A pytest that cannot start, stops before it collects,
 /// fails to load a conftest.py through no file the change edits, stops with another usage error, or writes no readable
 /// report, and a changed test file that cannot be read or parsed are `not-run` findings saying so.
-pub fn python_at_base<'a>(python: &'a PythonChange, seconds: u64) -> (Vec<Finding>, Option<OnCopy<'a>>) {
+pub(super) fn python_at_base<'a>(python: &'a PythonChange, seconds: u64) -> (Vec<Finding>, Option<OnCopy<'a>>) {
     if !python.edits_code() {
         return (vec![], None);
     }

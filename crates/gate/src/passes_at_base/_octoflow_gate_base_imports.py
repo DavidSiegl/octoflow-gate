@@ -1,6 +1,6 @@
 """The pytest plugin by which a run of the changed tests at the base tells where its modules came from.
 
-The Rust gate writes this file beside the copy of the base and loads it with `-p` (python_at_base.rs). At the end of
+The Rust gate writes this file beside the copy of the base and loads it with `-p` (passes_at_base/python.rs). At the end of
 the session it writes, as a JSON object to the file --gate-imports-report names, each module in sys.modules whose
 __file__ lies under the directory --gate-imports-root names: its name, and that file's path from there.
 

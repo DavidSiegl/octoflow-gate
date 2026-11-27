@@ -21,6 +21,9 @@ use crate::text;
 
 use super::{dir_name, edits, not_reached, not_run, unread_not_run, Edited, STOP_GRACE, SURVIVOR_EXAMPLES};
 
+/// This half's language, as its `not-run` findings name it.
+const LANGUAGE: &str = "Go";
+
 /// How each status gremlins 0.6 prints for a mutant counts: a mutant that LIVED survived its module's tests; a
 /// KILLED one, and one whose tests outlived gremlins' timeout, did not; one NOT COVERED is on a line no test runs, so
 /// gremlins did not try it, and could not have found it caught. NOT VIABLE, which does not build, and SKIPPED, outside
@@ -139,7 +142,7 @@ pub(super) fn go_mutants(copy: &ScratchCopy, base: &str, functions: &[Edited], b
     // mutmut, run in the copy before gremlins, leaves its state there: copies of its source paths and tests, which
     // gremlins' `./...` would take for more of a module's packages, whose tests may fail there.
     if let Err(e) = remove_entry(&tree.join(MUTMUT_STATE)) {
-        out.push(not_run(&format!("could not remove mutmut's state, `{MUTMUT_STATE}/`, from the copy: {e}"), "Go"));
+        out.push(not_run(&format!("could not remove mutmut's state, `{MUTMUT_STATE}/`, from the copy: {e}"), LANGUAGE));
         return out;
     }
     for (n, (module, mine)) in modules.iter().enumerate() {
@@ -148,7 +151,7 @@ pub(super) fn go_mutants(copy: &ScratchCopy, base: &str, functions: &[Edited], b
         out.extend(found);
         if stopped {
             out.extend(modules[n + 1..].iter().map(|(later, _)| {
-                not_reached("gremlins", &format!("the module at `{}`", dir_name(later.as_os_str())), "Go")
+                not_reached("gremlins", &format!("the module at `{}`", dir_name(later.as_os_str())), LANGUAGE)
             }));
             break;
         }
@@ -204,7 +207,10 @@ fn run_module(run: &Run, module: &Path, functions: &[&Edited], budget: &Budget) 
     };
     let path = match git_for_gremlins(run.scratch, &diff_of(module, functions)) {
         Ok(path) => path,
-        Err(e) => return (vec![not_run(&format!("could not write the change's diff for gremlins: {e}"), "Go")], false),
+        Err(e) => {
+            let problem = format!("could not write the change's diff for gremlins: {e}");
+            return (vec![not_run(&problem, LANGUAGE)], false);
+        }
     };
     // gremlins also takes these from a .gremlins.yaml in the module, which could silence the lines the gate reads, add
     // a threshold whose exit would read as a failure, or narrow the timeout: the command line pins them, every status
@@ -240,7 +246,7 @@ fn run_module(run: &Run, module: &Path, functions: &[&Edited], budget: &Budget) 
     let extras = Extras { env: &env, soft_stop: Some(STOP_GRACE), ..Extras::default() };
     match run_with(&argv, &run.tree.join(module), left, &extras) {
         Ok(done) => (run_findings(&done, module, functions, &place, budget.seconds), done.stopped),
-        Err(e) => (vec![not_run(&format!("could not start gremlins: {e}"), "Go")], false),
+        Err(e) => (vec![not_run(&format!("could not start gremlins: {e}"), LANGUAGE)], false),
     }
 }
 
@@ -281,7 +287,8 @@ fn run_findings(done: &Finished, module: &Path, functions: &[&Edited], place: &s
         let stderr = text::lossless(&done.stderr);
         let error = stderr.split('\n').find_map(|line| line.strip_prefix("ERROR: ")).map(text::shortened);
         let said = error.unwrap_or_else(|| done.said());
-        return vec![not_run(&format!("gremlins failed in {place}, exiting with status {}: {said}", done.status), "Go")];
+        let problem = format!("gremlins failed in {place}, exiting with status {}: {said}", done.status);
+        return vec![not_run(&problem, LANGUAGE)];
     }
     let mutants = printed_mutants(&done.stdout, module);
     let mut out = function_findings(functions, &mutants);

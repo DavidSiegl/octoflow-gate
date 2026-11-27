@@ -234,7 +234,8 @@ fn copy_base_with_tests(
     let mut empty = unpack_commit(&change.root, &change.base, dest, archive, "")?;
     // A path the base tracks has no link above it there; it is a directory when the base records a submodule there.
     for old in change.files.iter().filter_map(|f| f.before.as_ref()).filter(|p| beside(p)) {
-        remove_entry(&dest.join(old))?;
+        let gone = dest.join(old);
+        remove_entry(&gone).map_err(|e| failed("remove", &gone, &e))?;
         let removed = text::path(old);
         empty.retain(|(name, _)| name != &removed && !name.starts_with(&format!("{removed}/")));
     }
@@ -243,7 +244,7 @@ fn copy_base_with_tests(
         let Ok(meta) = src.symlink_metadata() else { continue };
         let dst = unlinked_path(dest, new)?;
         // A directory the base had where the change has a file or a link: emptied by the removals above, or not.
-        remove_entry(&dst)?;
+        remove_entry(&dst).map_err(|e| failed("remove", &dst, &e))?;
         // git tracks files, links and commits, so a directory, not a link to one, is where the change records a
         // submodule's commit. Its checkout's own `.git` would lead nowhere in the copy: it is written as the files of
         // the commit the checkout is at.
@@ -263,14 +264,13 @@ fn copy_base_with_tests(
 }
 
 /// Removes what is at `path`, a directory with all it holds, nothing when there is nothing, and never through a link
-/// at `path` itself. Errs, a clause, when it cannot.
-pub fn remove_entry(path: &Path) -> Result<(), String> {
+/// at `path` itself. Errs with the system's error, which does not name `path`, when it cannot.
+pub(crate) fn remove_entry(path: &Path) -> std::io::Result<()> {
     match path.symlink_metadata() {
         Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(path),
         Ok(_) => std::fs::remove_file(path),
         Err(_) => Ok(()),
     }
-    .map_err(|e| failed("remove", path, &e))
 }
 
 /// Why a submodule is left empty when the working tree has no checkout of it.

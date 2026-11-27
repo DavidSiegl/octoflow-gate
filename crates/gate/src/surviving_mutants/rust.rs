@@ -17,6 +17,9 @@ use crate::text;
 
 use super::{dir_name, edits, not_reached, not_run, unread_not_run, Edited, STOP_GRACE, SURVIVOR_EXAMPLES};
 
+/// This half's language, as its `not-run` findings name it.
+const LANGUAGE: &str = "Rust";
+
 /// How each outcome cargo-mutants 27 writes in mutants.out/outcomes.json (a scenario's "summary") counts: a missed
 /// mutant survived; a caught one, and one whose tests outlived cargo-mutants' timeout ([`MINIMUM_TEST_TIMEOUT`]), did
 /// not; an unviable one, which does not build, was not tried. "Success" and "Failure" are the unmutated baseline's.
@@ -101,7 +104,7 @@ pub(super) fn rust_mutants(copy: &ScratchCopy, functions: &[Edited], budget: &Bu
         out.extend(found);
         if stopped {
             out.extend(roots[n + 1..].iter().map(|(later, _)| {
-                not_reached("cargo-mutants", &format!("the workspace at `{}`", dir_name(later)), "Rust")
+                not_reached("cargo-mutants", &format!("the workspace at `{}`", dir_name(later)), LANGUAGE)
             }));
             break;
         }
@@ -174,7 +177,8 @@ fn run_workspace(run: &Run, root: &OsStr, functions: &[&Edited], budget: &Budget
         return (vec![finding(None, None, "budget-reached", message)], true);
     };
     if let Err(e) = std::fs::create_dir_all(run.scratch) {
-        return (vec![not_run(&format!("could not make the directory for cargo-mutants' output: {e}"), "Rust")], false);
+        let problem = format!("could not make the directory for cargo-mutants' output: {e}");
+        return (vec![not_run(&problem, LANGUAGE)], false);
     }
     // --in-place mutates the copy itself, which cargo-mutants would otherwise copy once more; mutants.out and the
     // build go to scratch, outside it, as the tools after it run in the copy.
@@ -197,7 +201,7 @@ fn run_workspace(run: &Run, root: &OsStr, functions: &[&Edited], budget: &Budget
     let extras = Extras { env: &env, soft_stop: Some(STOP_GRACE), ..Extras::default() };
     match run_with(&argv, run.tree, left, &extras) {
         Ok(done) => (run_findings(&done, &run.scratch.join("mutants.out"), root, budget.seconds), done.stopped),
-        Err(e) => (vec![not_run(&format!("could not start cargo-mutants: {e}"), "Rust")], false),
+        Err(e) => (vec![not_run(&format!("could not start cargo-mutants: {e}"), LANGUAGE)], false),
     }
 }
 
@@ -219,7 +223,7 @@ fn run_findings(done: &Finished, output: &Path, root: &OsStr, budget: u64) -> Ve
                 "cargo-mutants, exiting with status {}, wrote no outcomes the gate can read ({problem}): {}",
                 done.status,
                 done.said()
-            ), "Rust")]
+            ), LANGUAGE)]
         }
     };
     let place = format!("the workspace at `{}`", dir_name(root));
@@ -234,14 +238,14 @@ fn run_findings(done: &Finished, output: &Path, root: &OsStr, budget: u64) -> Ve
         return vec![not_run(&format!(
             "the unmutated baseline of {place} did not pass ({summary}, as cargo-mutants words it), so it tried no \
              mutant; {said}"
-        ), "Rust")];
+        ), LANGUAGE)];
     }
     let prefix = if root.is_empty() { vec![] } else { [root.as_bytes(), b"/"].concat() };
     let mut out = match survivors(&prefix, &outcomes) {
         Ok(out) => out,
         Err(e) => {
             let problem = format!("cargo-mutants wrote a mutant's outcome the gate cannot read ({e})");
-            return vec![not_run(&problem, "Rust")];
+            return vec![not_run(&problem, LANGUAGE)];
         }
     };
     if done.stopped {

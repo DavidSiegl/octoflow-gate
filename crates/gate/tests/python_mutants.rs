@@ -454,6 +454,26 @@ fn the_budget_counts_tried_mutants_as_each_function_does() {
 }
 
 #[test]
+fn a_share_that_readying_the_run_used_up_starts_no_mutmut() {
+    let repo = calc();
+    change_the_functions(&repo, &["checked"]);
+    // Reading the contexts, the one call run as `python -I`, outlasts the 1 second budget, and fails.
+    let mutmut = mutmut_script(&format!("touch {}", quoted(ran(&repo).to_str().unwrap())), Listing::Prints(""), &[]);
+    let python = common::fake_python(&repo, &format!("[ \"$1\" = -I ] && {{ sleep 2; exit 1; }}\n{mutmut}"));
+    let data_file = repo.outside.join("contexts");
+    std::fs::write(&data_file, b"").unwrap();
+    let how = Gate { budget: Some(1), test_contexts: Some(data_file), ..Gate::with_python(python) };
+    let found = findings(&repo, how);
+    assert_eq!(places(&found), [whole("not-narrowed"), whole("budget-reached")]);
+    assert_eq!(
+        found[1].3,
+        "budget reached before mutmut started: readying its run took all 1 seconds of `--mutation-budget`, so its \
+         mutants were not tried."
+    );
+    assert!(!ran(&repo).exists());
+}
+
+#[test]
 fn a_directory_for_the_copy_that_cannot_be_made_is_a_finding() {
     let repo = calc();
     change_the_functions(&repo, &[]);

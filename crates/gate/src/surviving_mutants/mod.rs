@@ -23,8 +23,8 @@ use go::{edited_functions, go_mutants};
 use python::python_mutants;
 use rust::{edited_rust, rust_mutants};
 
-/// How long cargo-mutants has, after the SIGINT that stops a run at the deadline, to write what it found and exit
-/// before it is killed, and mutmut as long.
+/// How long cargo-mutants, mutmut and gremlins each have, after the SIGINT that stops a run at the deadline, to write
+/// what they found and exit before they are killed.
 const STOP_GRACE: Duration = Duration::from_secs(10);
 
 /// How many of a function's surviving mutants its finding shows, in the order the mutation tool made them.

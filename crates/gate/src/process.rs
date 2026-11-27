@@ -15,7 +15,7 @@ pub const TOOL_TIMEOUT: u64 = 600;
 
 /// The most the gate waits, after a process has exited or been killed, for the rest of what its group printed and for
 /// the process to be reaped.
-pub const KILL_WAIT: Duration = Duration::from_secs(5);
+pub(crate) const KILL_WAIT: Duration = Duration::from_secs(5);
 
 /// How often the gate looks whether a process has exited, so the most it waits on past the exit.
 const POLL: Duration = Duration::from_millis(50);

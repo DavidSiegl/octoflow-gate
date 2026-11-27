@@ -280,7 +280,7 @@ fn imported_from_working_tree(base_copy: &BaseCopy, imports: &Path) -> Result<Ve
     let mut prefix = imports.file_name().unwrap_or_default().to_os_string();
     prefix.push("-");
     let listed = std::fs::read_dir(folder).and_then(|entries| entries.collect::<std::io::Result<Vec<_>>>());
-    let listed = listed.map_err(|e| format!("{}: {e}", text::path(folder.as_os_str())))?;
+    let listed = listed.map_err(|e| format!("{}: {e}", text::shown_path(folder.as_os_str())))?;
     let mut reports: Vec<_> = listed.into_iter().map(|entry| entry.path()).collect();
     reports.retain(|path| path.file_name().is_some_and(|name| name.as_bytes().starts_with(prefix.as_bytes())));
     reports.sort();
@@ -288,7 +288,7 @@ fn imported_from_working_tree(base_copy: &BaseCopy, imports: &Path) -> Result<Ve
     // Each module a report names, and its file; a later report's entry replaces an earlier one's.
     let mut located: BTreeMap<String, serde_json::Value> = BTreeMap::new();
     for report in reports {
-        let unreadable = |why: String| format!("{}: {why}", text::path(report.as_os_str()));
+        let unreadable = |why: String| format!("{}: {why}", text::shown_path(report.as_os_str()));
         let read = std::fs::read(&report).map_err(|e| unreadable(e.to_string()))?;
         match serde_json::from_slice(&read).map_err(|e| unreadable(e.to_string()))? {
             serde_json::Value::Object(part) => located.extend(part),
@@ -376,7 +376,7 @@ fn outside_failed_conftest(
     let Some(failed) = failing_conftest(collected, &setup.top) else {
         return Err(format!("pytest, {COLLECTING}, exited with status 4: {}", collected.said()));
     };
-    let named = text::path(&failed.conftest);
+    let named = text::shown_path(&failed.conftest);
     if !failed.through.iter().any(|path| change.changed.contains_key(path)) {
         return Err(format!(
             "pytest, {COLLECTING}, could not load `{named}`, which fails through no file the change edits, so the \

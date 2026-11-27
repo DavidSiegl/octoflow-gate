@@ -273,7 +273,7 @@ fn untested_by_contexts(functions: &[&Function]) -> Vec<Finding> {
 /// an only_mutate, do_not_mutate, do_not_mutate_patterns, also_copy, pytest_add_cli_args,
 /// pytest_add_cli_args_test_selection or tests_dir that is not a list of strings: the keys [`strings`] reads.
 fn mutmut_table(rules: &Path) -> Result<Table, String> {
-    let named = text::path(rules.as_os_str());
+    let named = text::shown_path(rules.as_os_str());
     let unread = |why: String| format!("could not read [tool.mutmut] in {named}: {why}");
     let source = std::fs::read_to_string(rules).map_err(|e| unread(e.to_string()))?;
     let whole: Table = source.parse().map_err(|e: toml::de::Error| unread(e.message().to_string()))?;
@@ -390,7 +390,7 @@ fn recorded_tests(
     functions: &[&Function],
     data_file: &Path,
 ) -> Result<BTreeSet<String>, String> {
-    let named = text::one_line(&text::path(data_file.as_os_str()));
+    let named = text::one_line(&text::shown_path(data_file.as_os_str()));
     let span = |f: &Function| {
         let (line, last) = (f.unit.line, f.unit.lines.last);
         json!([real_path(&root.join(&f.path)).to_string_lossy(), if last > line { line + 1 } else { line }, last])
@@ -401,7 +401,7 @@ fn recorded_tests(
     let argv = [&argv[..], &[data_file.as_os_str(), spans.as_ref()]].concat();
     let read = process::run(&argv, root, Duration::from_secs(TEST_CONTEXTS_TIMEOUT))
         .map_err(|e| {
-            let python = text::path(python.as_os_str());
+            let python = text::shown_path(python.as_os_str());
             format!("coverage.py could not be started with the Python `{python}` to read `{named}`: {e}")
         })?;
     if read.stopped {
@@ -430,7 +430,7 @@ fn recorded_tests(
         ));
     }
     if let Some((f, _)) = functions.iter().zip(&found.reached).find(|(_, tests)| tests.is_none()) {
-        return Err(format!("`{named}` did not measure `{}`", text::one_line(&text::path(&f.path))));
+        return Err(format!("`{named}` did not measure `{}`", text::one_line(&text::shown_path(&f.path))));
     }
     let tests: BTreeSet<String> = found.reached.into_iter().flatten().flatten().collect();
     rooted_elsewhere(root, &tests).map_or(Ok(tests), Err)
@@ -479,7 +479,7 @@ impl TreeCopy<'_> {
 
     /// The program that runs Python, as a finding names it when it cannot be started.
     fn python_named(&self) -> String {
-        text::path(self.python.as_os_str())
+        text::shown_path(self.python.as_os_str())
     }
 
     /// mutmut's state in the copy: its copy of the code with the mutants, and each module's results in
@@ -654,7 +654,7 @@ fn rooted_elsewhere(root: &Path, recorded: &BTreeSet<String>) -> Option<String> 
 /// runs all its tests under one.
 fn several_configurations(groups: &[pytest::Group]) -> String {
     let named = |group: &pytest::Group| match group.inifile_in_tree() {
-        Some(inifile) => format!("`{}`", text::one_line(&text::path(inifile.as_os_str()))),
+        Some(inifile) => format!("`{}`", text::one_line(&text::shown_path(inifile.as_os_str()))),
         None => "the empty one of tests with none".into(),
     };
     let names: Vec<String> = groups.iter().map(named).collect();
@@ -666,7 +666,10 @@ fn several_configurations(groups: &[pytest::Group]) -> String {
 
 /// `path` as a `[tool.mutmut]` setting can hold it; errs, saying so, when it is not UTF-8.
 fn utf8(path: &Path) -> Result<String, String> {
-    let named = || format!("{} is not UTF-8, which a [tool.mutmut] setting must be", text::path(path.as_os_str()));
+    let named = || {
+        let shown = text::shown_path(path.as_os_str());
+        format!("{shown} is not UTF-8, which a [tool.mutmut] setting must be")
+    };
     path.to_str().map(String::from).ok_or_else(named)
 }
 
@@ -949,7 +952,7 @@ fn statuses_after_run(copy: &TreeCopy, stopped: bool, listing: &Budget) -> Resul
         Ok(statuses) => Ok((statuses, cut_off)),
         Err(problem) if cut_off.is_empty() => Err(problem),
         Err(problem) => {
-            let named: Vec<String> = cut_off.iter().map(|path| text::path(path)).collect();
+            let named: Vec<String> = cut_off.iter().map(|path| text::shown_path(path)).collect();
             let lost = text::series(&named, Some(5));
             Err(format!("{problem} after the gate removed the cut-off results of {lost}"))
         }
@@ -1027,7 +1030,7 @@ fn listed_statuses(printed: &str) -> Statuses {
 /// get_mutant_name makes it, a dot, then `x_<function>` or `xǁ<class>ǁ<method>`, which holds no dot. [`prefix_of`]
 /// reads it back from a mutant's name.
 fn mutant_prefix(f: &Function) -> String {
-    let path = text::path(&f.path);
+    let path = text::shown_path(&f.path);
     let module = path.strip_suffix(".py").unwrap_or(&path).replace('/', ".");
     let module = module.strip_prefix("src.").unwrap_or(&module);
     let named = match f.unit.name.rsplit_once('.') {
@@ -1050,7 +1053,7 @@ fn budget_reached(statuses: &Statuses, seconds: u64, unreached: &[&Function], cu
     let tried = statuses.iter().filter(|(_, status)| !UNTRIED.contains(&status.as_str())).count();
     let named = |functions: Vec<&&Function>| {
         let each: Vec<String> =
-            functions.iter().map(|f| format!("`{}` in {}", f.unit.name, text::path(&f.path))).collect();
+            functions.iter().map(|f| format!("`{}` in {}", f.unit.name, text::shown_path(&f.path))).collect();
         text::series(&each, Some(5))
     };
     let (lost, unmade): (Vec<&&Function>, Vec<&&Function>) = unreached.iter().partition(|f| cut_off.contains(&f.path));
@@ -1249,7 +1252,7 @@ mod tests {
         let places = |selection: &str, recorded: Option<&[&str]>| -> Vec<String> {
             let recorded: Option<BTreeSet<String>> = recorded.map(|ids| ids.iter().map(|id| id.to_string()).collect());
             let found = test_places(&tree, &table(selection), recorded.as_ref());
-            found.iter().map(|path| text::path(path)).collect()
+            found.iter().map(|path| text::shown_path(path)).collect()
         };
         // An option, its value, and a path outside the copy or missing from it are not among them.
         let selection = r#"pytest_add_cli_args_test_selection = ["-m", "slow", "./tests/", "/abs", "../up", "gone"]"#;

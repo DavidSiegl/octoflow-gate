@@ -92,7 +92,7 @@ fn lint_module(name: &str, root: &Path, manifest: &Path, judged: &JudgedFiles) -
         Err(problem) => return (vec![], Some(problem)),
         Ok(done) => done,
     };
-    let named = text::path(manifest.as_os_str());
+    let named = text::shown_path(manifest.as_os_str());
     // Exit status 1 means it found something, whatever the module's configuration asks for (--issues-exit-code),
     // NO_GO_FILES that there was nothing to lint, and any other but 0 that it failed; the JSON is its standard output's
     // last line, after anything a linter printed.
@@ -116,7 +116,7 @@ fn lint_module(name: &str, root: &Path, manifest: &Path, judged: &JudgedFiles) -
         }
     }
     if let Some(error) = compile_errors.first() {
-        let at = format!("{}:{}", text::path(error.path.as_deref().unwrap_or_default()), error.line.unwrap_or(0));
+        let at = format!("{}:{}", text::shown_path(error.path.as_deref().unwrap_or_default()), error.line.unwrap_or(0));
         let what = format!("`{at}` {}: {}", error.rule, error.message);
         return (lints, Some(format!("`{name}` could not compile the module of `{named}`: {what}")));
     }

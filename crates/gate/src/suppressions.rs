@@ -148,7 +148,7 @@ pub fn stray_line_end_condition(path: &OsStr, n: u32, end: char) -> String {
         "`{}:{n}` holds `{escaped}`, which a linter that reads the file ends a line at and git does not. Such a \
          linter numbers every later line past git's, or stops reading there; either way the gate cannot judge its \
          findings below it. Remove it, end the line there, or write it as an escape in a string.",
-        crate::text::path(path)
+        crate::text::shown_path(path)
     )
 }
 
@@ -181,7 +181,7 @@ fn files_with_added_lines<'a>(
             _ => std::fs::read(&full),
         };
         let bytes = read.map_err(|e| {
-            Unjudged(format!("cannot read {}, which the change edits: {e}", crate::text::path(path)))
+            Unjudged(format!("cannot read {}, which the change edits: {e}", crate::text::shown_path(path)))
         })?;
         out.push((path, added, bytes.split(|&b| b == b'\n').map(<[u8]>::to_vec).collect()));
     }

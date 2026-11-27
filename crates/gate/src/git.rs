@@ -169,7 +169,7 @@ impl UntrackedAdded {
 /// with nothing added yet, copies nothing, which git reads as an empty index. Errs when the copy cannot be made.
 fn copy_index(own: &Path, copy: &Path) -> Result<(), Unjudged> {
     let failed = |e: std::io::Error| {
-        Unjudged(format!("could not copy git's index {}: {e}", text::path(own.as_os_str())))
+        Unjudged(format!("could not copy git's index {}: {e}", text::shown_path(own.as_os_str())))
     };
     let modified = match std::fs::metadata(own) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),

@@ -77,8 +77,10 @@ pub(crate) fn workspaces(name: &str, root: &Path, files: &[OsString]) -> (Vec<Pa
         argv.push(manifest);
         match tool_process(name, &argv, root) {
             Err(problem) => problems.push(problem),
-            Ok(done) if done.status != 0 => problems
-                .push(format!("`{name}` could not find the workspace of `{}`: {}", text::path(manifest), done.said())),
+            Ok(done) if done.status != 0 => {
+                let manifest = text::shown_path(manifest);
+                problems.push(format!("`{name}` could not find the workspace of `{manifest}`: {}", done.said()))
+            }
             Ok(done) => {
                 let printed = OsStr::from_bytes(done.stdout.trim_ascii());
                 roots.insert(rel_path(&normpath(&root.join(printed)), &normpath(root)));
@@ -110,9 +112,9 @@ fn lint_workspace(name: &str, root: &Path, manifest: &Path, judged: &JudgedFiles
     if done.status == 0 {
         return (lints, None);
     }
-    let manifest = text::path(manifest.as_os_str());
+    let manifest = text::shown_path(manifest.as_os_str());
     if let Some(error) = errors.first() {
-        let at = format!("{}:{}", text::path(error.path.as_deref().unwrap_or_default()), error.line.unwrap_or(0));
+        let at = format!("{}:{}", text::shown_path(error.path.as_deref().unwrap_or_default()), error.line.unwrap_or(0));
         let what = format!("`{at}` error {}: {}", error.rule, error.message);
         return (lints, Some(format!("`{name}` could not compile the workspace of `{manifest}`: {what}")));
     }

@@ -308,3 +308,9 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   a comment edited inside an attribute, never match. Each is reported as under 0.11.1. Closes with `carried_weakenings`
   (`crates/checks/src/integrity.rs`) matching groups as it matches tests, and lang-rust taking `code` from each
   attribute's tokens, as lang-python and lang-go take it from their digest.
+- **Inside the gate crate's private modules, `pub` and `pub(crate)` still mix.** As cross-review 49 put it (R1-5,
+  2026-11-27): "in private modules, `pub` and `pub(crate)` now mean the same thing. The mix the ticket's Problem names
+  (for example `pub(crate)` `KILL_WAIT`/`remove_entry` beside `pub` entry points) is still there". Since lib.rs lists
+  the crate's interface (architecture-deepening/04), neither word reaches past the crate, so the mix misleads a reader
+  without changing what compiles. Closes with one convention for items shared between `crates/gate/src`'s modules,
+  applied across them.

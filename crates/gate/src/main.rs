@@ -1,5 +1,5 @@
 //! The `gate` binary: judges the change the git working tree around the current directory makes since a commit, as
-//! gate::judge::judge_change does, and writes the quality file and quality.json.
+//! gate::judge_change does, and writes the quality file and quality.json.
 //!
 //! ```text
 //! gate --base REV [--config GATE_TOML] [--tests JUNIT]... [--coverage XML]... [--out FILE] [--json FILE]
@@ -15,13 +15,10 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use gate::judge::{judge_change, Given};
-use gate::paths::real_path;
-use gate::process;
-use gate::report::Verdict;
-use gate::settings::RULES_FILE;
-use gate::text::{self, series};
-use gate::Unjudged;
+use gate::{
+    catch_interrupt, exit_interrupted, interrupted, judge_change, py_strip, real_path, series, shown_path, Given,
+    Unjudged, Verdict, RULES_FILE,
+};
 
 #[cfg(test)]
 mod scratch;
@@ -91,7 +88,7 @@ enum Asked {
 }
 
 fn main() -> ExitCode {
-    if let Err(e) = process::catch_interrupt() {
+    if let Err(e) = catch_interrupt() {
         return unjudged(&format!("cannot catch Ctrl-C, SIGTERM and SIGHUP: {e}"));
     }
     match parse_args(std::env::args_os().skip(1)) {
@@ -110,13 +107,13 @@ fn main() -> ExitCode {
 /// Writes the report judge_change gives for the current directory as `args` says: the quality file to `args.out`,
 /// else to standard output, and quality.json to `args.json`, if given. Returns 0 for GATE: OK and 1 for GATE: ERROR;
 /// [`EXIT_UNJUDGED`], having written nothing, when the change could not be judged or a file could not be written.
-/// Ctrl-C, SIGTERM or SIGHUP ends the process (process::exit_interrupted), having written nothing.
+/// Ctrl-C, SIGTERM or SIGHUP ends the process (gate::exit_interrupted), having written nothing.
 fn gate_command(args: &Args) -> ExitCode {
     let judged = std::env::current_dir()
         .map_err(|e| Unjudged(format!("cannot read the current directory: {e}")))
         .and_then(|cwd| judge_change(&cwd, &args.base, &args.given));
-    if process::interrupted() {
-        process::exit_interrupted();
+    if interrupted() {
+        exit_interrupted();
     }
     let report = match judged {
         Ok(report) => report,
@@ -135,7 +132,7 @@ fn gate_command(args: &Args) -> ExitCode {
     }
     let verdict = report.verdict().word();
     if !contents.is_empty() {
-        let written: Vec<String> = contents.iter().map(|(path, _)| text::path(path.as_os_str())).collect();
+        let written: Vec<String> = contents.iter().map(|(path, _)| shown_path(path.as_os_str())).collect();
         eprintln!("GATE: {verdict}, in {}", series(&written, None));
     }
     if args.out.is_none() {
@@ -166,7 +163,7 @@ fn parse_args(argv: impl IntoIterator<Item = OsString>) -> Result<Asked, String>
     while let Some(arg) = argv.next() {
         let (name, inline) = split_inline(arg);
         let Some(name) = name.to_str().map(str::to_string) else {
-            unrecognized.push(text::path(&name));
+            unrecognized.push(shown_path(&name));
             continue;
         };
         if name == "--help" || name == "-h" {
@@ -178,7 +175,7 @@ fn parse_args(argv: impl IntoIterator<Item = OsString>) -> Result<Asked, String>
         match name.as_str() {
             "--base" => {
                 let rev = value()?.into_string();
-                base = Some(rev.map_err(|rev| format!("argument --base: not UTF-8: {}", text::path(&rev)))?);
+                base = Some(rev.map_err(|rev| format!("argument --base: not UTF-8: {}", shown_path(&rev)))?);
             }
             "--config" => {
                 let config = PathBuf::from(value()?);
@@ -232,15 +229,15 @@ fn split_inline(arg: OsString) -> (OsString, Option<OsString>) {
 
 /// A time budget given on the command line, in whole seconds, at least 1; errs with why `text` is not one.
 fn seconds(text: &OsStr) -> Result<u64, String> {
-    let shown = text::path(text);
+    let shown = shown_path(text);
     let n: i64 = shown.trim().parse().map_err(|_| format!("expected a whole number of seconds, not '{shown}'"))?;
     u64::try_from(n).ok().filter(|&n| n >= 1).ok_or_else(|| format!("must be at least 1, not {n}"))
 }
 
 /// `named`, the judged project's Python given on the command line; errs with why it is none when it is blank, as
-/// gate.toml's `python` may not be either (settings::Settings::python).
+/// gate.toml's `python` may not be either (Settings::python in src/settings.rs).
 fn python(named: OsString) -> Result<OsString, String> {
-    match text::py_strip(&text::path(&named)).is_empty() {
+    match py_strip(&shown_path(&named)).is_empty() {
         true => Err("must be the path or the name of a Python".into()),
         false => Ok(named),
     }
@@ -261,19 +258,19 @@ fn json_path_for(out: &Path) -> PathBuf {
 /// written, or Ctrl-C, SIGTERM or SIGHUP before the renames, leaves every file as it was; only a rename that fails
 /// after another succeeded leaves some new and some old. A symlink at a path is followed, so the link stays and its
 /// target changes, and an existing file keeps its permissions. Errs naming the file, as given, that cannot be written.
-/// Ctrl-C, SIGTERM or SIGHUP ends the process (process::exit_interrupted) with every file as it was.
+/// Ctrl-C, SIGTERM or SIGHUP ends the process (gate::exit_interrupted) with every file as it was.
 fn write_files(contents: &[(&Path, String)]) -> Result<(), Unjudged> {
     // (path as given, its real path, the file written aside)
     let mut aside: Vec<(&Path, PathBuf, PathBuf)> = vec![];
     let written = write_aside(contents, &mut aside).and_then(|()| {
-        if process::interrupted() {
+        if interrupted() {
             remove_aside(&aside);
-            process::exit_interrupted();
+            exit_interrupted();
         }
         aside.iter().try_for_each(|(given, real, tmp)| std::fs::rename(tmp, real).map_err(|e| (*given, e)))
     });
     remove_aside(&aside);
-    written.map_err(|(path, e)| Unjudged(format!("cannot write {}: {e}", text::path(path.as_os_str()))))
+    written.map_err(|(path, e)| Unjudged(format!("cannot write {}: {e}", shown_path(path.as_os_str()))))
 }
 
 /// Writes each of `contents` beside its real path, as [`write_files`] does, noting each file written in `aside`;

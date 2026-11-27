@@ -5,7 +5,7 @@ use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 
 use common::Repo;
-use gate::text::one_line;
+use gate::one_line;
 
 mod common;
 

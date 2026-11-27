@@ -100,13 +100,14 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   between gate runs outside every workspace, as the lock file of octoflow-ai's `ci/cargo-lock.sh` does. Moved from
   octoflow-ai on 2026-11-05.
 - **`surviving-mutants` splits its budget by language, not by work, and builds Rust anew.** `surviving_mutants`
-  (`crates/gate/src/mutants.rs`) gives mutmut, cargo-mutants and gremlins in turn an equal share of what is left of
-  the `--mutation-budget` among the languages still to run, however many functions each language has; and cargo-mutants runs `--in-place` in the check's copy of the working tree, which has no `target/`,
-  so each run compiles the workspace and its dependencies before its baseline. Not measured on Jenkins:
-  gate-rust-checks ticket 06 asked for the Gate stage's added time on a Rust change, which needs a Jenkins build on the
-  branch. Found by ticket 06 (2026-10-30). Closes, if the run metrics show any language starved, with the budget split
-  by each language's changed functions, and a target directory that lasts between gate runs (the same as
-  passes-at-base's above). Moved from octoflow-ai on 2026-11-05.
+  (`crates/gate/src/mutants.rs`) gives mutmut, cargo-mutants and gremlins in turn an equal share of what is left of the
+  `--mutation-budget` among the languages still to run, however many functions each language has; and cargo-mutants
+  builds into a new target directory outside the check's copy of the working tree on every run, so it compiles the
+  workspace and its dependencies before its baseline. Not measured on Jenkins: gate-rust-checks ticket 06 asked for the
+  Gate stage's added time on a Rust change, which needs a Jenkins build on the branch. Found by ticket 06 (2026-10-30).
+  Closes, if the run metrics show any language starved, with the budget split by each language's changed functions, and
+  a target directory that lasts between gate runs (the same as passes-at-base's above). Moved from octoflow-ai on
+  2026-11-05.
 - **`vague-names` reports a name an undecorated override cannot change.** A `def handle(self)` in a
   `socketserver.BaseRequestHandler` subclass, or a parameter the overridden signature names, has no fix; only a method
   marked `@override` is skipped (`marked_override` in `crates/lang-python/src/lib.rs`). Raised by the cross-review of

@@ -71,23 +71,28 @@ fn in_copy(
     if runs.is_empty() {
         return vec![];
     }
+    let no_room = |e: &dyn std::fmt::Display| {
+        let message = format!("could not make a directory to copy the {what} into: {e}; {unjudged}.");
+        vec![finding(None, None, rule, message)]
+    };
     let dir = match ScratchDirectory::new(&std::env::temp_dir()) {
         Ok(dir) => dir,
-        Err(e) => {
-            let message = format!("could not make a directory to copy the {what} into: {e}; {unjudged}.");
-            return vec![finding(None, None, rule, message)];
-        }
+        Err(e) => return no_room(&e),
     };
     let copy = ScratchCopy { tree: dir.path().join("tree"), scratch: dir.path().join("scratch") };
-    let made = std::fs::create_dir(&copy.scratch).map_err(|e| failed("make", &copy.scratch, &e));
-    let mut out = match made.and_then(|()| make(dir.path(), &copy.tree)) {
+    let made = std::fs::create_dir(&copy.scratch).map_err(|e| no_room(&failed("make", &copy.scratch, &e)));
+    let copied = made.and_then(|()| {
+        make(dir.path(), &copy.tree)
+            .map_err(|e| vec![finding(None, None, rule, format!("could not copy the {what}: {e}; {unjudged}."))])
+    });
+    let mut out = match copied {
         Ok(mut out) => {
             for run in runs {
                 out.extend(run(&copy));
             }
             out
         }
-        Err(e) => vec![finding(None, None, rule, format!("could not copy the {what}: {e}; {unjudged}."))],
+        Err(found) => found,
     };
     let path = dir.path().to_path_buf();
     if let Err(e) = dir.remove() {

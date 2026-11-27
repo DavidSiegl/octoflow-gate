@@ -59,8 +59,11 @@ pub(crate) const SURVIVOR_EXAMPLES: usize = 3;
 /// gremlins the rest. Each one's findings name its share as the seconds it was stopped at.
 ///
 /// The three run in turn on one copy of the working tree (copies::in_working_tree_copy), made only when one of them has
-/// something to mutate; each changes only its own language's files there. A copy that cannot be made is a `not-run`
-/// finding in place of all their runs, and one that cannot be removed afterwards a `not-removed` one.
+/// something to mutate. Each leaves the files of the others' languages as it found them, but for mutmut's `mutants/`,
+/// which holds its source paths, its `also_copy` and `tests/`: gremlins' `./...` takes a Go package there as one more,
+/// whose tests it runs for coverage and which it does not mutate. cargo-mutants builds outside the copy. A copy that
+/// cannot be made is a `not-run` finding in place of all their runs, and one that cannot be removed afterwards a
+/// `not-removed` one.
 pub fn surviving_mutants(sources: &Sources, mutmut: &Mutmut, budget: u64) -> Vec<Finding> {
     let budget = Budget::starting_now(budget);
     let (rust, mut out) = edited_rust(&sources.rust);
@@ -144,7 +147,7 @@ fn edited_rust(rust: &RustChange) -> (Vec<Edited>, Vec<Finding>) {
 /// Rust's findings of the surviving-mutants check on `functions`, [`edited_rust`]'s, in no order.
 ///
 /// Runs cargo-mutants, until `budget` runs out, on each Cargo workspace that holds one of `functions`, in `copy`, a
-/// copy of the working tree, in path order of the workspaces, beside each run's output in its scratch directory.
+/// copy of the working tree, in path order of the workspaces, each run's output and build in its scratch directory.
 /// cargo-mutants mutates only `functions` ([`run_workspace`]), and its tests run with `--test-tool nextest`, each
 /// mutant's within its timeout ([`MINIMUM_TEST_TIMEOUT`]). Each function with mutants that survived is a `survived`
 /// finding at the line its fn starts, with how many of the mutants tried of it they were and the first
@@ -152,7 +155,8 @@ fn edited_rust(rust: &RustChange) -> (Vec<Edited>, Vec<Finding>) {
 /// `budget-reached` finding; a file in no workspace cargo can tell ([`cargo_roots`]), or whose workspace's directory is
 /// not above it, is a `not-mutated` one on it; a run that cannot be made or read is a `not-run` finding saying why. A
 /// run the deadline stops is a `budget-reached` finding beside what the mutants it had tried showed, and each workspace
-/// after it a `not-run` one. A cargo-mutants killed past its grace may leave one of the copy's `.rs` files mutated.
+/// after it a `not-run` one. A cargo-mutants killed past its grace may leave one of the copy's `.rs` files mutated,
+/// which gremlins, the one tool to run in the copy after it, never builds.
 fn rust_mutants(copy: &ScratchCopy, functions: &[Edited], budget: &Budget) -> Vec<Finding> {
     let tree = &copy.tree;
     let mut out = vec![];
@@ -248,7 +252,7 @@ fn mutants_of(root: &OsStr, f: &Edited) -> String {
 struct Run<'a> {
     /// The copy of the working tree, which `--in-place` mutates.
     tree: &'a Path,
-    /// A directory the run makes for its mutants.out, outside the copy.
+    /// A directory the run makes for its mutants.out and its build, outside the copy.
     scratch: &'a Path,
 }
 
@@ -269,8 +273,8 @@ fn run_workspace(run: &Run, root: &OsStr, functions: &[&Edited], budget: &Budget
     if let Err(e) = std::fs::create_dir_all(run.scratch) {
         return (vec![not_run(&format!("could not make the directory for cargo-mutants' output: {e}"))], false);
     }
-    // --in-place mutates the copy itself, which cargo-mutants would otherwise copy once more; mutants.out goes to
-    // scratch, outside it.
+    // --in-place mutates the copy itself, which cargo-mutants would otherwise copy once more; mutants.out and the
+    // build go to scratch, outside it, as the tools after it run in the copy.
     let dir = run.tree.join(root);
     let (minimum, multiplier) = (MINIMUM_TEST_TIMEOUT.to_string(), TIMEOUT_MULTIPLIER.to_string());
     let mut argv: Vec<&OsStr> = ["cargo", "mutants", "--in-place", "--no-shuffle", "--dir"].map(OsStr::new).to_vec();
@@ -281,7 +285,8 @@ fn run_workspace(run: &Run, root: &OsStr, functions: &[&Edited], budget: &Budget
     argv.extend(["--test-tool", "nextest"].into_iter().chain(timeouts).map(OsStr::new));
     argv.push(OsStr::new("--output"));
     argv.extend([run.scratch.as_os_str(), OsStr::new("--colors"), OsStr::new("never")]);
-    let env = [("CARGO_TERM_COLOR", OsStr::new("never"))];
+    let target = run.scratch.join("target");
+    let env = [("CARGO_TERM_COLOR", OsStr::new("never")), ("CARGO_TARGET_DIR", target.as_os_str())];
     let extras = Extras { env: &env, soft_stop: Some(STOP_GRACE), ..Extras::default() };
     match run_with(&argv, run.tree, left, &extras) {
         Ok(done) => (run_findings(&done, &run.scratch.join("mutants.out"), root, budget.seconds), done.stopped),

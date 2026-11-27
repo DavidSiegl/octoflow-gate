@@ -113,14 +113,13 @@ fn unchanged_declarations(go: &GoChange, file: &ChangedFile) -> Vec<bool> {
 /// gremlins mutates only the lines it reads as changed from `git diff --merge-base <base>`, whose names it takes as
 /// paths from the module's directory: the git a run finds first on PATH gives it the module's edited functions as a
 /// diff ([`diff_of`]) instead, and passes any other command to git. So it mutates the edited functions whole, though
-/// the copy has no repository to diff.
-/// Each function with mutants that
-/// survived is a `survived` finding at its `func` line, with how many of the mutants tried of it they were and the
-/// first [`SURVIVOR_EXAMPLES`] of them; one with mutants on lines no test runs an `untested` one, with how many. A
-/// function gremlins makes no mutant of gives nothing. The budget running out is a `budget-reached` finding; a
-/// function whose file lies under no go.mod in the copy, as where the change deletes it, a `not-mutated` one; a run
-/// that cannot be made or fails a `not-run` one saying why. A run the deadline stops is a `budget-reached` finding
-/// beside what the mutants it had tried showed, and each module after it a `not-run` one.
+/// the copy has no repository to diff. Each function with mutants that survived is a `survived` finding at its `func`
+/// line, with how many of the mutants tried of it they were and the first [`SURVIVOR_EXAMPLES`] of them; one with
+/// mutants on lines no test runs an `untested` one, with how many. A function gremlins makes no mutant of gives
+/// nothing. The budget running out is a `budget-reached` finding; a function whose file lies under no go.mod in the
+/// copy, as where the change deletes it, a `not-mutated` one; a run that cannot be made or fails a `not-run` one saying
+/// why. A run the deadline stops is a `budget-reached` finding beside what the mutants it had tried showed, and each
+/// module after it a `not-run` one.
 pub(crate) fn go_mutants(copy: &ScratchCopy, base: &str, functions: &[Edited], budget: &Budget) -> Vec<Finding> {
     let tree = &copy.tree;
     let mut out = vec![];

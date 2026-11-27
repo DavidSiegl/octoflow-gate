@@ -56,11 +56,10 @@ pub fn flaky_tests(sources: &Sources) -> Vec<Finding> {
 /// build may fail it too, which the failing-tests section lists, or it may need what the copy below lacks, so that
 /// the reruns could not judge it. One that xfails under every seed is not reported.
 ///
-/// A run that skips a test, or does not report it, as when the
-/// project's addopts stop at the first failure, neither passed nor failed it. A test that is not mixed, which fewer
-/// than two runs passed or failed, is reported as one that too few runs judged (`not-rerun`), whether runs skipped it
-/// or the reruns stopped early; when no run told anything, the finding about the run that went wrong stands for them
-/// all.
+/// A run that skips a test, or does not report it, as when the project's addopts stop at the first failure, neither
+/// passed nor failed it. A test that is not mixed, which fewer than two runs passed or failed, is reported as one that
+/// too few runs judged (`not-rerun`), whether runs skipped it or the reruns stopped early; when no run told anything,
+/// the finding about the run that went wrong stands for them all.
 ///
 /// pytest decides which of those defs are tests, so a helper named `test_*` that it does not collect is not rerun.
 /// pytest and pytest-randomly must be importable by the judged project's Python (change::Change::python). A pytest run

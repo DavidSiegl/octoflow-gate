@@ -646,8 +646,8 @@ such as to a `use` or a `const`, gives nothing. The findings are mutmut's kinds:
 - `not-removed`: the copy could not be removed afterwards; the findings stand.
 
 cargo-mutants' own skip attribute, `#[mutants::skip]`, also inside a `cfg_attr`, wrapped or not, is a suppression: the
-quality file lists the change's, as it lists an `#[allow(...)]`. The copy has no `target/`, so each run builds the
-workspace and its dependencies anew within the budget (see `TODO.md`).
+quality file lists the change's, as it lists an `#[allow(...)]`. Each run builds into a new target directory outside
+the copy, so it builds the workspace and its dependencies anew within the budget (see `TODO.md`).
 
 **Go's mutants.** After cargo-mutants, with what is left of the budget, shared as for Rust's, the check mutation-tests
 the Go functions a change edits with [gremlins](https://gremlins.dev/): a function or method, from its `func` line to
@@ -728,28 +728,28 @@ Rust's tests are judged the same way after Python's, with what is left of the on
 edits Rust code outside the tests: a `.rs` file of a Cargo package that is not among Rust's tests (as for test
 integrity), edited outside its test code, added, deleted or renamed. The changed tests are the tests, read as test
 integrity reads them, whose lines, attributes included, the change adds to or removes from. They run in the copy of
-the base made as above, which takes these files from the working tree too: Rust's test files, the files that go with the tests
-(by default any file under a `tests` directory), and a `.rs` file the change edits only inside its test code. A test in
-a file the change also edits outside its test code cannot be separated from the code it tests, and is a `not-run`
-finding at its `fn`. Each Cargo target the changed tests are in is built and run on its own, with `cargo nextest run
---no-fail-fast`, and `--locked` where the base tracks the workspace's `Cargo.lock`, as clippy, filtered to its tests
-(`-E 'test(=path::name)'`), in the copy's package directory, with a target directory and a nextest store outside the
-copy and the gate's own nextest configuration in place of the copy's.
-The targets are found from the copy's module tree and `cargo metadata`: each crate root whose `mod name;` items, a
-`#[path]` on one included, reach the file (a crate root being a `.rs` file no such item reaches), matched to the target
-of the package nearest above it whose root file it is, so a `[[test]] path`, a module of `src/main.rs` beside a
-`src/lib.rs`, benches and examples are each run in their own target. A test in a module several targets share, as a
-`tests/common/mod.rs` two integration tests declare, is run in each, and passes at the base only if it passes in every
-one. A build script's crate root, as one that `#[path]`s a module of the library, adds no target. A test no target
-builds is a `not-run` finding, and so is one reached from a crate root whose target cannot be told, since that target
-may build it too: one whose package `cargo metadata` cannot read, or that the package nearest above it lists as no
-target's root. A target whose tests do not compile at the base (rustc's `could not compile`) counts as failing there,
-which is what the check expects of a test that needs the change, and gives no finding: so a change that adds a
-function and a test file calling it is judged as one whose tests fail at the base. Any other cargo error, as a lock file
-`--locked` refuses, is a `not-run` finding. The findings are those above, `cargo nextest` in place of pytest; a test
-passes when every case nextest reports under its name passed, and a test it did not report, as one a `cfg` leaves out at
-the base, gives nothing. A test edited by removing its first attribute, as an `#[ignore]`, counts as edited. The target
-directory is new for every run, so each run compiles the package's dependencies anew, within the budget (see `TODO.md`).
+the base made as above, which takes these files from the working tree too: Rust's test files, the files that go with
+the tests (by default any file under a `tests` directory), and a `.rs` file the change edits only inside its test code.
+A test in a file the change also edits outside its test code cannot be separated from the code it tests, and is a
+`not-run` finding at its `fn`. Each Cargo target the changed tests are in is built and run on its own, with `cargo
+nextest run --no-fail-fast`, and `--locked` where the base tracks the workspace's `Cargo.lock`, as clippy, filtered to
+its tests (`-E 'test(=path::name)'`), in the copy's package directory, with a target directory and a nextest store
+outside the copy and the gate's own nextest configuration in place of the copy's. The targets are found from the copy's
+module tree and `cargo metadata`: each crate root whose `mod name;` items, a `#[path]` on one included, reach the file
+(a crate root being a `.rs` file no such item reaches), matched to the target of the package nearest above it whose root
+file it is, so a `[[test]] path`, a module of `src/main.rs` beside a `src/lib.rs`, benches and examples are each run in
+their own target. A test in a module several targets share, as a `tests/common/mod.rs` two integration tests declare, is
+run in each, and passes at the base only if it passes in every one. A build script's crate root, as one that `#[path]`s
+a module of the library, adds no target. A test no target builds is a `not-run` finding, and so is one reached from a
+crate root whose target cannot be told, since that target may build it too: one whose package `cargo metadata` cannot
+read, or that the package nearest above it lists as no target's root. A target whose tests do not compile at the base
+(rustc's `could not compile`) counts as failing there, which is what the check expects of a test that needs the change,
+and gives no finding: so a change that adds a function and a test file calling it is judged as one whose tests fail at
+the base. Any other cargo error, as a lock file `--locked` refuses, is a `not-run` finding. The findings are those
+above, `cargo nextest` in place of pytest; a test passes when every case nextest reports under its name passed, and a
+test it did not report, as one a `cfg` leaves out at the base, gives nothing. A test edited by removing its first
+attribute, as an `#[ignore]`, counts as edited. The target directory is new for every run, so each run compiles the
+package's dependencies anew, within the budget (see `TODO.md`).
 
 Go's tests are judged after Rust's, with what is left of the same `--base-run-budget`, when the change edits Go code
 outside the tests: a `.go` file of a Go module that is not a `_test.go` file and lies in no `testdata` directory. The

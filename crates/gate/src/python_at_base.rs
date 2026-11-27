@@ -41,10 +41,10 @@ const COLLECTING: &str = "collecting the changed tests at the base";
 ///
 /// The tests run with pytest, by the judged project's Python (change::Change::python), in a copy of the base that holds
 /// every file of the tests the change touches (PythonChange::beside_tests), conftest.py and data included, as the
-/// working tree has it. pytest first collects the changed test files there, then
-/// runs those of the changed tests it collected. A test passes there when pytest passed each of its cases that it did
-/// not skip, all its parameter sets included. One that fails or errors there tests the change, which is what the check
-/// expects, and gives nothing; so does one that pytest does not collect there ([`collect`]).
+/// working tree has it. pytest first collects the changed test files there, then runs those of the changed tests it
+/// collected. A test passes there when pytest passed each of its cases that it did not skip, all its parameter sets
+/// included. One that fails or errors there tests the change, which is what the check expects, and gives nothing; so
+/// does one that pytest does not collect there ([`collect`]).
 ///
 /// The base's code is what the copy's import roots, its top and its src/, and its own configuration, such as
 /// pytest's pythonpath, import, ahead of what is installed into the project's Python, an editable install of the
@@ -95,9 +95,11 @@ fn base_run_findings(python: &PythonChange, copy: &ScratchCopy, tests: &Tests, s
     let (tree, tmp) = (&copy.tree, &copy.scratch);
     let (scratch, plugins) = (tmp.join("pytest-tmp"), tmp.join("pytest-plugins"));
     if let Err(e) = write_beside_the_copy(&scratch, &plugins) {
-        return whole(format!(
-            "could not ready the run at the base: {e}; the changed tests were not run there."
-        ));
+        let message = format!(
+            "could not make pytest's TMPDIR and plugin directory beside the copy of the base: {e}; the changed tests \
+             were not run there."
+        );
+        return whole(message);
     }
     let files: BTreeSet<OsString> = tests.keys().map(|(path, _)| path.clone()).collect();
     let groups = match pytest::groups(&change.python, tree, tmp, &files) {

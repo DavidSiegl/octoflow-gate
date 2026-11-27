@@ -193,6 +193,7 @@ fn cargo_mutants_runs_in_the_copy_uncoloured_on_the_edited_functions_and_is_stop
     // A SIGINT is recorded, and ends the stub.
     let script = format!(
         "{{ pwd; printf '%s\\n' \"$@\"; echo \"color=$CARGO_TERM_COLOR token=${{JENKINS_TOKEN-unset}}\"; \
+         echo \"target=$CARGO_TARGET_DIR\"; \
          }} > '{0}'\ntrap 'echo interrupted >> \"{0}\"; exit 3' INT\nsleep 30 & wait",
         record.display()
     );
@@ -213,12 +214,14 @@ fn cargo_mutants_runs_in_the_copy_uncoloured_on_the_edited_functions_and_is_stop
     assert_eq!(cwd.file_name().unwrap(), "tree");
     let scratch = cwd.parent().unwrap().join("scratch/cargo-mutants-0");
     let dir = cwd.join("engine");
+    // cargo-mutants builds outside the copy, which the other tools then run in.
+    let target = format!("target={}", scratch.join("target").display());
     // checked and unchecked, by their lines in the workspace's src/lib.rs.
     let expected = [
         "mutants", "--in-place", "--no-shuffle", "--dir", dir.to_str().unwrap(), "--re", r"^src/lib\.rs:(?:5|6|7):",
         "--re", r"^src/lib\.rs:(?:9|10|11):", "--test-tool", "nextest", "--minimum-test-timeout", "60",
         "--timeout-multiplier", "2", "--output", scratch.to_str().unwrap(), "--colors", "never",
-        "color=never token=unset", "interrupted",
+        "color=never token=unset", &target, "interrupted",
     ];
     assert_eq!(argv, expected);
 }

@@ -335,6 +335,23 @@ fn the_run_at_the_base_has_a_tmpdir_of_its_own_and_the_gate_s_pythonpath_after_t
 }
 
 #[test]
+fn python_code_under_a_testdata_directory_is_the_base_s_in_the_run_at_the_base() {
+    // Go's tests take what lies under a testdata directory from the working tree, which the one copy of the base
+    // serves too; a Python file there is code under test all the same.
+    let repo = Repo::with(&[
+        common::NO_PYTHON_LINTERS,
+        ("pyproject.toml", b"[tool.ruff]\n"),
+        ("testdata/calc.py", CALC.as_bytes()),
+        ("tests/test_calc.py", TESTS.as_bytes()),
+        ("pytest.ini", b"[pytest]\npythonpath = testdata\n"),
+    ]);
+    repo.put("testdata/calc.py", fixed_calc("").as_bytes());
+    let tests = TESTS.replace("import mul", "import add, mul") + "\n\ndef test_add():\n    assert add(2, 2) == 4\n";
+    repo.put("tests/test_calc.py", tests.as_bytes());
+    assert_eq!(found(&repo), vec![]);
+}
+
+#[test]
 fn a_file_beside_the_tests_the_change_deletes_is_gone_from_the_run_at_the_base() {
     let repo = calc();
     repo.commit(&[("tests/conftest.py", b"raise RuntimeError('the base\\'s conftest')\n")], "a failing conftest");

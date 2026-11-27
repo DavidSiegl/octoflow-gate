@@ -1,4 +1,4 @@
-//! Python's half of the passes-at-base check (passes_at_base.rs): the Python tests a change adds or edits, run with
+//! Python's half of the passes-at-base check (mod.rs): the Python tests a change adds or edits, run with
 //! pytest against the code the change started from.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -11,7 +11,6 @@ use std::time::Instant;
 
 use regex::bytes::Regex;
 
-use crate::base_findings::budget_reached;
 use crate::copies::{failed, finding, Budget, OnCopy, ScratchCopy};
 use crate::change::Change;
 use crate::junit::{junit_outcomes, Outcome};
@@ -21,6 +20,8 @@ use crate::process::Finished;
 use crate::pytest::{self, changed_tests, junit_case, labels, listed_tests, node_parts, Group, Setup, Tests};
 use crate::report::Finding;
 use crate::text;
+
+use super::{budget_reached, unread_not_run};
 
 /// The module name of the pytest plugin each run at the base loads with `-p`, written as `<name>.py` to a directory
 /// on the run's path; the file itself says what it reports, and how.
@@ -52,22 +53,22 @@ const COLLECTING: &str = "collecting the changed tests at the base";
 /// ([`imported_from_working_tree`]) judges none of its tests and is a `not-run` finding naming the package.
 ///
 /// The collections and runs together, one of each for every configuration the changed tests fall under
-/// (pytest::groups), may take `seconds`, counted from when the run on the copy starts; a stop there is a
+/// (pytest::groups), run until `budget`'s deadline, which counts from the check's start; a stop there is a
 /// `budget-reached` finding saying when, and none of that configuration's outcomes is reported; the configurations
 /// after it are not run, each a `not-run` finding saying so. A pytest that cannot start, stops before it collects,
 /// fails to load a conftest.py through no file the change edits, stops with another usage error, or writes no readable
 /// report, and a changed test file that cannot be read or parsed are `not-run` findings saying so.
-pub fn python_at_base<'a>(python: &'a PythonChange, seconds: u64) -> (Vec<Finding>, Option<OnCopy<'a>>) {
+pub(super) fn python_at_base<'a>(
+    python: &'a PythonChange,
+    budget: &'a Budget,
+) -> (Vec<Finding>, Option<OnCopy<'a>>) {
     if !python.edits_code() {
         return (vec![], None);
     }
     let (tests, unreadable) = changed_tests(python);
-    let not_run = |(path, why): (OsString, String)| {
-        finding(Some(&path), None, "not-run", format!("{why}, so its tests were not run at the base."))
-    };
-    let out = unreadable.into_iter().map(not_run).collect();
+    let out = unreadable.iter().map(|(path, unreadable)| unread_not_run((path, unreadable))).collect();
     let run = (!tests.is_empty())
-        .then(|| -> OnCopy { Box::new(move |copy| base_run_findings(python, copy, &tests, seconds)) });
+        .then(|| -> OnCopy { Box::new(move |copy| base_run_findings(python, copy, &tests, budget)) });
     (out, run)
 }
 
@@ -78,18 +79,18 @@ struct BaseCopy<'a> {
     tree: &'a Path,
     /// The variables each pytest run takes beside process::tool_env's.
     env: &'a [(&'a str, &'a OsStr)],
-    /// The time all the collections and runs have, from when the copy was made.
-    budget: Budget,
+    /// The time all the collections and runs have, the check's.
+    budget: &'a Budget,
 }
 
-/// [`python_at_base`]'s findings on `tests`, collected and then run, within `seconds` for all of it, in `copy`, a copy
+/// [`python_at_base`]'s findings on `tests`, collected and then run, within `budget` for all of it, in `copy`, a copy
 /// of the base, with the runs' reports, their TMPDIR and the plugin [`IMPORTS_PLUGIN`] names in its scratch directory:
 /// once for each pytest configuration the changed test files take there, one after another while the budget lasts.
 ///
 /// The runs import the base's code from the copy's import roots, its top and its src/ when it has one, which are put
 /// on PYTHONPATH ahead of what was there: so they come before site-packages, and before what an editable install
 /// puts there, which would import the working tree's code.
-fn base_run_findings(python: &PythonChange, copy: &ScratchCopy, tests: &Tests, seconds: u64) -> Vec<Finding> {
+fn base_run_findings(python: &PythonChange, copy: &ScratchCopy, tests: &Tests, budget: &Budget) -> Vec<Finding> {
     let change = python.change;
     let whole = |message: String| vec![finding(None, None, "not-run", message)];
     let (tree, tmp) = (&copy.tree, &copy.scratch);
@@ -124,7 +125,7 @@ fn base_run_findings(python: &PythonChange, copy: &ScratchCopy, tests: &Tests, s
         ("PYTHONDONTWRITEBYTECODE", OsStr::new("1")),
         ("PYTHONPATH", python_path.as_os_str()),
     ];
-    let base_copy = BaseCopy { change, tree, env: &env, budget: Budget::starting_now(seconds) };
+    let base_copy = BaseCopy { change, tree, env: &env, budget };
     let mut out = vec![];
     for (n, (group, label)) in groups.iter().zip(labels(&groups)).enumerate() {
         let reports = tmp.join(format!("pytest-reports-{n}"));
@@ -133,8 +134,9 @@ fn base_run_findings(python: &PythonChange, copy: &ScratchCopy, tests: &Tests, s
         if stopped {
             out.extend(groups[n + 1..].iter().map(|later| {
                 let message = format!(
-                    "the run at the base used its {seconds} seconds (`--base-run-budget`) before it reached {}, so \
+                    "the run at the base used its {} seconds (`--base-run-budget`) before it reached {}, so \
                      they were not run there.",
+                    budget.seconds,
                     later.label()
                 );
                 finding(None, None, "not-run", message)
@@ -170,7 +172,7 @@ fn group_findings(
     label: Option<&str>,
 ) -> (Vec<Finding>, bool) {
     let which = label.unwrap_or("the changed tests");
-    let reached = |when: String| (vec![budget_reached(&base_copy.budget, "pytest", &when)], true);
+    let reached = |when: String| (vec![budget_reached(base_copy.budget, "pytest", &when)], true);
     let not_run = |message: String| (vec![finding(None, None, "not-run", message)], false);
     let ids = match collect(base_copy, &group.setup, tests) {
         Ok(ids) => ids,
@@ -516,7 +518,7 @@ mod tests {
             settings: Settings::default(),
             python: PathBuf::from("python3"),
         };
-        let base_copy = BaseCopy { change: &change, tree: &tree, env: &[], budget: Budget::starting_now(1) };
+        let base_copy = BaseCopy { change: &change, tree: &tree, env: &[], budget: &Budget::starting_now(1) };
         let report = dir.join("reports/base-0-imports.json");
         let worker = dir.join("reports/base-0-imports.json-gw0");
         let named = |name: &str, path: &str| (name.to_string(), path.to_string());

@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::change::Change;
+use crate::process::KILL_WAIT;
 use crate::report::Finding;
 use crate::scratch_directory::ScratchDirectory;
 use crate::{git, text, Unjudged};
@@ -140,6 +141,13 @@ impl Budget {
         let share = self.deadline.saturating_duration_since(now) / parts.max(1);
         Budget { seconds: share.as_secs_f64().round() as u64, deadline: now + share }
     }
+
+    /// The timeout to give a run that is stopped softly with `grace` (process::Extras::soft_stop), so that it ends by
+    /// the deadline, its stop and the wait for what it printed (process::KILL_WAIT) included; None when no time is
+    /// left for it.
+    pub fn before_soft_stop(&self, grace: Duration) -> Option<Duration> {
+        self.deadline.checked_duration_since(Instant::now() + grace + KILL_WAIT).filter(|left| !left.is_zero())
+    }
 }
 
 /// Puts `findings` in the order a check gives them: by path and line, a finding on no path or line first.
@@ -226,7 +234,8 @@ fn copy_base_with_tests(
     let mut empty = unpack_commit(&change.root, &change.base, dest, archive, "")?;
     // A path the base tracks has no link above it there; it is a directory when the base records a submodule there.
     for old in change.files.iter().filter_map(|f| f.before.as_ref()).filter(|p| beside(p)) {
-        remove_entry(&dest.join(old))?;
+        let gone = dest.join(old);
+        remove_entry(&gone).map_err(|e| failed("remove", &gone, &e))?;
         let removed = text::path(old);
         empty.retain(|(name, _)| name != &removed && !name.starts_with(&format!("{removed}/")));
     }
@@ -235,7 +244,7 @@ fn copy_base_with_tests(
         let Ok(meta) = src.symlink_metadata() else { continue };
         let dst = unlinked_path(dest, new)?;
         // A directory the base had where the change has a file or a link: emptied by the removals above, or not.
-        remove_entry(&dst)?;
+        remove_entry(&dst).map_err(|e| failed("remove", &dst, &e))?;
         // git tracks files, links and commits, so a directory, not a link to one, is where the change records a
         // submodule's commit. Its checkout's own `.git` would lead nowhere in the copy: it is written as the files of
         // the commit the checkout is at.
@@ -255,14 +264,13 @@ fn copy_base_with_tests(
 }
 
 /// Removes what is at `path`, a directory with all it holds, nothing when there is nothing, and never through a link
-/// at `path` itself. Errs, a clause, when it cannot.
-fn remove_entry(path: &Path) -> Result<(), String> {
+/// at `path` itself. Errs with the system's error, which does not name `path`, when it cannot.
+pub(crate) fn remove_entry(path: &Path) -> std::io::Result<()> {
     match path.symlink_metadata() {
         Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(path),
         Ok(_) => std::fs::remove_file(path),
         Err(_) => Ok(()),
     }
-    .map_err(|e| failed("remove", path, &e))
 }
 
 /// Why a submodule is left empty when the working tree has no checkout of it.
@@ -368,6 +376,16 @@ mod tests {
         assert_eq!(budget.share(0).seconds, 300);
         let spent = Budget { seconds: 300, deadline: Instant::now() };
         assert_eq!(spent.share(2).seconds, 0);
+    }
+
+    #[test]
+    fn a_soft_stopped_run_gets_the_time_before_its_stop() {
+        let grace = Duration::from_secs(10);
+        let ending_in = |after: Duration| Budget { seconds: 0, deadline: Instant::now() + after };
+        assert_eq!(ending_in(grace + KILL_WAIT - Duration::from_secs(1)).before_soft_stop(grace), None);
+        assert_eq!(ending_in(Duration::ZERO).before_soft_stop(grace), None);
+        let left = ending_in(grace + KILL_WAIT + Duration::from_secs(20)).before_soft_stop(grace).unwrap();
+        assert!(Duration::from_secs(19) < left && left <= Duration::from_secs(20), "{left:?}");
     }
 
     use std::cell::RefCell;

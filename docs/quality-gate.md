@@ -597,11 +597,13 @@ core writes it; or pytest's collection of the selection fails or does not finish
 local run, mutmut runs the whole selection.
 Tests that reach a function only in a subprocess count neither in mutmut's own record nor in the file.
 
-`--mutation-budget SECONDS`, else the settings' `budgets.mutation`, 600 by default, bounds mutmut's run. Stopping it
-takes at most 15 seconds more: SIGINT, 10 seconds to exit, a kill of its process group, and 5 seconds to read what it
-printed. Listing its results and showing the survivors then take at most 60 seconds, each call's stop included. Before
-mutmut starts, reading `--test-contexts` takes at most 35, and collecting the selection 35 more. So the check takes at
-most the budget and 145 seconds, and the few it takes to copy the tree. The defaults were set for octoflow, whose
+`--mutation-budget SECONDS`, else the settings' `budgets.mutation`, 600 by default, bounds mutmut's run, counted from
+the start of the check: what readies the run, copying the tree, reading `--test-contexts` (at most 35 seconds) and
+collecting the selection (at most 35 more), takes from it. Stopping mutmut takes at most 15 seconds more: SIGINT, 10
+seconds to exit, a kill of its process group, and 5 seconds to read what it printed. Listing its results and showing
+the survivors then take at most 60 seconds, each call's stop included. So the check takes at most the budget and 75
+seconds; when readying the run outlasts the budget, mutmut does not start, and the check takes as long as readying
+did, with a `budget-reached` finding saying so. The defaults were set for octoflow, whose
 orchestrator gives a quality build 1200 seconds (its `QUALITY_TIMEOUT`): with the flaky-tests check's three minutes,
 passes-at-base's two and the test run, such a build stays inside them when Jenkins starts it without a wait in the
 queue.

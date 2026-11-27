@@ -1,15 +1,16 @@
-//! Go's half of the passes-at-base check: the Go tests a change adds or edits, run with go test against the code the
-//! change started from.
+//! Go's half of the passes-at-base check (mod.rs): the Go tests a change adds or edits, run with go test against the
+//! code the change started from.
 
 use std::time::Instant;
 
 use checks::Finding;
 
-use crate::base_findings::{budget_reached, not_reached, unread_not_run};
 use crate::copies::{finding, Budget, OnCopy, ScratchCopy};
 use crate::gotest::{self, Packages, Ran};
 use crate::junit::Outcome;
 use crate::sources::GoChange;
+
+use super::{budget_reached, not_reached, unread_not_run};
 
 /// Go's findings of the passes-at-base check on `go`, in no order: those it gives before the run at the base, and that
 /// run on the check's copy of the base, None when there is no test to run there.
@@ -27,7 +28,7 @@ use crate::sources::GoChange;
 /// The budget running out is a `budget-reached` finding, and each package after it a `not-run` one. A changed test
 /// file that cannot be read or parsed, and a go test that cannot start or tells nothing (gotest::run), are `not-run`
 /// findings saying so.
-pub fn go_at_base<'a>(go: &'a GoChange, budget: &'a Budget) -> (Vec<Finding>, Option<OnCopy<'a>>) {
+pub(super) fn go_at_base<'a>(go: &'a GoChange, budget: &'a Budget) -> (Vec<Finding>, Option<OnCopy<'a>>) {
     if !go.edits_code() {
         return (vec![], None);
     }

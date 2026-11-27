@@ -1,5 +1,5 @@
 //! The surviving-mutants check's Go half: gremlins (<https://gremlins.dev>) mutates the Go functions a change edits
-//! and runs each mutant against all of its module's tests. The check itself, and its Rust half, are mutants.rs.
+//! and runs each mutant against all of its module's tests. The check itself is mod.rs.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
@@ -7,19 +7,22 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
-use std::time::Instant;
 
 use checks::{ChangedFile, Finding, Side};
 use regex::bytes::Regex;
 
 use crate::change::MUTMUT_STATE;
-use crate::copies::{finding, Budget, ScratchCopy};
+use crate::copies::{finding, remove_entry, Budget, ScratchCopy};
 use crate::git::shell_quote_bytes;
-use crate::mutants::{dir_name, edits, Edited, KILL_WAIT, STOP_GRACE, SURVIVOR_EXAMPLES};
 use crate::sources::{project_dir, GoChange, GO_MANIFEST};
 use crate::paths::rel_path;
 use crate::process::{run_with, Extras, Finished};
 use crate::text;
+
+use super::{dir_name, edits, not_reached, not_run, unread_not_run, Edited, STOP_GRACE, SURVIVOR_EXAMPLES};
+
+/// This half's language, as its `not-run` findings name it.
+const LANGUAGE: &str = "Go";
 
 /// How each status gremlins 0.6 prints for a mutant counts: a mutant that LIVED survived its module's tests; a
 /// KILLED one, and one whose tests outlived gremlins' timeout, did not; one NOT COVERED is on a line no test runs, so
@@ -38,12 +41,13 @@ const TIMEOUT_COEFFICIENT: u32 = 10;
 /// The Go functions the change that `go` reads edits, in path and line order, and a `not-run` finding for each file
 /// whose functions cannot be told, as one that does not parse.
 ///
-/// A function counts when the change edits it (mutants::edits): a function or method, with a body, of a Go file that
-/// is code under test (GoChange::is_code) and read in the working tree, so not generated, vendored or a symlink. One
-/// whose file's base has a function of its name with the same declaration, its receiver, parameters, results and body,
-/// whatever its comments and layout ([`unchanged_declarations`]), does not count: an edit to its comments or layout
-/// alone changes nothing gremlins mutates, while one to its signature alone can change what its body does.
-pub(crate) fn edited_functions(go: &GoChange) -> (Vec<Edited>, Vec<Finding>) {
+/// A function counts when the change edits it (surviving_mutants::edits): a function or method, with a body, of a Go
+/// file that is code under test (GoChange::is_code) and read in the working tree, so not generated, vendored or a
+/// symlink. One whose file's base has a function of its name with the same declaration, its receiver, parameters,
+/// results and body, whatever its comments and layout ([`unchanged_declarations`]), does not count: an edit to its
+/// comments or layout alone changes nothing gremlins mutates, while one to its signature alone can change what its body
+/// does.
+pub(super) fn edited_functions(go: &GoChange) -> (Vec<Edited>, Vec<Finding>) {
     let (mut edited, mut unread) = (vec![], vec![]);
     let none = BTreeSet::new();
     for file in &go.files {
@@ -71,10 +75,7 @@ fn edited_in(
     if file.added.is_empty() && removed.is_empty() {
         return Ok(vec![]);
     }
-    let source = after.source.as_ref().map_err(|unreadable| {
-        let message = format!("{}, so its functions were not mutation-tested.", unreadable.why);
-        finding(Some(&after.path), unreadable.line, "not-run", message)
-    })?;
+    let source = after.source.as_ref().map_err(|unreadable| unread_not_run(&after.path, unreadable))?;
     let touched: Vec<(usize, &model::Function)> = (source.functions.iter().enumerate())
         .filter(|(_, f)| edits(f, &file.added, removed))
         .collect();
@@ -122,7 +123,7 @@ fn unchanged_declarations(go: &GoChange, file: &ChangedFile) -> Vec<bool> {
 /// copy, as where the change deletes it, a `not-mutated` one; a run that cannot be made or fails, and mutmut's state
 /// that cannot be removed, a `not-run` one saying why. A run the deadline stops is a `budget-reached` finding beside
 /// what the mutants it had tried showed, and each module after it a `not-run` one.
-pub(crate) fn go_mutants(copy: &ScratchCopy, base: &str, functions: &[Edited], budget: &Budget) -> Vec<Finding> {
+pub(super) fn go_mutants(copy: &ScratchCopy, base: &str, functions: &[Edited], budget: &Budget) -> Vec<Finding> {
     let tree = &copy.tree;
     let mut out = vec![];
     let mut modules: BTreeMap<PathBuf, Vec<&Edited>> = BTreeMap::new();
@@ -140,14 +141,8 @@ pub(crate) fn go_mutants(copy: &ScratchCopy, base: &str, functions: &[Edited], b
     let modules: Vec<_> = modules.into_iter().collect();
     // mutmut, run in the copy before gremlins, leaves its state there: copies of its source paths and tests, which
     // gremlins' `./...` would take for more of a module's packages, whose tests may fail there.
-    let state = tree.join(MUTMUT_STATE);
-    let removed = match state.symlink_metadata() {
-        Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(&state),
-        Ok(_) => std::fs::remove_file(&state),
-        Err(_) => Ok(()),
-    };
-    if let Err(e) = removed {
-        out.push(not_run(&format!("could not remove mutmut's state, `{MUTMUT_STATE}/`, from the copy: {e}")));
+    if let Err(e) = remove_entry(&tree.join(MUTMUT_STATE)) {
+        out.push(not_run(&format!("could not remove mutmut's state, `{MUTMUT_STATE}/`, from the copy: {e}"), LANGUAGE));
         return out;
     }
     for (n, (module, mine)) in modules.iter().enumerate() {
@@ -156,10 +151,7 @@ pub(crate) fn go_mutants(copy: &ScratchCopy, base: &str, functions: &[Edited], b
         out.extend(found);
         if stopped {
             out.extend(modules[n + 1..].iter().map(|(later, _)| {
-                not_run(&format!(
-                    "the budget ran out before gremlins reached the module at `{}`",
-                    dir_name(later.as_os_str())
-                ))
+                not_reached("gremlins", &format!("the module at `{}`", dir_name(later.as_os_str())), LANGUAGE)
             }));
             break;
         }
@@ -205,8 +197,7 @@ struct Run<'a> {
 /// `run` says, within `budget`; and whether the deadline stopped it, or was too near to start it.
 fn run_module(run: &Run, module: &Path, functions: &[&Edited], budget: &Budget) -> (Vec<Finding>, bool) {
     let place = format!("the module at `{}`", dir_name(module.as_os_str()));
-    let left = budget.deadline.checked_duration_since(Instant::now() + STOP_GRACE + KILL_WAIT);
-    let Some(left) = left.filter(|left| !left.is_zero()) else {
+    let Some(left) = budget.before_soft_stop(STOP_GRACE) else {
         let message = format!(
             "budget reached before gremlins started on {place}: the {} seconds of `--mutation-budget` left too little \
              to run and stop it, so its mutants were not tried.",
@@ -216,7 +207,10 @@ fn run_module(run: &Run, module: &Path, functions: &[&Edited], budget: &Budget) 
     };
     let path = match git_for_gremlins(run.scratch, &diff_of(module, functions)) {
         Ok(path) => path,
-        Err(e) => return (vec![not_run(&format!("could not write the change's diff for gremlins: {e}"))], false),
+        Err(e) => {
+            let problem = format!("could not write the change's diff for gremlins: {e}");
+            return (vec![not_run(&problem, LANGUAGE)], false);
+        }
     };
     // gremlins also takes these from a .gremlins.yaml in the module, which could silence the lines the gate reads, add
     // a threshold whose exit would read as a failure, or narrow the timeout: the command line pins them, every status
@@ -252,7 +246,7 @@ fn run_module(run: &Run, module: &Path, functions: &[&Edited], budget: &Budget) 
     let extras = Extras { env: &env, soft_stop: Some(STOP_GRACE), ..Extras::default() };
     match run_with(&argv, &run.tree.join(module), left, &extras) {
         Ok(done) => (run_findings(&done, module, functions, &place, budget.seconds), done.stopped),
-        Err(e) => (vec![not_run(&format!("could not start gremlins: {e}"))], false),
+        Err(e) => (vec![not_run(&format!("could not start gremlins: {e}"), LANGUAGE)], false),
     }
 }
 
@@ -293,7 +287,8 @@ fn run_findings(done: &Finished, module: &Path, functions: &[&Edited], place: &s
         let stderr = text::lossless(&done.stderr);
         let error = stderr.split('\n').find_map(|line| line.strip_prefix("ERROR: ")).map(text::shortened);
         let said = error.unwrap_or_else(|| done.said());
-        return vec![not_run(&format!("gremlins failed in {place}, exiting with status {}: {said}", done.status))];
+        let problem = format!("gremlins failed in {place}, exiting with status {}: {said}", done.status);
+        return vec![not_run(&problem, LANGUAGE)];
     }
     let mutants = printed_mutants(&done.stdout, module);
     let mut out = function_findings(functions, &mutants);
@@ -382,11 +377,6 @@ fn function_findings(functions: &[&Edited], mutants: &[Mutant]) -> Vec<Finding> 
         }
     }
     out
-}
-
-/// A `not-run` finding: `problem`, a clause, and that the change's Go was not mutation-tested.
-fn not_run(problem: &str) -> Finding {
-    finding(None, None, "not-run", format!("{problem}; the change's Go was not mutation-tested."))
 }
 
 #[cfg(test)]
@@ -481,10 +471,12 @@ mod tests {
         let failed = done(1, false, b"--- FAIL: TestNo\n", b"go: no module dependencies to download\n\
                                                           ERROR: failed to gather coverage: exit status 1\n");
         assert_eq!(found(&failed), [not_run(
-            "gremlins failed in the module at `m`, exiting with status 1: failed to gather coverage: exit status 1"
+            "gremlins failed in the module at `m`, exiting with status 1: failed to gather coverage: exit status 1",
+            "Go"
         )]);
         let unsaid = done(2, false, b"", b"panic: oh\n");
-        assert_eq!(found(&unsaid), [not_run("gremlins failed in the module at `m`, exiting with status 2: panic: oh")]);
+        let problem = "gremlins failed in the module at `m`, exiting with status 2: panic: oh";
+        assert_eq!(found(&unsaid), [not_run(problem, "Go")]);
         let printed = b"   LIVED CONDITIONALS_BOUNDARY at calc.go:13:11\nNOT COVERED X at calc.go:14:1\n";
         let stopped = done(0, true, printed, b"");
         let rules: Vec<String> = found(&stopped).into_iter().map(|f| f.rule).collect();

@@ -1,6 +1,6 @@
 """Which tests a coverage.py data file records running given lines, read through coverage's API, not its SQLite schema.
 
-The Rust gate runs this with `python -I -c` (python_mutants.rs). argv[1] is the data file, argv[2] JSON
+The Rust gate runs this with `python -I -c` (surviving_mutants/python.rs). argv[1] is the data file, argv[2] JSON
 [[path, first, last], ...], each path real and absolute. It prints JSON {"tests": n, "busiest": m, "reached": [...]}:
 n the tests the file records a context of, m the most of them it records running any one line, and for each span the
 sorted pytest node ids of the tests it records running a line from first to last, both included, or null when the

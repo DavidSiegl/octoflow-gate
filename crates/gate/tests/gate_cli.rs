@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use common::Repo;
-use gate::report::GATE_VERSION;
+use gate::GATE_VERSION;
 
 mod common;
 

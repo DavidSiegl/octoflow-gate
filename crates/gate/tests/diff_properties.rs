@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use gate::diff::{changed_lines, unquote};
+use gate::{changed_lines, unquote};
 use proptest::prelude::*;
 
 /// A tree: file contents by path, both as text.

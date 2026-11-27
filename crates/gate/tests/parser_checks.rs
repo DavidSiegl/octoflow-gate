@@ -1,4 +1,4 @@
-//! The parser checks run on a real git repository's change (gate::parser_checks): what the gate decides
+//! The parser checks run on a real git repository's change (src/parser_checks.rs): what the gate decides
 //! over the whole change before a check judges it, which the front ends' tests of the checks (crates/lang-python,
 //! crates/lang-rust) take as given: which files are a language's source, whether the change edits its code under
 //! test, by the settings and, for Rust, the Cargo packages of the tree, and which golden files go with it.
@@ -8,11 +8,11 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::process::Command;
 use std::time::Duration;
 
-use gate::change::Change;
-use gate::judge::{judge_change, Given};
-use gate::parser_checks::{dependency_cycles, duplicated_blocks, too_complex, vague_names, weakened_tests};
-use gate::settings::Settings;
-use gate::sources::Sources;
+use gate::Change;
+use gate::{judge_change, Given};
+use gate::{dependency_cycles, duplicated_blocks, too_complex, vague_names, weakened_tests};
+use gate::Settings;
+use gate::Sources;
 
 use common::Repo;
 
@@ -74,7 +74,7 @@ fn edit(repo: &Repo, path: &str, old: &str, new: &str) {
 
 /// The findings of test-integrity, cognitive-complexity, dependency-cycles, duplicated-blocks and vague-names on
 /// `change`, in that order.
-fn run_checks(change: &Change) -> Vec<Vec<gate::report::Finding>> {
+fn run_checks(change: &Change) -> Vec<Vec<gate::Finding>> {
     let sources = Sources::read(change).unwrap();
     vec![
         weakened_tests(&sources),
@@ -91,19 +91,19 @@ type Found = (Option<String>, Option<u32>, String, String);
 /// Each finding of the parser checks on the change from HEAD to the working tree, every file in it tracked, by the
 /// default settings but for duplicated-blocks, which judges no file ([`without_copies`]), in the order the gate runs
 /// the checks.
-fn findings(repo: &Repo) -> Vec<gate::report::Finding> {
+fn findings(repo: &Repo) -> Vec<gate::Finding> {
     findings_by(repo, without_copies())
 }
 
 /// The default settings, but with every file exempt from duplicated-blocks: the tests of the other checks move and
 /// copy functions, which that check would report too.
 fn without_copies() -> Settings {
-    Settings { duplicates_exempt: gate::glob::Globs::new(&["**"]), ..Settings::default() }
+    Settings { duplicates_exempt: gate::Globs::new(&["**"]), ..Settings::default() }
 }
 
 /// Each finding of the parser checks on the change from HEAD to the working tree, every file in it tracked, by
 /// `settings`, in the order the gate runs the checks.
-fn findings_by(repo: &Repo, settings: Settings) -> Vec<gate::report::Finding> {
+fn findings_by(repo: &Repo, settings: Settings) -> Vec<gate::Finding> {
     repo.git(&["add", "-A"]);
     let change = Change::from_tree(&repo.repo, "HEAD", settings, None).unwrap();
     run_checks(&change).into_iter().flatten().collect()
@@ -116,7 +116,7 @@ fn found(repo: &Repo) -> Vec<Found> {
 
 /// The path, line, rule and severity of each of [`findings_by`].
 fn found_by(repo: &Repo, settings: Settings) -> Vec<Found> {
-    let place = |f: gate::report::Finding| {
+    let place = |f: gate::Finding| {
         (f.path.as_ref().map(|p| p.to_string_lossy().into_owned()), f.line, f.rule, f.severity)
     };
     findings_by(repo, settings).into_iter().map(place).collect()
@@ -294,7 +294,7 @@ fn a_check_s_errors_fail_the_gate_and_its_warnings_are_to_weigh() {
     repo.git(&["add", "-A"]);
     let report = judge_change(&repo.repo, "HEAD", &Given::default()).unwrap();
     assert_eq!(report.conditions, ["1 findings of the `test-integrity` check; each is listed below."]);
-    let rules = |found: &[gate::report::Finding]| -> Vec<String> { found.iter().map(|f| f.rule.clone()).collect() };
+    let rules = |found: &[gate::Finding]| -> Vec<String> { found.iter().map(|f| f.rule.clone()).collect() };
     assert_eq!(rules(&report.issues), ["test-integrity skip"]);
     assert_eq!(rules(&report.to_weigh), ["test-integrity removed-test"]);
 }
@@ -1063,7 +1063,7 @@ fn an_exempt_file_is_neither_judged_nor_matched() {
     repo.put("prices.py", TOTAL.as_bytes());
     repo.put("tests/test_more.py", TOTAL.as_bytes());
     assert_eq!(copies(&repo, Settings::default()), []);
-    let settings = Settings { duplicates_exempt: gate::glob::Globs::new(&[] as &[&str]), ..Settings::default() };
+    let settings = Settings { duplicates_exempt: gate::Globs::new(&[] as &[&str]), ..Settings::default() };
     let found: Vec<String> = copies(&repo, settings).into_iter().map(|(path, _, _)| path).collect();
     assert_eq!(found, ["prices.py", "tests/test_more.py"]);
 }

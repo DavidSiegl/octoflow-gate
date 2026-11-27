@@ -5,9 +5,9 @@ use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 
-use gate::config_edits::{tool_config, touched_paths, ToolConfig};
-use gate::coverage::NewCoverage;
-use gate::report::{Finding, QualityReport, GATE_VERSION, QUALITY_FINDINGS_LIMIT};
+use gate::{tool_config, touched_paths, ToolConfig};
+use gate::NewCoverage;
+use gate::{Finding, QualityReport, GATE_VERSION, QUALITY_FINDINGS_LIMIT};
 
 /// Passes when `report`'s quality file and quality.json are tests/golden/<name>.txt and .json, the JSON's
 /// gate_version written `<version>` there.

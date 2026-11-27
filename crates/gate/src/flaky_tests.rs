@@ -8,7 +8,7 @@ use std::hash::Hash;
 use std::path::Path;
 use std::time::Duration;
 
-use crate::copies::{copy_working_tree, finding, in_scratch_directory, sort_by_place};
+use crate::copies::{finding, in_working_tree_copy, sort_by_place, OnCopy, ScratchCopy};
 use crate::gotest::{self, Packages, Ran};
 use crate::junit::{junit_outcomes, Outcome};
 use crate::sources::{GoChange, PythonChange, Sources};
@@ -30,14 +30,24 @@ const BUILD_TIMEOUT: Duration = Duration::from_secs(300);
 /// The flaky-tests check's findings on the Python and Go tests of `sources`, by path and line, a finding on no path or
 /// line first; each rule is the check's own, without its name, and each severity "warning". Python's are as
 /// [`python_findings`] says, Go's as [`go_findings`] does.
+///
+/// The tests run in one temporary copy of the working tree (copies::in_working_tree_copy), Python's first, made only
+/// when either has tests to rerun, so that what the project's addopts write, such as a coverage report, does not
+/// replace the build's own; a test that needs a file git ignores, such as a build product, cannot find it there. A copy
+/// that cannot be made is the one `not-rerun` finding beside those on unreadable test files, and a copy that cannot be
+/// removed afterwards a `not-removed` one, beside the results.
 pub fn flaky_tests(sources: &Sources) -> Vec<Finding> {
-    let mut out = python_findings(&sources.python);
-    out.extend(go_findings(&sources.go));
+    let (mut out, python) = python_findings(&sources.python);
+    let (unread, go) = go_findings(&sources.go);
+    out.extend(unread);
+    let runs = python.into_iter().chain(go).collect();
+    out.extend(in_working_tree_copy(sources.python.change, "not-rerun", "the changed tests were not rerun", runs));
     sort_by_place(&mut out);
     out
 }
 
-/// The check's findings on `python`, in no order.
+/// The check's findings on `python`, in no order: those on its changed test files that cannot be read, and the run on
+/// the copy that gives the others, None when there is no test to rerun.
 ///
 /// Reruns the Python tests the change touched (pytest::changed_tests) once under each of [`SEEDS`] with
 /// pytest-randomly, and reports at its def each test whose outcome, failed, xfailed (failed as its xfail mark
@@ -46,9 +56,7 @@ pub fn flaky_tests(sources: &Sources) -> Vec<Finding> {
 /// build may fail it too, which the failing-tests section lists, or it may need what the copy below lacks, so that
 /// the reruns could not judge it. One that xfails under every seed is not reported.
 ///
-/// The tests run in a temporary copy of the working tree (copies::copy_working_tree), so that what the project's
-/// addopts write, such as a coverage report, does not replace the build's own; a test that needs a file git ignores,
-/// such as a build product, cannot find it there. A run that skips a test, or does not report it, as when the
+/// A run that skips a test, or does not report it, as when the
 /// project's addopts stop at the first failure, neither passed nor failed it. A test that is not mixed, which fewer
 /// than two runs passed or failed, is reported as one that too few runs judged (`not-rerun`), whether runs skipped it
 /// or the reruns stopped early; when no run told anything, the finding about the run that went wrong stands for them
@@ -59,37 +67,27 @@ pub fn flaky_tests(sources: &Sources) -> Vec<Finding> {
 /// that cannot start, takes longer than [`RUN_TIMEOUT`], ends in a usage or collection error or writes no readable
 /// report ends the reruns of the tests under its configuration (pytest::groups) with a `not-rerun` finding saying
 /// so, after what the runs before it showed, and the tests under other configurations are rerun still; a changed
-/// test file that cannot be read or parsed, and a copy that cannot be made, are `not-rerun` findings too; a copy
-/// that cannot be removed afterwards is a `not-removed` one, beside the results. Each run has [`RUN_TIMEOUT`] of its
-/// own, so each configuration the changed tests fall under adds its runs to the check's time.
-fn python_findings(python: &PythonChange) -> Vec<Finding> {
+/// test file that cannot be read or parsed is a `not-rerun` finding too. Each run has [`RUN_TIMEOUT`] of its own, so
+/// each configuration the changed tests fall under adds its runs to the check's time.
+fn python_findings<'a>(python: &'a PythonChange) -> (Vec<Finding>, Option<OnCopy<'a>>) {
     let (tests, unreadable) = changed_tests(python);
     let not_rerun = |(path, why): (OsString, String)| {
         finding(Some(&path), None, "not-rerun", format!("{why}, so its tests were not rerun."))
     };
-    let mut out: Vec<Finding> = unreadable.into_iter().map(not_rerun).collect();
-    if !tests.is_empty() {
-        out.extend(in_scratch_directory("not-rerun", "to rerun the changed tests in", |tmp| {
-            rerun_findings(python, tmp, &tests)
-        }));
-    }
-    out
+    let out = unreadable.into_iter().map(not_rerun).collect();
+    let run = (!tests.is_empty()).then(|| -> OnCopy { Box::new(move |copy| rerun_findings(python, copy, &tests)) });
+    (out, run)
 }
 
-/// [`python_findings`]' findings on `tests`, rerun in a copy of `python`'s working tree that it makes in
-/// `tmp`, an empty directory, beside the runs' reports: once for each pytest configuration the changed test files
-/// take, so that a group that cannot run leaves the others' findings.
-fn rerun_findings(python: &PythonChange, tmp: &Path, tests: &Tests) -> Vec<Finding> {
+/// [`python_findings`]' findings on `tests`, rerun in `copy`, with the runs' reports in its scratch directory: once
+/// for each pytest configuration the changed test files take, so that a group that cannot run leaves the others'
+/// findings.
+fn rerun_findings(python: &PythonChange, copy: &ScratchCopy, tests: &Tests) -> Vec<Finding> {
     let change = python.change;
     let whole = |message: String| vec![finding(None, None, "not-rerun", message)];
-    let tree = tmp.join("tree");
-    if let Err(e) = copy_working_tree(change, &tree) {
-        return whole(format!(
-            "could not copy the working tree to rerun the changed tests in: {e}; the changed tests were not rerun."
-        ));
-    }
+    let (tree, tmp) = (&copy.tree, &copy.scratch);
     let files: BTreeSet<OsString> = tests.keys().map(|(path, _)| path.clone()).collect();
-    let groups = match pytest::groups(&change.python, &tree, tmp, &files) {
+    let groups = match pytest::groups(&change.python, tree, tmp, &files) {
         Ok(groups) => groups,
         Err(e) => {
             return whole(format!(
@@ -99,7 +97,7 @@ fn rerun_findings(python: &PythonChange, tmp: &Path, tests: &Tests) -> Vec<Findi
     };
     let mut out = vec![];
     for (n, (group, label)) in groups.iter().zip(labels(&groups)).enumerate() {
-        let reports = tmp.join(format!("reports-{n}"));
+        let reports = tmp.join(format!("pytest-reports-{n}"));
         if let Err(e) = std::fs::create_dir(&reports) {
             let which = label.as_deref().unwrap_or("the changed tests");
             let message = format!("could not make a directory for the reruns' reports: {e}; {which} were not rerun.");
@@ -192,7 +190,7 @@ fn rerun<'a>(
     Ok(out)
 }
 
-/// The check's findings on `go`, in no order.
+/// The check's findings on `go`, in no order, as [`python_findings`] gives them.
 ///
 /// Reruns the Go tests the change touched (gotest::changed_tests) once under each of [`SEEDS`], each package's
 /// together, as `go test -shuffle=<seed>` orders them, and reports at its func each test whose outcome, failed or
@@ -200,45 +198,33 @@ fn rerun<'a>(
 /// (`failed-every-run`), and one that fewer than two runs passed or failed (`not-rerun`), as [`python_findings`] does
 /// and for the same reasons. The other tests of the package are not run, so only the changed tests' order varies.
 ///
-/// The tests run in a copy of the working tree, as Python's do, each package's once its tests are built
-/// (gotest::build). A build that cannot start or takes longer than [`BUILD_TIMEOUT`] is a `not-rerun` finding on the
-/// package's tests. A go test run that cannot start, takes longer than [`RUN_TIMEOUT`] or tells nothing (gotest::run),
-/// or finds that the package's tests do not build in the copy, ends the reruns of that package's tests with a
-/// `not-rerun` finding saying so, after what the runs before it showed; the other packages' tests are rerun still. A
-/// changed test file that cannot be read or parsed, and a copy that cannot be made, are `not-rerun` findings too, and a
-/// copy that cannot be removed afterwards a `not-removed` one.
-fn go_findings(go: &GoChange) -> Vec<Finding> {
+/// The tests run in the check's copy of the working tree, each package's once its tests are built (gotest::build). A
+/// build that cannot start or takes longer than [`BUILD_TIMEOUT`] is a `not-rerun` finding on the package's tests. A go
+/// test run that cannot start, takes longer than [`RUN_TIMEOUT`] or tells nothing (gotest::run), or finds that the
+/// package's tests do not build in the copy, ends the reruns of that package's tests with a `not-rerun` finding saying
+/// so, after what the runs before it showed; the other packages' tests are rerun still. A changed test file that cannot
+/// be read or parsed is a `not-rerun` finding too.
+fn go_findings<'a>(go: &'a GoChange) -> (Vec<Finding>, Option<OnCopy<'a>>) {
     let (packages, unreadable) = gotest::changed_tests(go);
     let not_rerun = |(path, unreadable): (&OsStr, &model::Unreadable)| {
         let message = format!("{}, so its tests were not rerun.", unreadable.why);
         finding(Some(path), unreadable.line, "not-rerun", message)
     };
-    let mut out: Vec<Finding> = unreadable.into_iter().map(not_rerun).collect();
-    if !packages.is_empty() {
-        out.extend(in_scratch_directory("not-rerun", "to rerun the changed Go tests in", |tmp| {
-            go_rerun_findings(go, tmp, &packages)
-        }));
-    }
-    out
+    let out = unreadable.into_iter().map(not_rerun).collect();
+    let run = (!packages.is_empty()).then(|| -> OnCopy { Box::new(move |copy| go_rerun_findings(copy, &packages)) });
+    (out, run)
 }
 
-/// [`go_findings`]' findings on `packages`, the changed tests by their package's directory, rerun in a copy of `go`'s
-/// working tree that it makes in `tmp`, an empty directory, beside the tests it builds.
-fn go_rerun_findings(go: &GoChange, tmp: &Path, packages: &Packages) -> Vec<Finding> {
-    let tree = tmp.join("tree");
-    if let Err(e) = copy_working_tree(go.change, &tree) {
-        let message = format!(
-            "could not copy the working tree to rerun the changed Go tests in: {e}; the changed Go tests were not \
-             rerun."
-        );
-        return vec![finding(None, None, "not-rerun", message)];
-    }
+/// [`go_findings`]' findings on `packages`, the changed tests by their package's directory, rerun in `copy`, with the
+/// tests it builds in its scratch directory.
+fn go_rerun_findings(copy: &ScratchCopy, packages: &Packages) -> Vec<Finding> {
+    let (tree, tmp) = (&copy.tree, &copy.scratch);
     let mut out = vec![];
     for (n, (package, tests)) in packages.iter().enumerate() {
         let names: Vec<&str> = tests.iter().map(|t| t.name.as_str()).collect();
         let dir = tree.join(package);
         let which = format!("the changed tests of {}", gotest::label(package));
-        let binary = tmp.join(format!("tests-{n}.test"));
+        let binary = tmp.join(format!("go-tests-{n}.test"));
         if let Err(problem) = gotest::build(&dir, &binary, BUILD_TIMEOUT, "building the package's tests") {
             out.push(stopped_not_rerun(&problem.clause, Some(&which), &[]));
             continue;

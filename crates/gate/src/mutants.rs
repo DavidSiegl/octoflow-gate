@@ -14,7 +14,7 @@ use model::Function;
 use serde_json::Value;
 
 use crate::clippy::workspaces;
-use crate::copies::{copy_working_tree, finding, in_scratch_directory, sort_by_place, Budget};
+use crate::copies::{finding, in_working_tree_copy, sort_by_place, Budget, OnCopy, ScratchCopy};
 use crate::go_mutants::{edited_functions, go_mutants};
 use crate::process::{run_with, Extras, Finished};
 use crate::python_mutants::{python_mutants, Mutmut};
@@ -57,16 +57,29 @@ pub(crate) const SURVIVOR_EXAMPLES: usize = 3;
 /// in turn has an equal share of what the ones before it left, among itself and the languages after it that have
 /// something to mutate: with all three, mutmut has a third of the budget, cargo-mutants half of what is left, and
 /// gremlins the rest. Each one's findings name its share as the seconds it was stopped at.
+///
+/// The three run in turn on one copy of the working tree (copies::in_working_tree_copy), made only when one of them has
+/// something to mutate; each changes only its own language's files there. A copy that cannot be made is a `not-run`
+/// finding in place of all their runs, and one that cannot be removed afterwards a `not-removed` one.
 pub fn surviving_mutants(sources: &Sources, mutmut: &Mutmut, budget: u64) -> Vec<Finding> {
     let budget = Budget::starting_now(budget);
     let (rust, mut out) = edited_rust(&sources.rust);
     let (go, unread) = edited_functions(&sources.go);
     out.extend(unread);
+    let (has_rust, has_go) = (!rust.is_empty(), !go.is_empty());
     let share = |later: &[bool]| budget.share(1 + later.iter().map(|&has| u32::from(has)).sum::<u32>());
-    let python = share(&[!rust.is_empty(), !go.is_empty()]);
-    out.extend(python_mutants(&sources.python, mutmut, python.seconds));
-    out.extend(rust_mutants(&sources.rust, &rust, &share(&[!go.is_empty()])));
-    out.extend(go_mutants(&sources.go, &go, &share(&[])));
+    let python = share(&[has_rust, has_go]);
+    let (found, mutmut_run) = python_mutants(&sources.python, mutmut, python.seconds);
+    out.extend(found);
+    let mut runs: Vec<OnCopy> = mutmut_run.into_iter().collect();
+    if has_rust {
+        runs.push(Box::new(|copy| rust_mutants(copy, &rust, &share(&[has_go]))));
+    }
+    if has_go {
+        runs.push(Box::new(|copy| go_mutants(copy, &sources.go.change.base, &go, &share(&[]))));
+    }
+    let unjudged = "the change's functions were not mutation-tested";
+    out.extend(in_working_tree_copy(sources.rust.change, "not-run", unjudged, runs));
     sort_by_place(&mut out);
     out
 }
@@ -128,44 +141,27 @@ fn edited_rust(rust: &RustChange) -> (Vec<Edited>, Vec<Finding>) {
     (edited, unread)
 }
 
-/// Rust's findings of the surviving-mutants check on `functions`, [`edited_rust`]'s of `rust`, in no order.
+/// Rust's findings of the surviving-mutants check on `functions`, [`edited_rust`]'s, in no order.
 ///
-/// Runs cargo-mutants, until `budget` runs out, on each Cargo workspace that holds one of `functions`, in a copy of
-/// the working tree, as [`on_copy`] says. Each function with mutants that survived is a `survived` finding at the
-/// line its fn starts, with how many of the mutants tried of it they were and the first [`SURVIVOR_EXAMPLES`] of
-/// them. A function with nothing to mutate gives nothing. The budget running out is a `budget-reached` finding; a
-/// file in no workspace cargo can tell, or whose workspace's directory is not above it, is a `not-mutated` one on it;
-/// a run that cannot be made or read is a `not-run` finding saying why, and a copy that cannot be removed afterwards a
-/// `not-removed` one.
-fn rust_mutants(rust: &RustChange, functions: &[Edited], budget: &Budget) -> Vec<Finding> {
-    if functions.is_empty() {
-        return vec![];
-    }
-    in_scratch_directory("not-run", "to run cargo-mutants on a copy of the tree in", |dir| {
-        on_copy(rust, dir, functions, budget)
-    })
-}
-
-/// The findings on `functions`, [`edited_rust`]'s, of cargo-mutants run on each Cargo workspace that holds one of
-/// them ([`cargo_roots`]), in path order of the workspaces, in a copy of the working tree (copies::copy_working_tree)
-/// made in `dir`, an empty directory, beside each run's output. cargo-mutants mutates only `functions`
-/// ([`run_workspace`]), and its tests run with `--test-tool nextest`, each mutant's within its timeout
-/// ([`MINIMUM_TEST_TIMEOUT`]).
-///
-/// A run the deadline stops is a `budget-reached` finding beside what the mutants it had tried showed, and each
-/// workspace after it a `not-run` one; a copy that cannot be made is the one `not-run` finding.
-fn on_copy(rust: &RustChange, dir: &Path, functions: &[Edited], budget: &Budget) -> Vec<Finding> {
-    let tree = dir.join("tree");
-    if let Err(e) = copy_working_tree(rust.change, &tree) {
-        return vec![not_run(&format!("could not copy the tree for cargo-mutants: {e}"))];
-    }
+/// Runs cargo-mutants, until `budget` runs out, on each Cargo workspace that holds one of `functions`, in `copy`, a
+/// copy of the working tree, in path order of the workspaces, beside each run's output in its scratch directory.
+/// cargo-mutants mutates only `functions` ([`run_workspace`]), and its tests run with `--test-tool nextest`, each
+/// mutant's within its timeout ([`MINIMUM_TEST_TIMEOUT`]). Each function with mutants that survived is a `survived`
+/// finding at the line its fn starts, with how many of the mutants tried of it they were and the first
+/// [`SURVIVOR_EXAMPLES`] of them. A function with nothing to mutate gives nothing. The budget running out is a
+/// `budget-reached` finding; a file in no workspace cargo can tell ([`cargo_roots`]), or whose workspace's directory is
+/// not above it, is a `not-mutated` one on it; a run that cannot be made or read is a `not-run` finding saying why. A
+/// run the deadline stops is a `budget-reached` finding beside what the mutants it had tried showed, and each workspace
+/// after it a `not-run` one. A cargo-mutants killed past its grace may leave one of the copy's `.rs` files mutated.
+fn rust_mutants(copy: &ScratchCopy, functions: &[Edited], budget: &Budget) -> Vec<Finding> {
+    let tree = &copy.tree;
     let mut out = vec![];
     let mut by_path: BTreeMap<&OsStr, Vec<&Edited>> = BTreeMap::new();
     for f in functions {
         by_path.entry(&f.path).or_default().push(f);
     }
     let mut roots: BTreeMap<OsString, Vec<&Edited>> = BTreeMap::new();
-    let mut root_of = cargo_roots(&tree, by_path.keys().copied());
+    let mut root_of = cargo_roots(tree, by_path.keys().copied());
     for (path, mine) in by_path {
         let why = match root_of.remove(path).expect("cargo_roots answers each path it is given") {
             Ok(root) if Path::new(path).starts_with(&root) => {
@@ -179,7 +175,7 @@ fn on_copy(rust: &RustChange, dir: &Path, functions: &[Edited], budget: &Budget)
     }
     let roots: Vec<_> = roots.into_iter().collect();
     for (n, (root, mine)) in roots.iter().enumerate() {
-        let run = Run { tree: &tree, scratch: &dir.join(format!("run-{n}")) };
+        let run = Run { tree, scratch: &copy.scratch.join(format!("cargo-mutants-{n}")) };
         let (found, stopped) = run_workspace(&run, root, mine, budget);
         out.extend(found);
         if stopped {

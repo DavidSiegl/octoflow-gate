@@ -442,8 +442,8 @@ fn a_directory_for_the_copy_that_cannot_be_made_is_a_finding() {
             None,
             None,
             "not-run".to_string(),
-            "could not make a directory to run mutmut on a copy of the tree in: No such file or directory (os error \
-             2); nothing ran, so the check judged nothing."
+            "could not make a directory to copy the working tree into: No such file or directory (os error 2); the \
+             change's functions were not mutation-tested."
                 .to_string()
         )]
     );
@@ -852,7 +852,7 @@ fn unreached_functions_are_named_with_their_files() {
 /// The directory a `not-removed` finding's `message` names, made removable again and removed, and why the gate
 /// could not remove it.
 fn left_behind(message: &str) -> String {
-    let named = message.strip_prefix("could not remove the directory to run mutmut on a copy of the tree in, `");
+    let named = message.strip_prefix("could not remove the directory of the copy of the working tree, `");
     let (dir, why) = named.expect(message).split_once("`: ").expect(message);
     assert!(Command::new("chmod").args(["-R", "u+rwX", dir]).status().unwrap().success());
     std::fs::remove_dir_all(dir).unwrap();

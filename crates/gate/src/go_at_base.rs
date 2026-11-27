@@ -1,60 +1,47 @@
 //! Go's half of the passes-at-base check: the Go tests a change adds or edits, run with go test against the code the
 //! change started from.
 
-use std::path::Path;
 use std::time::Instant;
 
 use checks::Finding;
 
-use crate::base_findings::{budget_reached, not_reached, submodules_left_empty, unread_not_run};
-use crate::copies::{copy_base_with_tests, finding, in_scratch_directory, Budget};
+use crate::base_findings::{budget_reached, not_reached, unread_not_run};
+use crate::copies::{finding, Budget, OnCopy, ScratchCopy};
 use crate::gotest::{self, Packages, Ran};
 use crate::junit::Outcome;
 use crate::sources::GoChange;
 
-/// Go's findings of the passes-at-base check on `go`, in no order.
+/// Go's findings of the passes-at-base check on `go`, in no order: those it gives before the run at the base, and that
+/// run on the check's copy of the base, None when there is no test to run there.
 ///
 /// When the change edits Go code under test ([`GoChange::edits_code`]), runs the Go tests it adds or edits
 /// (gotest::changed_tests) against the base's code, by `budget`'s deadline, and reports at its func each one that
 /// passed there (rule `passes-at-base`): it does not test the change. A change to the tests alone has no "without the
 /// change" to run them in.
 ///
-/// The tests run in a copy of the base (copies::copy_base_with_tests) with the change's files that go with the tests
-/// (GoChange::beside_tests) in place of the base's: each package's changed tests together, once, from the package's
-/// directory, as `go test -json -count=1 -run '^(TestA|TestB)$' .`. A package whose tests do not build there counts
-/// as failing each of them, which is what the check expects of a test that needs the change, and gives nothing; so
-/// does a test that fails or skips there, or that the run does not report.
+/// Each package's changed tests run together, once, from the package's directory in the copy, as `go test -json
+/// -count=1 -run '^(TestA|TestB)$' .`. A package whose tests do not build there counts as failing each of them, which
+/// is what the check expects of a test that needs the change, and gives nothing; so does a test that fails or skips
+/// there, or that the run does not report.
 ///
 /// The budget running out is a `budget-reached` finding, and each package after it a `not-run` one. A changed test
-/// file that cannot be read or parsed, a copy that cannot be made, submodules the copy leaves empty, and a go test
-/// that cannot start or tells nothing (gotest::run) are `not-run` findings saying so; a copy that cannot be removed
-/// afterwards is a `not-removed` one.
-pub fn go_at_base(go: &GoChange, budget: &Budget) -> Vec<Finding> {
+/// file that cannot be read or parsed, and a go test that cannot start or tells nothing (gotest::run), are `not-run`
+/// findings saying so.
+pub fn go_at_base<'a>(go: &'a GoChange, budget: &'a Budget) -> (Vec<Finding>, Option<OnCopy<'a>>) {
     if !go.edits_code() {
-        return vec![];
+        return (vec![], None);
     }
     let (packages, unread) = gotest::changed_tests(go);
-    let mut out: Vec<Finding> = unread.into_iter().map(unread_not_run).collect();
-    if !packages.is_empty() {
-        out.extend(in_scratch_directory("not-run", "to run the changed Go tests at the base in", |dir| {
-            base_run_findings(go, dir, &packages, budget)
-        }));
-    }
-    out
+    let out = unread.into_iter().map(unread_not_run).collect();
+    let run = (!packages.is_empty())
+        .then(|| -> OnCopy { Box::new(move |copy| base_run_findings(copy, &packages, budget)) });
+    (out, run)
 }
 
-/// The findings on `packages`, run within `budget` in a copy of the base made in `dir`, an empty directory.
-fn base_run_findings(go: &GoChange, dir: &Path, packages: &Packages, budget: &Budget) -> Vec<Finding> {
-    let tree = dir.join("tree");
-    let empty = match copy_base_with_tests(go.change, &tree, &dir.join("base.tar"), |p| go.beside_tests(p)) {
-        Ok(empty) => empty,
-        Err(e) => {
-            let message = format!("could not copy the base to run the changed Go tests in: {e}; they were not run \
-                                   there.");
-            return vec![finding(None, None, "not-run", message)];
-        }
-    };
-    let mut out: Vec<Finding> = submodules_left_empty(&empty, "Go").into_iter().collect();
+/// The findings on `packages`, run within `budget` in `copy`, a copy of the base.
+fn base_run_findings(copy: &ScratchCopy, packages: &Packages, budget: &Budget) -> Vec<Finding> {
+    let tree = &copy.tree;
+    let mut out = vec![];
     for (n, (package, tests)) in packages.iter().enumerate() {
         let label = gotest::label(package);
         let left = budget.deadline.saturating_duration_since(Instant::now());

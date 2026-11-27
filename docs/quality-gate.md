@@ -727,8 +727,8 @@ changed test, a `conftest.py` or a helper, is one `not-run` finding naming the p
 Rust's tests are judged the same way after Python's, with what is left of the one `--base-run-budget`, when the change
 edits Rust code outside the tests: a `.rs` file of a Cargo package that is not among Rust's tests (as for test
 integrity), edited outside its test code, added, deleted or renamed. The changed tests are the tests, read as test
-integrity reads them, whose lines, attributes included, the change adds to or removes from. They run in a copy of the
-base made as above, with these files taken from the working tree: Rust's test files, the files that go with the tests
+integrity reads them, whose lines, attributes included, the change adds to or removes from. They run in the copy of
+the base made as above, which takes these files from the working tree too: Rust's test files, the files that go with the tests
 (by default any file under a `tests` directory), and a `.rs` file the change edits only inside its test code. A test in
 a file the change also edits outside its test code cannot be separated from the code it tests, and is a `not-run`
 finding at its `fn`. Each Cargo target the changed tests are in is built and run on its own, with `cargo nextest run
@@ -754,8 +754,10 @@ directory is new for every run, so each run compiles the package's dependencies 
 Go's tests are judged after Rust's, with what is left of the same `--base-run-budget`, when the change edits Go code
 outside the tests: a `.go` file of a Go module that is not a `_test.go` file and lies in no `testdata` directory. The
 changed tests are those flaky-tests reruns: a top-level `TestX`, `FuzzX` or `ExampleX` of a `_test.go` file whose
-lines the change adds to or removes from. They run in a copy of the base made as above, with the change's `_test.go`
-files, the files under a `testdata` directory and the files that go with the tests taken from the working tree; Go has
+lines the change adds to or removes from. They run in the copy of the base made as above, which takes the change's
+`_test.go` files, the files under a `testdata` directory and the files that go with the tests from the working tree too;
+so a Python test that reads a Go package's `testdata/` sees the working tree's. The copy is made once, only when one of
+the three languages has tests to run at the base, and holds each language's files from the working tree. Go has
 no test code inside a file of code, so no Go test is inseparable from what it tests. Each package's changed tests run
 together, once, from the package's directory, as `go test -json -count=1 -run '^(TestA|TestB)$' .`, killed when the
 budget runs out. A package whose tests do not build at the base counts as failing them, which is what the check

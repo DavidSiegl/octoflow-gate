@@ -204,8 +204,8 @@ fn no_room_for_the_run_at_the_base_is_a_finding() {
         None,
         None,
         "not-run".into(),
-        "could not make a directory to run the changed Rust tests at the base in: No such file or directory (os \
-         error 2); nothing ran, so the check judged nothing."
+        "could not make a directory to copy the base into: No such file or directory (os error 2); the changed tests \
+         were not run at the base."
             .into(),
     )]);
 }
@@ -354,8 +354,8 @@ fn a_base_that_cannot_be_copied_is_a_finding() {
         None,
         None,
         "not-run".into(),
-        "could not copy the base to run the changed Rust tests in: tar could not unpack the base: tar: no space; \
-         they were not run there."
+        "could not copy the base: tar could not unpack the base: tar: no space; the changed tests were not run at \
+         the base."
             .into(),
     )]);
 }
@@ -391,9 +391,9 @@ fn empty_submodules_are_one_finding() {
         None,
         None,
         "not-run".into(),
-        "the copy of the base leaves submodules empty, so a changed Rust test that needs one, if any does, was not \
-         judged: `vendor/a`, which is not initialised in the working tree; `vendor/b`, which is not initialised in \
-         the working tree."
+        "the copy of the base leaves submodules empty, so a changed test that needs one of them, if any does, was \
+         not judged: `vendor/a`, which is not initialised in the working tree; `vendor/b`, which is not initialised \
+         in the working tree."
             .into(),
     ));
 }
@@ -452,7 +452,7 @@ fn a_submodule_beside_the_tests_not_initialised_in_the_working_tree_is_one_findi
         None,
         None,
         "not-run".into(),
-        "the copy of the base leaves submodules empty, so a changed Rust test that needs one, if any does, was not \
+        "the copy of the base leaves a submodule empty, so a changed test that needs it, if any does, was not \
          judged: `tests/fixture`, which is not initialised in the working tree."
             .into(),
     ));
@@ -482,7 +482,7 @@ fn a_submodule_without_the_base_s_commit_is_one_finding() {
         None,
         None,
         "not-run".into(),
-        "the copy of the base leaves submodules empty, so a changed Rust test that needs one, if any does, was not \
+        "the copy of the base leaves a submodule empty, so a changed test that needs it, if any does, was not \
          judged: `vendor/lib`, whose repository in the working tree does not have the base's commit 111111111111."
             .into(),
     ));

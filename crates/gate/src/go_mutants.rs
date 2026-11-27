@@ -12,9 +12,8 @@ use std::time::Instant;
 use checks::{ChangedFile, Finding, Side};
 use regex::bytes::Regex;
 
-use crate::copies::{copy_working_tree, finding, in_scratch_directory, Budget};
+use crate::copies::{finding, Budget, ScratchCopy};
 use crate::git::shell_quote_bytes;
-use crate::change::Change;
 use crate::mutants::{dir_name, edits, Edited, KILL_WAIT, STOP_GRACE, SURVIVOR_EXAMPLES};
 use crate::sources::{project_dir, GoChange, GO_MANIFEST};
 use crate::paths::rel_path;
@@ -108,38 +107,22 @@ fn unchanged_declarations(go: &GoChange, file: &ChangedFile) -> Vec<bool> {
 /// Go's findings of the surviving-mutants check on `functions`, [`edited_functions`]' of `go`, in no order.
 ///
 /// Runs gremlins, until `budget` runs out, on each Go module that holds one of them, the directory of the go.mod
-/// nearest above its file, in a copy of the working tree, as [`on_copy`] says. Each function with mutants that
-/// survived is a `survived` finding at its `func` line, with how many of the mutants tried of it they were and the
-/// first [`SURVIVOR_EXAMPLES`] of them; one with mutants on lines no test runs an `untested` one, with how many. A
-/// function gremlins makes no mutant of gives nothing. The budget running out is a `budget-reached` finding; a
-/// function whose file lies under no go.mod in the copy, as where the change deletes it, a `not-mutated` one; a run
-/// that cannot be made or fails a `not-run` one saying why, and a copy that cannot be removed afterwards a
-/// `not-removed` one.
-pub(crate) fn go_mutants(go: &GoChange, functions: &[Edited], budget: &Budget) -> Vec<Finding> {
-    if functions.is_empty() {
-        return vec![];
-    }
-    in_scratch_directory("not-run", "to run gremlins on a copy of the tree in", |dir| {
-        on_copy(go.change, dir, functions, budget)
-    })
-}
-
-/// The findings on `functions` of gremlins run on each Go module that holds one of them, in path order of the
-/// modules, in a copy of `change`'s working tree (copies::copy_working_tree) made in `dir`, an empty directory,
-/// beside each run's files. gremlins is told to diff against the change's base.
+/// nearest above its file, in path order of the modules, in `copy`, a copy of the working tree, beside each run's
+/// files in its scratch directory. gremlins is told to diff against `base`, the change's.
 ///
 /// gremlins mutates only the lines it reads as changed from `git diff --merge-base <base>`, whose names it takes as
 /// paths from the module's directory: the git a run finds first on PATH gives it the module's edited functions as a
 /// diff ([`diff_of`]) instead, and passes any other command to git. So it mutates the edited functions whole, though
 /// the copy has no repository to diff.
-///
-/// A run the deadline stops is a `budget-reached` finding beside what the mutants it had tried showed, and each module
-/// after it a `not-run` one; a copy that cannot be made is the one `not-run` finding.
-fn on_copy(change: &Change, dir: &Path, functions: &[Edited], budget: &Budget) -> Vec<Finding> {
-    let tree = dir.join("tree");
-    if let Err(e) = copy_working_tree(change, &tree) {
-        return vec![not_run(&format!("could not copy the tree for gremlins: {e}"))];
-    }
+/// Each function with mutants that
+/// survived is a `survived` finding at its `func` line, with how many of the mutants tried of it they were and the
+/// first [`SURVIVOR_EXAMPLES`] of them; one with mutants on lines no test runs an `untested` one, with how many. A
+/// function gremlins makes no mutant of gives nothing. The budget running out is a `budget-reached` finding; a
+/// function whose file lies under no go.mod in the copy, as where the change deletes it, a `not-mutated` one; a run
+/// that cannot be made or fails a `not-run` one saying why. A run the deadline stops is a `budget-reached` finding
+/// beside what the mutants it had tried showed, and each module after it a `not-run` one.
+pub(crate) fn go_mutants(copy: &ScratchCopy, base: &str, functions: &[Edited], budget: &Budget) -> Vec<Finding> {
+    let tree = &copy.tree;
     let mut out = vec![];
     let mut modules: BTreeMap<PathBuf, Vec<&Edited>> = BTreeMap::new();
     for f in functions {
@@ -155,7 +138,7 @@ fn on_copy(change: &Change, dir: &Path, functions: &[Edited], budget: &Budget) -
     }
     let modules: Vec<_> = modules.into_iter().collect();
     for (n, (module, mine)) in modules.iter().enumerate() {
-        let run = Run { tree: &tree, scratch: &dir.join(format!("run-{n}")), base: &change.base };
+        let run = Run { tree, scratch: &copy.scratch.join(format!("gremlins-{n}")), base };
         let (found, stopped) = run_module(&run, module, mine, budget);
         out.extend(found);
         if stopped {

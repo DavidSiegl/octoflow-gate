@@ -644,8 +644,8 @@ fn no_room_for_the_reruns_is_a_finding() {
     let message = whole_not_rerun(findings_with(&repo, &common::python(), &[("TMPDIR", missing.into())]));
     assert_eq!(
         message,
-        "could not make a directory to rerun the changed tests in: No such file or directory (os error 2); nothing \
-         ran, so the check judged nothing."
+        "could not make a directory to copy the working tree into: No such file or directory (os error 2); the \
+         changed tests were not rerun."
     );
 }
 
@@ -675,7 +675,7 @@ fn tracked_files_that_cannot_be_copied_are_a_finding() {
     repo.make_uncopyable();
     change_the_tests(&repo);
     let said = whole_not_rerun(findings(&repo));
-    let said = said.strip_prefix("could not copy the working tree to rerun the changed tests in: cannot copy /");
+    let said = said.strip_prefix("could not copy the working tree: cannot copy /");
     let said = said.expect("the copy's failure");
     let end = "/vendor/lib/pipe: it is no regular file, link or directory; the changed tests were not rerun.";
     assert!(said.ends_with(end), "{said}");
@@ -695,7 +695,8 @@ fn a_rerun_directory_left_behind_is_a_finding_beside_the_results() {
     let left: Vec<&Found> = found.iter().filter(|(_, _, rule, _)| rule == "not-removed").collect();
     assert_eq!(left.len(), 1, "{found:?}");
     let (path, line, _, message) = left[0];
-    let named = message.strip_prefix("could not remove the directory to rerun the changed tests in, `").expect(message);
+    let prefix = "could not remove the directory of the copy of the working tree, `";
+    let named = message.strip_prefix(prefix).expect(message);
     let (dir, why) = named.split_once("`: ").expect(message);
     assert!(Command::new("chmod").args(["-R", "u+rwX", dir]).status().unwrap().success());
     std::fs::remove_dir_all(dir).unwrap();

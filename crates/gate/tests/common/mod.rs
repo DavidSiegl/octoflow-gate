@@ -79,8 +79,8 @@ impl Repo {
     }
 
     /// Commits a submodule at vendor/lib and puts a named pipe in its working tree. A copy of the working tree
-    /// (copies::copy_working_tree) takes a submodule's directory whole, so it meets the pipe, which git does not track,
-    /// and refuses it: the tree cannot be copied, though git reads its change.
+    /// (copies::in_working_tree_copy) takes a submodule's directory whole, so it meets the pipe, which git does not
+    /// track, and refuses it: the tree cannot be copied, though git reads its change.
     pub fn make_uncopyable(&self) {
         let lib = self.outside.join("lib");
         std::fs::create_dir_all(&lib).unwrap();

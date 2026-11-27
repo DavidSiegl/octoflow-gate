@@ -423,7 +423,8 @@ fn working_tree_files(change: &Change, wanted: impl Fn(&OsStr) -> bool) -> Resul
             continue;
         }
         let read = std::fs::read(&full);
-        let bytes = read.map_err(|e| Unjudged(format!("{} could not be read: {e}", text::path(full.as_os_str()))))?;
+        let unread = |e| Unjudged(format!("{} could not be read: {e}", text::shown_path(full.as_os_str())));
+        let bytes = read.map_err(unread)?;
         out.push((path.to_os_string(), bytes));
     }
     Ok(out)
@@ -569,7 +570,8 @@ impl<'a> Stored<'a> {
         }
         let full = self.change.root.join(path);
         let read = std::fs::read(&full);
-        let bytes = read.map_err(|e| Unjudged(format!("{} could not be read: {e}", text::path(full.as_os_str()))))?;
+        let unread = |e| Unjudged(format!("{} could not be read: {e}", text::shown_path(full.as_os_str())));
+        let bytes = read.map_err(unread)?;
         Ok(Some(bytes).filter(|bytes| !(language.generated)(bytes)))
     }
 }

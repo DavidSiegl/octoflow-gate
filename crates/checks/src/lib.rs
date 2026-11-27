@@ -1,6 +1,6 @@
 //! The gate's parser checks: what a change did to the functions, tests and names of its source files, judged over the
 //! model of each file (crates/model) whatever its language. Each check takes one language's [`ChangedFile`]s and
-//! gives its [`Finding`]s, which the gate lists beside the linters' (gate::judge).
+//! gives its [`Finding`]s, which the gate lists beside the linters' (crates/gate/src/judge.rs).
 //!
 //! - [`complexity`]: functions the change took over the cognitive-complexity limit.
 //! - [`cycles`]: dependency cycles between modules the change closed, judged over the imports of the whole tree on

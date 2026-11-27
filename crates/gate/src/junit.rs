@@ -29,8 +29,8 @@ pub enum Outcome {
 /// with the test's own first line, such as a `t.Errorf`'s or, for a package that does not compile, gotestsum's
 /// `FAIL <package> [build failed]`. Errs when the report cannot be read or parsed.
 pub fn junit_outcomes(report: &Path) -> Result<Vec<(String, Outcome, String)>, Unjudged> {
-    let doc = xml::parse_file(report)
-        .map_err(|e| Unjudged(format!("cannot read the test report {}: {e}", crate::text::path(report.as_os_str()))))?;
+    let shown = || crate::text::shown_path(report.as_os_str());
+    let doc = xml::parse_file(report).map_err(|e| Unjudged(format!("cannot read the test report {}: {e}", shown())))?;
     let mut out = vec![];
     for case in doc.descendants("testcase") {
         let name = format!("{}.{}", case.get("classname").unwrap_or(""), case.get("name").unwrap_or(""));

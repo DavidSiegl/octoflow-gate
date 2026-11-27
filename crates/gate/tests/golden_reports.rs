@@ -5,9 +5,9 @@ use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 
-use gate::{tool_config, touched_paths, ToolConfig};
-use gate::NewCoverage;
-use gate::{Finding, QualityReport, GATE_VERSION, QUALITY_FINDINGS_LIMIT};
+use gate::{
+    tool_config, touched_paths, Finding, NewCoverage, QualityReport, ToolConfig, GATE_VERSION, QUALITY_FINDINGS_LIMIT,
+};
 
 /// Passes when `report`'s quality file and quality.json are tests/golden/<name>.txt and .json, the JSON's
 /// gate_version written `<version>` there.
@@ -37,7 +37,7 @@ fn issues(n: u32) -> Vec<Finding> {
 }
 
 /// The configuration of clippy's that a change editing `files`, each a file clippy reads, edits, as
-/// config_edits::tool_config gives it.
+/// gate::tool_config gives it.
 fn clippy(files: Vec<String>) -> ToolConfig {
     let diff: String = files.iter().map(|f| format!("--- a/{f}\n")).collect();
     let touched = touched_paths(diff.as_bytes(), &Default::default());

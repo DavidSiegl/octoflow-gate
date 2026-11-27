@@ -62,7 +62,7 @@ impl NewCoverage {
         };
         if !self.unmeasured.is_empty() {
             let named: Vec<String> =
-                self.unmeasured.iter().map(|p| format!("`{}`", text::one_line(&text::path(p)))).collect();
+                self.unmeasured.iter().map(|p| format!("`{}`", text::one_line(&text::shown_path(p)))).collect();
             out += &format!(
                 "\n\nNot measured: {}; coverage.py records no data for a file whose name is not UTF-8.",
                 series(&named, Some(5))

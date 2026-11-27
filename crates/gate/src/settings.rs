@@ -201,7 +201,7 @@ impl JudgedBy {
         let rules = path.parent().unwrap_or(Path::new("/")).join(RULES_FILE);
         let ruled = rules.symlink_metadata().is_ok();
         if ruled && !rules.is_file() {
-            return Err(Unjudged(format!("no rules: {} is not a file", crate::text::path(rules.as_os_str()))));
+            return Err(Unjudged(format!("no rules: {} is not a file", crate::text::shown_path(rules.as_os_str()))));
         }
         Ok(JudgedBy {
             settings,
@@ -219,7 +219,7 @@ fn from_elsewhere(root: &Path, path: &Path, name: &str, there: bool) -> Option<S
     if tree_s_own(root, path, name) {
         return None;
     }
-    let shown = crate::text::path(path.as_os_str());
+    let shown = crate::text::shown_path(path.as_os_str());
     Some(if there { format!("`{shown}`") } else { format!("the defaults (there is no `{shown}`)") })
 }
 

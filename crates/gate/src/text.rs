@@ -20,7 +20,7 @@ pub fn lossless(bytes: &[u8]) -> String {
 }
 
 /// A path as the gate writes it, by [`lossless`].
-pub fn path(p: &OsStr) -> String {
+pub fn shown_path(p: &OsStr) -> String {
     lossless(p.as_bytes())
 }
 

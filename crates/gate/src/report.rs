@@ -117,7 +117,7 @@ impl QualityReport {
         if !self.suppressions.is_empty() {
             out.extend([String::new(), "## Suppressions added".into(), String::new()]);
             out.extend(self.suppressions.iter().map(|(path, line, text)| {
-                one_line(&format!("- `{}:{line}` `{text}`", text::path(path)))
+                one_line(&format!("- `{}:{line}` `{text}`", text::shown_path(path)))
             }));
         }
         let config = self.config_items();
@@ -154,10 +154,10 @@ impl QualityReport {
                 conditions: c.conditions,
                 covered_conditions: c.covered_conditions,
                 percent: c.percent(),
-                unmeasured: c.unmeasured.iter().map(|p| text::path(p)).collect(),
+                unmeasured: c.unmeasured.iter().map(|p| text::shown_path(p)).collect(),
             }),
             suppressions: (self.suppressions.iter())
-                .map(|(path, line, text)| JsonSuppression { path: text::path(path), line: *line, text })
+                .map(|(path, line, text)| JsonSuppression { path: text::shown_path(path), line: *line, text })
                 .collect(),
             build_config: self.config_items(),
         };
@@ -219,7 +219,7 @@ impl QualityReport {
                 .map(|(path, note)| ConfigItem::of(path, format!("The change edits `{path}`. {note}"))),
         );
         for tool in &self.tool_config {
-            let files: Vec<String> = tool.files.iter().map(|p| text::path(p)).collect();
+            let files: Vec<String> = tool.files.iter().map(|p| text::shown_path(p)).collect();
             let named = series(&files.iter().map(|f| format!("`{f}`")).collect::<Vec<_>>(), Some(5));
             out.push(ConfigItem { text: format!("The change edits {named}, which {}.", tool.what), files });
         }
@@ -272,7 +272,7 @@ impl JsonFinding {
     /// `f` as quality.json lists it; `fails` says whether it fails the gate. Its fingerprint is of the text the
     /// quality file writes, where [`one_line`] has escaped each line break, so either rendering reads the same.
     fn of(f: &Finding, fails: bool) -> Self {
-        let path = f.path.as_deref().map(text::path);
+        let path = f.path.as_deref().map(text::shown_path);
         JsonFinding {
             fingerprint: fingerprint(
                 path.as_deref().map(one_line).as_deref(),
@@ -358,8 +358,8 @@ fn to_weigh_section(to_weigh: &[Finding], after: usize) -> Vec<String> {
 fn numbered(k: usize, f: &Finding) -> String {
     let at = match (&f.path, f.line) {
         (None, _) => "The change as a whole:".into(),
-        (Some(path), None) => format!("`{} (the whole file)`", text::path(path)),
-        (Some(path), Some(line)) => format!("`{}:{line}`", text::path(path)),
+        (Some(path), None) => format!("`{} (the whole file)`", text::shown_path(path)),
+        (Some(path), Some(line)) => format!("`{}:{line}`", text::shown_path(path)),
     };
     one_line(&format!("{k}. {at} {} {}: {}", f.severity, f.rule, f.message))
 }

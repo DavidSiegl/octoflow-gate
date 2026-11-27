@@ -140,7 +140,7 @@ fn package_root(tree: &Path, package: &Path) -> Result<OsString, String> {
     match (manifests.first(), problems.first()) {
         (Some(manifest), _) => Ok(manifest.parent().unwrap_or(Path::new("")).as_os_str().to_os_string()),
         (None, Some(problem)) => Err(problem.strip_suffix('.').unwrap_or(problem).to_string()),
-        (None, None) => Err(format!("cargo cannot tell the workspace of `{}`", text::path(nearest.as_os_str()))),
+        (None, None) => Err(format!("cargo cannot tell the workspace of `{}`", text::shown_path(nearest.as_os_str()))),
     }
 }
 
@@ -233,7 +233,7 @@ fn run_findings(done: &Finished, output: &Path, root: &OsStr, budget: u64) -> Ve
         let log = output.join("log/baseline.log");
         let said = match std::fs::read(&log) {
             Ok(bytes) => format!("its log said: {}", baseline_cause(&text::lossless(&bytes))),
-            Err(e) => format!("its log could not be read: {}: {e}", text::path(log.as_os_str())),
+            Err(e) => format!("its log could not be read: {}: {e}", text::shown_path(log.as_os_str())),
         };
         return vec![not_run(&format!(
             "the unmutated baseline of {place} did not pass ({summary}, as cargo-mutants words it), so it tried no \
@@ -301,7 +301,7 @@ fn baseline_cause(log: &str) -> String {
 /// cannot be read, or an outcome has no scenario or no summary that is a string.
 fn outcomes(output: &Path) -> Result<Vec<Outcome>, String> {
     let path = output.join("outcomes.json");
-    let named = text::path(path.as_os_str());
+    let named = text::shown_path(path.as_os_str());
     let bytes = std::fs::read(&path).map_err(|e| format!("{named}: {e}"))?;
     let read: Value = serde_json::from_slice(&bytes).map_err(|e| format!("{named}: {e}"))?;
     let Some(Value::Array(outcomes)) = read.get("outcomes") else {

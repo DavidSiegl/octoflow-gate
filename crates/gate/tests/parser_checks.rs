@@ -8,11 +8,10 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::process::Command;
 use std::time::Duration;
 
-use gate::Change;
-use gate::{judge_change, Given};
-use gate::{dependency_cycles, duplicated_blocks, too_complex, vague_names, weakened_tests};
-use gate::Settings;
-use gate::Sources;
+use gate::{
+    dependency_cycles, duplicated_blocks, judge_change, too_complex, vague_names, weakened_tests, Change, Given,
+    Settings, Sources,
+};
 
 use common::Repo;
 

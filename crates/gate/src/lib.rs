@@ -2,9 +2,9 @@
 //! makes since a base commit and reports on it twice, as the quality file and quality.json (report.rs).
 //! docs/port-differences.md lists where its reports differ from those of the gate up to 0.6.0.
 //!
-//! The re-exports below are the crate's whole interface, what main.rs and the integration tests under tests/ use;
-//! every module is private. The library is not published: a release's contract is the binary's (docs/quality-gate.md,
-//! "The report as a contract").
+//! The re-exports below and [`Unjudged`] are the crate's whole interface, what main.rs and the integration tests
+//! under tests/ use; every module is private. The library is not published: a release's contract is the binary's
+//! (docs/quality-gate.md, "The report as a contract").
 
 mod change;
 mod changed_tests;
@@ -50,7 +50,7 @@ pub use process::{catch_interrupt, exit_interrupted, interrupted};
 pub use report::{Finding, QualityReport, Verdict, GATE_VERSION, QUALITY_FINDINGS_LIMIT};
 pub use settings::{Settings, RULES_FILE};
 pub use sources::Sources;
-pub use text::{one_line, path, py_strip, series};
+pub use text::{one_line, py_strip, series, shown_path};
 
 /// A failure that stops the gate judging a change, so that it writes neither report and exits 2; the message, a
 /// sentence fragment, is shown to whoever ran it.

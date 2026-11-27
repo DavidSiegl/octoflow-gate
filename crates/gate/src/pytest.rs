@@ -103,7 +103,7 @@ impl Group {
     /// group: by their configuration file's path in the copy.
     pub fn label(&self) -> String {
         match self.inifile_in_tree() {
-            Some(inifile) => format!("the changed tests configured by {}", text::path(inifile.as_os_str())),
+            Some(inifile) => format!("the changed tests configured by {}", text::shown_path(inifile.as_os_str())),
             None => "the changed tests with no pytest configuration".into(),
         }
     }
@@ -264,7 +264,7 @@ pub fn run(
     let finished = match run_with(&argv, &setup.top, timeout, &extras) {
         Ok(finished) => finished,
         Err(e) => {
-            let python = text::path(setup.python.as_os_str());
+            let python = text::shown_path(setup.python.as_os_str());
             let clause = format!("could not start pytest with the Python `{python}`, {doing}: {e}");
             return Err(Problem { clause, stopped: None });
         }
@@ -303,7 +303,7 @@ pub fn node_parts(id: &OsStr) -> (OsString, String, String) {
 /// `mangle_test_address` makes them.
 pub fn junit_case(id: &OsStr) -> String {
     let (path, name, params) = node_parts(id);
-    let module = text::path(&path);
+    let module = text::shown_path(&path);
     let module = module.strip_suffix(".py").unwrap_or(&module).replace('/', ".");
     if name.is_empty() {
         return format!("{module}{params}");
@@ -499,7 +499,7 @@ mod tests {
         let paths: BTreeSet<OsString> =
             ["a/b/test_deep.py", "a/test_a.py", "test_top.py", "c/test_c.py"].map(OsString::from).into();
         let found = groups(Path::new("py"), &tree, &tmp, &paths).unwrap();
-        let files = |g: &Group| -> Vec<String> { g.paths.iter().map(|p| text::path(p)).collect() };
+        let files = |g: &Group| -> Vec<String> { g.paths.iter().map(|p| text::shown_path(p)).collect() };
         let shown: Vec<(PathBuf, PathBuf, Vec<String>)> =
             found.iter().map(|g| (g.setup.root.clone(), g.setup.inifile.clone(), files(g))).collect();
         assert_eq!(

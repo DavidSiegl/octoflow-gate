@@ -119,6 +119,6 @@ fn dir_name(dir: &OsStr) -> String {
     if dir.is_empty() {
         ".".to_string()
     } else {
-        text::path(dir)
+        text::shown_path(dir)
     }
 }

@@ -230,7 +230,7 @@ mod tests {
         };
         let found: Vec<(String, String)> = changed_golden_files(&change)
             .into_iter()
-            .map(|f| (crate::text::path(f.path.as_deref().unwrap()), f.message.split(" in a change").next().unwrap().into()))
+            .map(|f| (crate::text::shown_path(f.path.as_deref().unwrap()), f.message.split(" in a change").next().unwrap().into()))
             .collect();
         let expected = |name: &str, what: &str| {
             (golden(name), format!("a golden file, the expected output of a test, {what}"))

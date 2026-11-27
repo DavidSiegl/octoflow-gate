@@ -41,7 +41,7 @@ pub fn label(dir: &Path) -> String {
     if dir == Path::new(".") {
         "the package at the top level".into()
     } else {
-        format!("the package at `{}`", crate::text::path(dir.as_os_str()))
+        format!("the package at `{}`", crate::text::shown_path(dir.as_os_str()))
     }
 }
 

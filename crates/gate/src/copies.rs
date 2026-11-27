@@ -202,13 +202,13 @@ fn copy(src: &Path, dst: &Path) -> Result<(), String> {
     } else if meta.is_file() {
         std::fs::copy(src, dst).map(|_| ()).map_err(|e| failed("copy", src, &e))
     } else {
-        Err(format!("cannot copy {}: it is no regular file, link or directory", text::path(src.as_os_str())))
+        Err(format!("cannot copy {}: it is no regular file, link or directory", text::shown_path(src.as_os_str())))
     }
 }
 
 /// Why a file operation failed, as a clause: "cannot `what` `path`: the system's words".
 pub fn failed(what: &str, path: &Path, e: &std::io::Error) -> String {
-    format!("cannot {what} {}: {e}", text::path(path.as_os_str()))
+    format!("cannot {what} {}: {e}", text::shown_path(path.as_os_str()))
 }
 
 /// Writes the files git tracked at `change.base` to `dest`, a directory it makes, through a tar file at `archive`,
@@ -236,7 +236,7 @@ fn copy_base_with_tests(
     for old in change.files.iter().filter_map(|f| f.before.as_ref()).filter(|p| beside(p)) {
         let gone = dest.join(old);
         remove_entry(&gone).map_err(|e| failed("remove", &gone, &e))?;
-        let removed = text::path(old);
+        let removed = text::shown_path(old);
         empty.retain(|(name, _)| name != &removed && !name.starts_with(&format!("{removed}/")));
     }
     for new in change.files.iter().filter_map(|f| f.after.as_ref()).filter(|p| beside(p)) {
@@ -250,7 +250,7 @@ fn copy_base_with_tests(
         // the commit the checkout is at.
         if meta.is_dir() {
             std::fs::create_dir(&dst).map_err(|e| failed("make", &dst, &e))?;
-            let name = text::path(new);
+            let name = text::shown_path(new);
             if src.join(".git").symlink_metadata().is_ok() {
                 empty.extend(unpack_commit(&src, "HEAD", &dst, archive, &format!("{name}/"))?);
             } else {
@@ -322,7 +322,7 @@ fn unpack_commit(
             continue;
         }
         let recorded = text::lossless(meta.split(|&b| b == b' ').nth(2).unwrap_or_default());
-        let name = format!("{prefix}{}", text::path(path));
+        let name = format!("{prefix}{}", text::shown_path(path));
         let sub = repo.join(path);
         // The submodule's directory is the top of a repository of its own only once it is initialised: before, git
         // finds the superproject above it, and names the directory as a prefix within it.
@@ -484,7 +484,7 @@ mod tests {
         let made = std::process::Command::new("mkfifo").arg(dir.join("pipe")).status().unwrap();
         assert!(made.success());
         let copied = copy(&dir.join("pipe"), &dir.join("copy"));
-        let expected = format!("cannot copy {}: it is no regular file, link or directory", text::path(
+        let expected = format!("cannot copy {}: it is no regular file, link or directory", text::shown_path(
             dir.join("pipe").as_os_str()
         ));
         assert_eq!(copied, Err(expected));
@@ -497,7 +497,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("dst")).unwrap();
         let copied = copy(&dir.join("src"), &dir.join("dst"));
         let why = copied.unwrap_err();
-        let expected = format!("cannot make {}: ", text::path(dir.join("dst").as_os_str()));
+        let expected = format!("cannot make {}: ", text::shown_path(dir.join("dst").as_os_str()));
         assert!(why.starts_with(&expected) && why.contains("exists"), "{why}");
     }
 

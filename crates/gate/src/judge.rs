@@ -70,12 +70,12 @@ pub struct Given {
 pub fn judge_change(cwd: &Path, base: &str, given: &Given) -> Result<QualityReport, Unjudged> {
     let done = git::run(cwd, &["rev-parse", "--show-toplevel"])?;
     if done.status != 0 {
-        return Err(Unjudged(format!("{} is not in a git work tree", text::path(cwd.as_os_str()))));
+        return Err(Unjudged(format!("{} is not in a git work tree", text::shown_path(cwd.as_os_str()))));
     }
     let root = PathBuf::from(OsString::from_vec(git::first_line(done.stdout)));
     let done = git::run(&root, &["rev-parse", "--verify", "--quiet", &format!("{base}^{{commit}}")])?;
     if done.status != 0 {
-        return Err(Unjudged(format!("{base} names no commit in {}", text::path(root.as_os_str()))));
+        return Err(Unjudged(format!("{base} names no commit in {}", text::shown_path(root.as_os_str()))));
     }
     let base_sha = text::lossless(&git::first_line(done.stdout));
     let JudgedBy { settings, settings_from, rules, rules_from } =
@@ -211,7 +211,7 @@ fn mutmut_state_condition(committed: &[OsString]) -> Vec<String> {
     if committed.is_empty() {
         return vec![];
     }
-    let named: Vec<String> = committed.iter().map(|p| format!("`{}`", text::path(p))).collect();
+    let named: Vec<String> = committed.iter().map(|p| format!("`{}`", text::shown_path(p))).collect();
     vec![format!(
         "The change adds or edits {} under `{MUTMUT_STATE}/`, where mutmut keeps its scratch state, which is never \
          part of a change; the gate judged none of them. Remove them from the change.",

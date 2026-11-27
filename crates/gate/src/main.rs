@@ -16,8 +16,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use gate::{
-    catch_interrupt, exit_interrupted, interrupted, judge_change, py_strip, real_path, series, Given, Unjudged,
-    Verdict, RULES_FILE,
+    catch_interrupt, exit_interrupted, interrupted, judge_change, py_strip, real_path, series, shown_path, Given,
+    Unjudged, Verdict, RULES_FILE,
 };
 
 #[cfg(test)]
@@ -132,7 +132,7 @@ fn gate_command(args: &Args) -> ExitCode {
     }
     let verdict = report.verdict().word();
     if !contents.is_empty() {
-        let written: Vec<String> = contents.iter().map(|(path, _)| gate::path(path.as_os_str())).collect();
+        let written: Vec<String> = contents.iter().map(|(path, _)| shown_path(path.as_os_str())).collect();
         eprintln!("GATE: {verdict}, in {}", series(&written, None));
     }
     if args.out.is_none() {
@@ -163,7 +163,7 @@ fn parse_args(argv: impl IntoIterator<Item = OsString>) -> Result<Asked, String>
     while let Some(arg) = argv.next() {
         let (name, inline) = split_inline(arg);
         let Some(name) = name.to_str().map(str::to_string) else {
-            unrecognized.push(gate::path(&name));
+            unrecognized.push(shown_path(&name));
             continue;
         };
         if name == "--help" || name == "-h" {
@@ -175,7 +175,7 @@ fn parse_args(argv: impl IntoIterator<Item = OsString>) -> Result<Asked, String>
         match name.as_str() {
             "--base" => {
                 let rev = value()?.into_string();
-                base = Some(rev.map_err(|rev| format!("argument --base: not UTF-8: {}", gate::path(&rev)))?);
+                base = Some(rev.map_err(|rev| format!("argument --base: not UTF-8: {}", shown_path(&rev)))?);
             }
             "--config" => {
                 let config = PathBuf::from(value()?);
@@ -229,15 +229,15 @@ fn split_inline(arg: OsString) -> (OsString, Option<OsString>) {
 
 /// A time budget given on the command line, in whole seconds, at least 1; errs with why `text` is not one.
 fn seconds(text: &OsStr) -> Result<u64, String> {
-    let shown = gate::path(text);
+    let shown = shown_path(text);
     let n: i64 = shown.trim().parse().map_err(|_| format!("expected a whole number of seconds, not '{shown}'"))?;
     u64::try_from(n).ok().filter(|&n| n >= 1).ok_or_else(|| format!("must be at least 1, not {n}"))
 }
 
 /// `named`, the judged project's Python given on the command line; errs with why it is none when it is blank, as
-/// gate.toml's `python` may not be either (settings::Settings::python).
+/// gate.toml's `python` may not be either (Settings::python in src/settings.rs).
 fn python(named: OsString) -> Result<OsString, String> {
-    match py_strip(&gate::path(&named)).is_empty() {
+    match py_strip(&shown_path(&named)).is_empty() {
         true => Err("must be the path or the name of a Python".into()),
         false => Ok(named),
     }
@@ -270,7 +270,7 @@ fn write_files(contents: &[(&Path, String)]) -> Result<(), Unjudged> {
         aside.iter().try_for_each(|(given, real, tmp)| std::fs::rename(tmp, real).map_err(|e| (*given, e)))
     });
     remove_aside(&aside);
-    written.map_err(|(path, e)| Unjudged(format!("cannot write {}: {e}", gate::path(path.as_os_str()))))
+    written.map_err(|(path, e)| Unjudged(format!("cannot write {}: {e}", shown_path(path.as_os_str()))))
 }
 
 /// Writes each of `contents` beside its real path, as [`write_files`] does, noting each file written in `aside`;

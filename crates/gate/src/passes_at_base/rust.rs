@@ -174,12 +174,12 @@ fn run_groups(run: &Run, groups: &[Group], tests: &[ChangedTest], budget: &Budge
 /// [`NEXTEST_PROFILE`]'s JUnit report there. Errs, a clause, when it cannot.
 fn write_nextest_config(path: &Path, store: &Path) -> Result<(), String> {
     use std::io::Write;
-    let store = store.to_str().ok_or_else(|| format!("{} is not UTF-8", text::path(store.as_os_str())))?;
+    let store = store.to_str().ok_or_else(|| format!("{} is not UTF-8", text::shown_path(store.as_os_str())))?;
     // A JSON string is a TOML basic string.
     let quoted = serde_json::to_string(store).map_err(|e| e.to_string())?;
     let config = format!("[store]\ndir = {quoted}\n\n[profile.{NEXTEST_PROFILE}.junit]\npath = \"junit.xml\"\n");
     let written = std::fs::File::create_new(path).and_then(|mut f| f.write_all(config.as_bytes()));
-    written.map_err(|e| format!("cannot write {}: {e}", text::path(path.as_os_str())))
+    written.map_err(|e| format!("cannot write {}: {e}", text::shown_path(path.as_os_str())))
 }
 
 /// Where the runs at the base build and what they read.
@@ -221,7 +221,7 @@ impl Target {
         let place = if self.package.is_empty() {
             "the top level".to_string()
         } else {
-            format!("`{}`", text::path(&self.package))
+            format!("`{}`", text::shown_path(&self.package))
         };
         format!("`{}` of the package at {place}", self.args.join(" "))
     }
@@ -313,7 +313,7 @@ impl CrateLayout {
         }
         if out.is_empty() {
             whys.extend(build_scripts.iter().map(|root| {
-                format!("no Cargo target at the base is built from its crate root `{}`", text::path(root))
+                format!("no Cargo target at the base is built from its crate root `{}`", text::shown_path(root))
             }));
         }
         if !whys.is_empty() {
@@ -326,7 +326,7 @@ impl CrateLayout {
     /// The target whose crate root is the file at `root`, a path from the copy's top; None when `cargo metadata` lists
     /// it as a build script's; or why it has no target that can be told, as [`CrateLayout::targets`] says.
     fn target_of_root(&mut self, root: &OsStr) -> Result<Option<Target>, Unplaced> {
-        let shown = text::path(root);
+        let shown = text::shown_path(root);
         let dir = project_dir(root, "Cargo.toml", |manifest| self.tree.join(manifest).is_file())
             .ok_or_else(|| Unplaced::Unbuilt(format!("no Cargo.toml lies above its crate root `{shown}` at the base")))?
             .to_path_buf();
@@ -370,7 +370,7 @@ impl CrateLayout {
         let shown = if dir.as_os_str().is_empty() {
             "the top level".to_string()
         } else {
-            format!("`{}`", text::path(dir.as_os_str()))
+            format!("`{}`", text::shown_path(dir.as_os_str()))
         };
         let done = run_with(&argv, &self.tree.join(dir), left, &extras)
             .map_err(|e| Unplaced::Unbuilt(format!("`cargo metadata` could not start at {shown} at the base: {e}")))?;
@@ -443,7 +443,7 @@ fn run_target(run: &Run, target: &Target, named: &[&str], budget: &Budget) -> Ra
     let report = run.store.join(NEXTEST_PROFILE).join("junit.xml");
     match std::fs::remove_file(&report) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-            let report = text::path(report.as_os_str());
+            let report = text::shown_path(report.as_os_str());
             return not_run(format!("could not remove the report of an earlier run, {report}: {e}"));
         }
         _ => {}

@@ -208,8 +208,8 @@ fn cases() -> u32 {
     std::env::var("PROPTEST_CASES").ok().and_then(|n| n.parse().ok()).unwrap_or(25)
 }
 
-/// changed_lines on what `git diff -U0`, run as the gate runs it (diff::change_diff), gets from real git for two
-/// trees: it names each changed file and exactly its added lines.
+/// changed_lines on what `git diff -U0`, run as the gate runs it (change_diff in src/diff.rs), gets from real git for
+/// two trees: it names each changed file and exactly its added lines.
 fn check_changed_lines(base: &Tree, new: &Tree) -> Result<(), TestCaseError> {
     let repo = Repo::new();
     let (base_commit, new_commit) = (repo.commit(base), repo.commit(new));

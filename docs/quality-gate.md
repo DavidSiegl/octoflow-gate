@@ -548,25 +548,24 @@ call the function:
   mutmut was given its whole test selection, with the reason (see below). The other findings stand.
 
 mutmut runs in the project's Python, on a copy of the working tree, so the working tree stays as it was; its state,
-`mutants/`, goes into the copy too. Its own selector, mutant names such as `pkg.x_parse__mutmut_*`, picks which mutants
-run only after mutmut has made a mutant of every function, which took minutes for octoflow's Python engine. So in the
-copy, each function and class the change does not touch in the files mutmut mutates gets mutmut's `# pragma: no
-mutate block` at the end of its header, and mutmut skips it; the copy's other files, the tests among them, are neither
-read nor changed. The rules' `[tool.mutmut]` says what can be mutated (`source_paths`, `only_mutate`,
-`do_not_mutate`), which tests run (`pytest_add_cli_args_test_selection`), what the tests read beside the code
-(`also_copy`), and which lines are left alone (`do_not_mutate_patterns`); see [whose rules judge a
+`mutants/`, goes into the copy too, where gremlins, run there after it, removes it first. Its own selector, mutant names
+such as `pkg.x_parse__mutmut_*`, picks which mutants run only after mutmut has made a mutant of every function, which
+took minutes for octoflow's Python engine. So in the copy, each function and class the change does not touch in the
+files mutmut mutates gets mutmut's `# pragma: no mutate block` at the end of its header, and mutmut skips it; the copy's
+other files, the tests among them, are neither read nor changed. The rules' `[tool.mutmut]` says what can be mutated
+(`source_paths`, `only_mutate`, `do_not_mutate`), which tests run (`pytest_add_cli_args_test_selection`), what the tests
+read beside the code (`also_copy`), and which lines are left alone (`do_not_mutate_patterns`); see [whose rules judge a
 change](#whose-rules-judge-a-change). Python files are decoded by a byte order mark or a coding cookie, as [reading the
-source](#reading-the-source) says. mutmut runs pytest in the copy's `mutants/`, where it puts the mutated code.
-Its runs get, with `-c`, the configuration of the tests mutmut runs, found as the reruns find a test file's: from each
-path the test selection (`pytest_add_cli_args_test_selection` and `tests_dir`) names, a directory looked up from itself,
-or from the copy's top when it names none; or, with `--test-contexts` (see below), from the files of the tests it
-records under those paths. An option's value given apart from it, as `--ignore tests/legacy`, counts as a path. That is
-the project's own, which `also_copy` puts in
-`mutants/` so that paths in it, such as `pythonpath`, name the mutated code, or an empty one; and `--confcutdir` is
-`mutants/`. Both are added to the table's `pytest_add_cli_args`, so these runs too read no `pytest.ini` or `conftest.py`
-from above the copy. mutmut takes one configuration for all its runs, so tests under more than one get a `not-run`
-finding, as does a change to a function where the project's Python has no mutmut, or the settings have no
-`pyproject.toml` beside them.
+source](#reading-the-source) says. mutmut runs pytest in the copy's `mutants/`, where it puts the mutated code. Its runs
+get, with `-c`, the configuration of the tests mutmut runs, found as the reruns find a test file's: from each path the
+test selection (`pytest_add_cli_args_test_selection` and `tests_dir`) names, a directory looked up from itself, or from
+the copy's top when it names none; or, with `--test-contexts` (see below), from the files of the tests it records under
+those paths. An option's value given apart from it, as `--ignore tests/legacy`, counts as a path. That is the project's
+own, which `also_copy` puts in `mutants/` so that paths in it, such as `pythonpath`, name the mutated code, or an empty
+one; and `--confcutdir` is `mutants/`. Both are added to the table's `pytest_add_cli_args`, so these runs too read no
+`pytest.ini` or `conftest.py` from above the copy. mutmut takes one configuration for all its runs, so tests under more
+than one get a `not-run` finding, as does a change to a function where the project's Python has no mutmut, or the
+settings have no `pyproject.toml` beside them.
 
 **Which tests mutmut runs.** Before it tries a mutant, mutmut runs its whole test selection three times: to find which
 tests call each function, to check that they pass, and once more with `-x` until the first test that calls a mutated
@@ -677,7 +676,8 @@ runs; a NOT VIABLE one, which does not build, was not tried. The findings are mu
 - `budget-reached`: the budget ran out, before gremlins started (it needs the 15 seconds of its stop, as mutmut does)
   or while it ran, with how many mutants it had tried; the modules after it are `not-run`;
 - `not-run`: gremlins could not start, or failed, as it does when a test of the module fails, quoting its `ERROR:`
-  line; a changed file could not be parsed; or the copy could not be made;
+  line; a changed file could not be parsed; the copy could not be made; or mutmut's state, `mutants/`, which
+  gremlins' `./...` would take for more of the module's packages, could not be removed from it;
 - `not-mutated`: a changed function whose file lies under no go.mod in the copy;
 - `not-removed`: the copy could not be removed afterwards; the findings stand.
 
@@ -753,18 +753,20 @@ package's dependencies anew, within the budget (see `TODO.md`).
 
 Go's tests are judged after Rust's, with what is left of the same `--base-run-budget`, when the change edits Go code
 outside the tests: a `.go` file of a Go module that is not a `_test.go` file and lies in no `testdata` directory. The
-changed tests are those flaky-tests reruns: a top-level `TestX`, `FuzzX` or `ExampleX` of a `_test.go` file whose
-lines the change adds to or removes from. They run in the copy of the base made as above, which takes the change's
-`_test.go` files, the files under a `testdata` directory and the files that go with the tests from the working tree too;
-so a Python test that reads a Go package's `testdata/` sees the working tree's. The copy is made once, only when one of
-the three languages has tests to run at the base, and holds each language's files from the working tree. Go has
-no test code inside a file of code, so no Go test is inseparable from what it tests. Each package's changed tests run
-together, once, from the package's directory, as `go test -json -count=1 -run '^(TestA|TestB)$' .`, killed when the
-budget runs out. A package whose tests do not build at the base counts as failing them, which is what the check
-expects of a test that needs the change, so a change that adds a function and a test calling it gives no finding; a
-test that fails or is skipped there, or that the run does not report, gives none either. The findings are those
-above, `go test` in place of pytest: a stop at the budget is `budget-reached`, and each package after it `not-run`; a
-go test that cannot start, exits with a status other than 0 or 1, or fails without a test failing, is `not-run`.
+changed tests are those flaky-tests reruns: a top-level `TestX`, `FuzzX` or `ExampleX` of a `_test.go` file whose lines
+the change adds to or removes from. They run in the copy of the base made as above, which takes the change's `_test.go`
+files, the files under a `testdata` directory and the files that go with the tests from the working tree too, so a
+Python test that reads a Go package's `testdata/` sees the working tree's; but a file there that is code under test of a
+language whose changed tests run in the copy, as a `.py` module when Python's do, is the base's, while one that
+`test-files.support` matches is always the working tree's. The copy is made once, only when one of the three languages
+has tests to run at the base. Go has no test code inside a file of code, so no Go test is inseparable from what it
+tests. Each package's changed tests run together, once, from the package's directory, as `go test -json -count=1 -run
+'^(TestA|TestB)$' .`, killed when the budget runs out. A package whose tests do not build at the base counts as failing
+them, which is what the check expects of a test that needs the change, so a change that adds a function and a test
+calling it gives no finding; a test that fails or is skipped there, or that the run does not report, gives none either.
+The findings are those above, `go test` in place of pytest: a stop at the budget is `budget-reached`, and each package
+after it `not-run`; a go test that cannot start, exits with a status other than 0 or 1, or fails without a test failing,
+is `not-run`.
 
 **Vague names** lists the names a change binds that tell a reader nothing about what they hold: `data`, `info`, `value`,
 `status`, `handle` and `manager` (`VAGUE_WORDS` in `crates/checks`), or a name ending in one after an underscore, such

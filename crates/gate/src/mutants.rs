@@ -59,11 +59,10 @@ pub(crate) const SURVIVOR_EXAMPLES: usize = 3;
 /// gremlins the rest. Each one's findings name its share as the seconds it was stopped at.
 ///
 /// The three run in turn on one copy of the working tree (copies::in_working_tree_copy), made only when one of them has
-/// something to mutate. Each leaves the files of the others' languages as it found them, but for mutmut's `mutants/`,
-/// which holds its source paths, its `also_copy` and `tests/`: gremlins' `./...` takes a Go package there as one more,
-/// whose tests it runs for coverage and which it does not mutate. cargo-mutants builds outside the copy. A copy that
-/// cannot be made is a `not-run` finding in place of all their runs, and one that cannot be removed afterwards a
-/// `not-removed` one.
+/// something to mutate. cargo-mutants builds outside the copy, and gremlins runs once mutmut's state, `mutants/`, is
+/// removed from it (go_mutants::go_mutants), so that neither takes another's files for its own. A copy that cannot be
+/// made is a `not-run` finding in place of all their runs, and one that cannot be removed afterwards a `not-removed`
+/// one.
 pub fn surviving_mutants(sources: &Sources, mutmut: &Mutmut, budget: u64) -> Vec<Finding> {
     let budget = Budget::starting_now(budget);
     let (rust, mut out) = edited_rust(&sources.rust);
@@ -285,8 +284,12 @@ fn run_workspace(run: &Run, root: &OsStr, functions: &[&Edited], budget: &Budget
     argv.extend(["--test-tool", "nextest"].into_iter().chain(timeouts).map(OsStr::new));
     argv.push(OsStr::new("--output"));
     argv.extend([run.scratch.as_os_str(), OsStr::new("--colors"), OsStr::new("never")]);
-    let target = run.scratch.join("target");
-    let env = [("CARGO_TERM_COLOR", OsStr::new("never")), ("CARGO_TARGET_DIR", target.as_os_str())];
+    // An argument of cargo's, not CARGO_TARGET_DIR, which the project's tests would inherit, and with it every cargo
+    // they start on fixtures of their own.
+    let mut target = OsString::from("--cargo-arg=--target-dir=");
+    target.push(run.scratch.join("target"));
+    argv.push(&target);
+    let env = [("CARGO_TERM_COLOR", OsStr::new("never"))];
     let extras = Extras { env: &env, soft_stop: Some(STOP_GRACE), ..Extras::default() };
     match run_with(&argv, run.tree, left, &extras) {
         Ok(done) => (run_findings(&done, &run.scratch.join("mutants.out"), root, budget.seconds), done.stopped),

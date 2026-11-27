@@ -41,22 +41,28 @@ const NEXTEST_BUILD_FAILED: i32 = 101;
 /// what both left.
 ///
 /// The three run in turn in one copy of the base (copies::in_base_copy), made only when one of them has tests to run
-/// there, with the change's files that go with the tests of any of the three languages in place of the base's
-/// (PythonChange::beside_tests, RustChange::beside_tests, GoChange::beside_tests), but for one that any of them counts
-/// as code under test (PythonChange::is_code, RustChange::is_code, GoChange::is_code), as a Python module under a Go
-/// package's `testdata/`: so a Python test that reads a Go package's `testdata/` sees the working tree's, and one that
-/// imports a module there the base's. A copy that cannot be made is a `not-run` finding in place of all their
-/// runs, submodules it leaves empty one more, and a copy that cannot be removed afterwards a `not-removed` one.
+/// there, with the change's files that go with the tests in place of the base's: those gate.toml places with them
+/// (`test-files.support`), and those that go with the tests of any of the three languages (PythonChange::beside_tests,
+/// RustChange::beside_tests, GoChange::beside_tests) but for one that a language with tests to run there counts as
+/// code under test (PythonChange::is_code, RustChange::is_code, GoChange::is_code). So a Go test that reads a `.py`
+/// file under its package's `testdata/` sees the working tree's, unless a changed Python test runs there too, and then
+/// one that imports it the base's. A copy that cannot be made is a `not-run` finding in place of all their runs,
+/// submodules it leaves empty one more, and a copy that cannot be removed afterwards a `not-removed` one.
 pub fn passes_at_base(sources: &Sources, budget: u64) -> Vec<Finding> {
     let budget = Budget::starting_now(budget);
     let (mut out, python) = python_at_base(&sources.python, budget.seconds);
     let (rust_found, rust) = rust_at_base(&sources.rust, &budget);
     let (go_found, go) = go_at_base(&sources.go, &budget);
     out.extend(rust_found.into_iter().chain(go_found));
+    let (python_runs, rust_runs, go_runs) = (python.is_some(), rust.is_some(), go.is_some());
     let runs = python.into_iter().chain(rust).chain(go).collect();
     let beside = |p: &OsStr| {
-        let code = sources.python.is_code(p) || sources.rust.is_code(p) || sources.go.is_code(p);
-        !code && (sources.python.beside_tests(p) || sources.rust.beside_tests(p) || sources.go.beside_tests(p))
+        let support = sources.rust.change.settings.test_support.matches(p);
+        let tests = sources.python.beside_tests(p) || sources.rust.beside_tests(p) || sources.go.beside_tests(p);
+        let code = (python_runs && sources.python.is_code(p))
+            || (rust_runs && sources.rust.is_code(p))
+            || (go_runs && sources.go.is_code(p));
+        support || (tests && !code)
     };
     let unjudged = "the changed tests were not run at the base";
     out.extend(in_base_copy(sources.rust.change, beside, "not-run", unjudged, runs));

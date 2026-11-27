@@ -12,6 +12,7 @@ use std::time::Instant;
 use checks::{ChangedFile, Finding, Side};
 use regex::bytes::Regex;
 
+use crate::change::MUTMUT_STATE;
 use crate::copies::{finding, Budget, ScratchCopy};
 use crate::git::shell_quote_bytes;
 use crate::mutants::{dir_name, edits, Edited, KILL_WAIT, STOP_GRACE, SURVIVOR_EXAMPLES};
@@ -108,7 +109,8 @@ fn unchanged_declarations(go: &GoChange, file: &ChangedFile) -> Vec<bool> {
 ///
 /// Runs gremlins, until `budget` runs out, on each Go module that holds one of them, the directory of the go.mod
 /// nearest above its file, in path order of the modules, in `copy`, a copy of the working tree, beside each run's
-/// files in its scratch directory. gremlins is told to diff against `base`, the change's.
+/// files in its scratch directory, after removing mutmut's state from the copy. gremlins is told to diff against
+/// `base`, the change's.
 ///
 /// gremlins mutates only the lines it reads as changed from `git diff --merge-base <base>`, whose names it takes as
 /// paths from the module's directory: the git a run finds first on PATH gives it the module's edited functions as a
@@ -117,9 +119,9 @@ fn unchanged_declarations(go: &GoChange, file: &ChangedFile) -> Vec<bool> {
 /// line, with how many of the mutants tried of it they were and the first [`SURVIVOR_EXAMPLES`] of them; one with
 /// mutants on lines no test runs an `untested` one, with how many. A function gremlins makes no mutant of gives
 /// nothing. The budget running out is a `budget-reached` finding; a function whose file lies under no go.mod in the
-/// copy, as where the change deletes it, a `not-mutated` one; a run that cannot be made or fails a `not-run` one saying
-/// why. A run the deadline stops is a `budget-reached` finding beside what the mutants it had tried showed, and each
-/// module after it a `not-run` one.
+/// copy, as where the change deletes it, a `not-mutated` one; a run that cannot be made or fails, and mutmut's state
+/// that cannot be removed, a `not-run` one saying why. A run the deadline stops is a `budget-reached` finding beside
+/// what the mutants it had tried showed, and each module after it a `not-run` one.
 pub(crate) fn go_mutants(copy: &ScratchCopy, base: &str, functions: &[Edited], budget: &Budget) -> Vec<Finding> {
     let tree = &copy.tree;
     let mut out = vec![];
@@ -136,6 +138,18 @@ pub(crate) fn go_mutants(copy: &ScratchCopy, base: &str, functions: &[Edited], b
         }
     }
     let modules: Vec<_> = modules.into_iter().collect();
+    // mutmut, run in the copy before gremlins, leaves its state there: copies of its source paths and tests, which
+    // gremlins' `./...` would take for more of a module's packages, whose tests may fail there.
+    let state = tree.join(MUTMUT_STATE);
+    let removed = match state.symlink_metadata() {
+        Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(&state),
+        Ok(_) => std::fs::remove_file(&state),
+        Err(_) => Ok(()),
+    };
+    if let Err(e) = removed {
+        out.push(not_run(&format!("could not remove mutmut's state, `{MUTMUT_STATE}/`, from the copy: {e}")));
+        return out;
+    }
     for (n, (module, mine)) in modules.iter().enumerate() {
         let run = Run { tree, scratch: &copy.scratch.join(format!("gremlins-{n}")), base };
         let (found, stopped) = run_module(&run, module, mine, budget);

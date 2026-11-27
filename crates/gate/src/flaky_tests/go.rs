@@ -1,6 +1,5 @@
 //! flaky-tests' Go half: the changed tests rerun with go test under `go test -shuffle`'s seeds.
 
-use std::ffi::OsStr;
 use std::time::Duration;
 
 use crate::copies::{finding, OnCopy, ScratchCopy};
@@ -8,7 +7,7 @@ use crate::gotest::{self, Packages, Ran};
 use crate::report::Finding;
 use crate::sources::GoChange;
 
-use super::{stopped_not_rerun, Reruns, RUN_TIMEOUT};
+use super::{stopped_not_rerun, unread_not_rerun, Reruns, RUN_TIMEOUT};
 
 /// How long building a Go package's tests before their reruns may take (gotest::build), which [`RUN_TIMEOUT`] then
 /// leaves out.
@@ -31,11 +30,7 @@ const BUILD_TIMEOUT: Duration = Duration::from_secs(300);
 /// be read or parsed is a `not-rerun` finding too.
 pub(super) fn go_findings<'a>(go: &'a GoChange) -> (Vec<Finding>, Option<OnCopy<'a>>) {
     let (packages, unreadable) = gotest::changed_tests(go);
-    let not_rerun = |(path, unreadable): (&OsStr, &model::Unreadable)| {
-        let message = format!("{}, so its tests were not rerun.", unreadable.why);
-        finding(Some(path), unreadable.line, "not-rerun", message)
-    };
-    let out = unreadable.into_iter().map(not_rerun).collect();
+    let out = unreadable.into_iter().map(unread_not_rerun).collect();
     let run = (!packages.is_empty()).then(|| -> OnCopy { Box::new(move |copy| go_rerun_findings(copy, &packages)) });
     (out, run)
 }

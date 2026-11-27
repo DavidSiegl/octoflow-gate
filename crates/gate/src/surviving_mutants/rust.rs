@@ -5,7 +5,6 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::Path;
-use std::time::Instant;
 
 use checks::Finding;
 use serde_json::Value;
@@ -16,7 +15,7 @@ use crate::process::{run_with, Extras, Finished};
 use crate::sources::{project_dir, RustChange};
 use crate::text;
 
-use super::{dir_name, edits, Edited, KILL_WAIT, STOP_GRACE, SURVIVOR_EXAMPLES};
+use super::{dir_name, edits, not_reached, not_run, unread_not_run, Edited, STOP_GRACE, SURVIVOR_EXAMPLES};
 
 /// How each outcome cargo-mutants 27 writes in mutants.out/outcomes.json (a scenario's "summary") counts: a missed
 /// mutant survived; a caught one, and one whose tests outlived cargo-mutants' timeout ([`MINIMUM_TEST_TIMEOUT`]), did
@@ -56,10 +55,7 @@ pub(super) fn edited_rust(rust: &RustChange) -> (Vec<Edited>, Vec<Finding>) {
                     .filter(|f| !f.exempt && edits(f, &file.added, removed))
                     .map(|f| Edited::of(path, f)),
             ),
-            Err(unreadable) => {
-                let message = format!("{}, so its functions were not mutation-tested.", unreadable.why);
-                unread.push(finding(Some(path), unreadable.line, "not-run", message));
-            }
+            Err(unreadable) => unread.push(unread_not_run(path, unreadable)),
         }
     }
     (edited, unread)
@@ -105,10 +101,7 @@ pub(super) fn rust_mutants(copy: &ScratchCopy, functions: &[Edited], budget: &Bu
         out.extend(found);
         if stopped {
             out.extend(roots[n + 1..].iter().map(|(later, _)| {
-                not_run(&format!(
-                    "the budget ran out before cargo-mutants reached the workspace at `{}`",
-                    dir_name(later)
-                ))
+                not_reached("cargo-mutants", &format!("the workspace at `{}`", dir_name(later)), "Rust")
             }));
             break;
         }
@@ -171,8 +164,7 @@ struct Run<'a> {
 /// mutants of `functions` alone ([`mutants_of`]), as `run` says, within `budget`; and whether the deadline stopped it,
 /// or was too near to start it.
 fn run_workspace(run: &Run, root: &OsStr, functions: &[&Edited], budget: &Budget) -> (Vec<Finding>, bool) {
-    let left = budget.deadline.checked_duration_since(Instant::now() + STOP_GRACE + KILL_WAIT);
-    let Some(left) = left.filter(|left| !left.is_zero()) else {
+    let Some(left) = budget.before_soft_stop(STOP_GRACE) else {
         let message = format!(
             "budget reached before cargo-mutants started on the workspace at `{}`: the {} seconds of \
              `--mutation-budget` left too little to run and stop it, so its mutants were not tried.",
@@ -182,7 +174,7 @@ fn run_workspace(run: &Run, root: &OsStr, functions: &[&Edited], budget: &Budget
         return (vec![finding(None, None, "budget-reached", message)], true);
     };
     if let Err(e) = std::fs::create_dir_all(run.scratch) {
-        return (vec![not_run(&format!("could not make the directory for cargo-mutants' output: {e}"))], false);
+        return (vec![not_run(&format!("could not make the directory for cargo-mutants' output: {e}"), "Rust")], false);
     }
     // --in-place mutates the copy itself, which cargo-mutants would otherwise copy once more; mutants.out and the
     // build go to scratch, outside it, as the tools after it run in the copy.
@@ -205,7 +197,7 @@ fn run_workspace(run: &Run, root: &OsStr, functions: &[&Edited], budget: &Budget
     let extras = Extras { env: &env, soft_stop: Some(STOP_GRACE), ..Extras::default() };
     match run_with(&argv, run.tree, left, &extras) {
         Ok(done) => (run_findings(&done, &run.scratch.join("mutants.out"), root, budget.seconds), done.stopped),
-        Err(e) => (vec![not_run(&format!("could not start cargo-mutants: {e}"))], false),
+        Err(e) => (vec![not_run(&format!("could not start cargo-mutants: {e}"), "Rust")], false),
     }
 }
 
@@ -227,7 +219,7 @@ fn run_findings(done: &Finished, output: &Path, root: &OsStr, budget: u64) -> Ve
                 "cargo-mutants, exiting with status {}, wrote no outcomes the gate can read ({problem}): {}",
                 done.status,
                 done.said()
-            ))]
+            ), "Rust")]
         }
     };
     let place = format!("the workspace at `{}`", dir_name(root));
@@ -242,12 +234,15 @@ fn run_findings(done: &Finished, output: &Path, root: &OsStr, budget: u64) -> Ve
         return vec![not_run(&format!(
             "the unmutated baseline of {place} did not pass ({summary}, as cargo-mutants words it), so it tried no \
              mutant; {said}"
-        ))];
+        ), "Rust")];
     }
     let prefix = if root.is_empty() { vec![] } else { [root.as_bytes(), b"/"].concat() };
     let mut out = match survivors(&prefix, &outcomes) {
         Ok(out) => out,
-        Err(e) => return vec![not_run(&format!("cargo-mutants wrote a mutant's outcome the gate cannot read ({e})"))],
+        Err(e) => {
+            let problem = format!("cargo-mutants wrote a mutant's outcome the gate cannot read ({e})");
+            return vec![not_run(&problem, "Rust")];
+        }
     };
     if done.stopped {
         let tried = outcomes.iter().filter(|o| o.summary.as_str().is_some_and(|s| TRIED.contains(&s))).count();
@@ -407,14 +402,9 @@ impl Mutant {
     }
 }
 
-/// A `not-run` finding: `problem`, a clause, and that the change's Rust was not mutation-tested.
-fn not_run(problem: &str) -> Finding {
-    finding(None, None, "not-run", format!("{problem}; the change's Rust was not mutation-tested."))
-}
-
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use serde_json::json;
 
@@ -643,7 +633,7 @@ mod tests {
         vec![not_run(&format!(
             "the unmutated baseline of the workspace at `engine` did not pass (Failure, as cargo-mutants words it), \
              so it tried no mutant; its log said: {said}"
-        ))]
+        ), "Rust")]
     }
 
     #[test]
@@ -697,7 +687,8 @@ mod tests {
         let nameless = json!({"scenario": {"Mutant": {"name": "no file"}}, "summary": "MissedMutant"});
         let outcomes = [baseline("Success"), nameless];
         assert_eq!(engine_findings(&done(2, false), Some(&outcomes)), vec![not_run(
-            "cargo-mutants wrote a mutant's outcome the gate cannot read (no `span` with a start line)"
+            "cargo-mutants wrote a mutant's outcome the gate cannot read (no `span` with a start line)",
+            "Rust"
         )]);
     }
 
@@ -734,11 +725,11 @@ mod tests {
         let (found, stopped) = workspace_run(&dir, &dir.join("a-file/run"), "engine", "engine/src/a.rs", 600);
         assert!(!stopped);
         assert_eq!(found, vec![not_run("could not make the directory for cargo-mutants' output: Not a directory (os \
-                                        error 20)")]);
+                                        error 20)", "Rust")]);
         let found = workspace_run(&dir.join("missing"), &dir.join("run"), "engine", "engine/src/a.rs", 600);
-        assert_eq!(found, (vec![not_run("could not start cargo-mutants: No such file or directory (os error 2)")],
-                           false));
-        assert_eq!(not_run("it failed"), finding(None, None, "not-run",
+        let problem = "could not start cargo-mutants: No such file or directory (os error 2)";
+        assert_eq!(found, (vec![not_run(problem, "Rust")], false));
+        assert_eq!(not_run("it failed", "Rust"), finding(None, None, "not-run",
                                                  "it failed; the change's Rust was not mutation-tested.".into()));
     }
 }

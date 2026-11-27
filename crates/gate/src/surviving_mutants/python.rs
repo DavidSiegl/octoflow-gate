@@ -21,7 +21,7 @@ use regex::Regex;
 use serde_json::{json, Value};
 use toml::Table;
 
-use crate::copies::{finding, OnCopy, ScratchCopy};
+use crate::copies::{finding, Budget, OnCopy, ScratchCopy};
 use crate::glob::fnmatch;
 use crate::change::{Change, MUTMUT_STATE};
 use crate::sources::{python_test, PythonChange};
@@ -31,7 +31,7 @@ use crate::pytest::{self, truthy, Setup};
 use crate::report::Finding;
 use crate::text;
 
-use super::{KILL_WAIT, STOP_GRACE, SURVIVOR_EXAMPLES};
+use super::{not_run, unread_not_run, STOP_GRACE, SURVIVOR_EXAMPLES};
 
 /// What the end of a header's line gets for mutmut to skip the def or class whole.
 const SKIP: &[u8] = b"  # pragma: no mutate block";
@@ -98,12 +98,12 @@ pub struct Mutmut<'a> {
 ///
 /// mutmut runs by the project's Python (change::Change::python) on the copy, without what the tree tracks under
 /// mutmut's state, so it starts without a cache; it changes the copy's Python files, its pyproject.toml's
-/// `[tool.mutmut]` and its mutants/ alone. It runs there by the `[tool.mutmut]` of
-/// `mutmut.rules`, whatever the copy's says: its source_paths, only_mutate and do_not_mutate decide which files can
-/// be mutated, and a changed function outside them, or one mutmut never mutates, is a `not-mutated` finding saying
-/// why; its test selection says which tests run. mutmut may run `seconds`; a run stopped there is a
-/// `budget-reached` finding that says how many of the mutants it tried, beside what those showed. Listing the
-/// results then takes at most [`REPORT_TIMEOUT`] seconds more.
+/// `[tool.mutmut]` and its mutants/ alone. It runs there by the `[tool.mutmut]` of `mutmut.rules`, whatever the copy's
+/// says: its source_paths, only_mutate and do_not_mutate decide which files can be mutated, and a changed function
+/// outside them, or one mutmut never mutates, is a `not-mutated` finding saying why; its test selection says which
+/// tests run. mutmut may run until `budget`'s deadline, which counts from the check's start, so what readies its run
+/// takes from it; a run stopped there is a `budget-reached` finding that says how many of the mutants it tried, beside
+/// what those showed. Listing the results then takes at most [`REPORT_TIMEOUT`] seconds more.
 ///
 /// With `mutmut.test_contexts`, mutmut runs only the tests of its selection, as pytest collects it in the copy with
 /// mutmut's options, that the file records running a line of a mutated function's body ([`recorded_tests`]), which
@@ -118,22 +118,19 @@ pub struct Mutmut<'a> {
 pub(super) fn python_mutants<'a>(
     python: &'a PythonChange,
     mutmut: &Mutmut,
-    seconds: u64,
+    budget: &'a Budget,
 ) -> (Vec<Finding>, Option<OnCopy<'a>>) {
     let in_scope = |path: &OsStr| !python_test(&python.change.settings, path);
     let (units, unreadable) = python.changed_units(in_scope, |unit, added, removal_points| {
         added.iter().any(|&n| unit.lines.first <= n && n <= unit.lines.last)
             || removal_points.iter().any(|&n| unit.lines.first <= n + 1 && n <= unit.lines.last)
     });
-    let not_read = |(path, why): (OsString, String)| {
-        finding(Some(&path), None, "not-run", format!("{why}, so its functions were not mutation-tested."))
-    };
-    let mut out: Vec<Finding> = unreadable.into_iter().map(not_read).collect();
+    let mut out: Vec<Finding> = unreadable.iter().map(|(path, why)| unread_not_run(path, why)).collect();
     let functions = edited(python, units);
     if functions.is_empty() {
         return (out, None);
     }
-    let (found, run) = mutation_test(python, functions, mutmut, seconds);
+    let (found, run) = mutation_test(python, functions, mutmut, budget);
     out.extend(found);
     (out, run)
 }
@@ -194,20 +191,20 @@ impl Function {
 }
 
 /// [`python_mutants`]'s findings on `functions`, the change's changed functions: those mutmut does not mutate, and
-/// the run of mutmut of `seconds` on the others, None when it would have none to mutate or no test to run.
+/// the run of mutmut within `budget` on the others, None when it would have none to mutate or no test to run.
 fn mutation_test<'a>(
     python: &'a PythonChange,
     functions: Vec<Function>,
     mutmut: &Mutmut,
-    seconds: u64,
+    budget: &'a Budget,
 ) -> (Vec<Finding>, Option<OnCopy<'a>>) {
     let table = match mutmut.rules.map(mutmut_table) {
         Some(Ok(table)) => table,
-        Some(Err(problem)) => return (vec![not_run(&problem)], None),
+        Some(Err(problem)) => return (vec![not_run(&problem, "Python")], None),
         None => {
             let problem = "there is no pyproject.toml beside the gate's settings, so no [tool.mutmut] names \
                            source_paths and what mutmut mutates is unknown";
-            return (vec![not_run(problem)], None);
+            return (vec![not_run(problem, "Python")], None);
         }
     };
     let (mut out, mut mutated) = (vec![], vec![]);
@@ -239,14 +236,9 @@ fn mutation_test<'a>(
     let run: OnCopy = Box::new(move |scratch: &ScratchCopy| {
         let copy = TreeCopy { python: &change.python, tree: &scratch.tree };
         let refs: Vec<&Function> = mutated.iter().collect();
-        on_copy(&copy, change, &scratch.scratch, &refs, &table, seconds, recorded.as_ref())
+        on_copy(&copy, change, &scratch.scratch, &refs, &table, budget, recorded.as_ref())
     });
     (out, Some(run))
-}
-
-/// A `not-run` finding: `problem`, a clause, and that the change's functions were not mutation-tested.
-fn not_run(problem: &str) -> Finding {
-    finding(None, None, "not-run", format!("{problem}; the change's functions were not mutation-tested."))
 }
 
 /// The `not-narrowed` finding: `--test-contexts` was given, but `why`, a clause, kept the gate from narrowing
@@ -466,7 +458,7 @@ impl TreeCopy<'_> {
     ///
     /// It is stopped softly, with SIGINT and surviving_mutants::STOP_GRACE: on SIGINT mutmut stops trying mutants and
     /// keeps the results it has. So it returns within `timeout`, surviving_mutants::STOP_GRACE and
-    /// surviving_mutants::KILL_WAIT. Its temporary files, and those of the tests it runs, go into the copy's .tmp, so
+    /// process::KILL_WAIT. Its temporary files, and those of the tests it runs, go into the copy's .tmp, so
     /// that what a test it killed left goes with the copy. Its mutant names and diffs hold paths and source lines, in
     /// which only `\n` ends a line.
     fn mutmut(&self, args: &[&str], timeout: Duration) -> std::io::Result<Finished> {
@@ -493,28 +485,24 @@ impl TreeCopy<'_> {
     }
 }
 
-/// The time a mutmut run may be given that must end by `deadline`, its stop included; None when none is left.
-fn time_left(deadline: Instant) -> Option<Duration> {
-    deadline.checked_duration_since(Instant::now() + STOP_GRACE + KILL_WAIT).filter(|left| !left.is_zero())
-}
-
-/// The findings of mutmut run on `functions` for `seconds` in `copy`, readied as [`prepare_copy`] says, with `table`,
-/// the rules' `[tool.mutmut]`, in place of its own, and its pytest runs taking the configuration of the tests they run
-/// and no configuration or conftest.py from above the copy ([`give_mutmut`]). `recorded`, when given, are the node ids
-/// of the tests `--test-contexts` records reaching `functions`: mutmut is then given those of them its selection
-/// collects ([`narrowed_table`]), and none collected, it is not started and each function is an `untested` finding.
+/// The findings of mutmut run on `functions` until `budget`'s deadline in `copy`, readied as [`prepare_copy`] says,
+/// with `table`, the rules' `[tool.mutmut]`, in place of its own, and its pytest runs taking the configuration of the
+/// tests they run and no configuration or conftest.py from above the copy ([`give_mutmut`]). `recorded`, when given,
+/// are the node ids of the tests `--test-contexts` records reaching `functions`: mutmut is then given those of them its
+/// selection collects ([`narrowed_table`]), and none collected, it is not started and each function is an `untested`
+/// finding.
 fn on_copy(
     copy: &TreeCopy,
     change: &Change,
     tmp: &Path,
     functions: &[&Function],
     table: &Table,
-    seconds: u64,
+    budget: &Budget,
     recorded: Option<&BTreeSet<String>>,
 ) -> Vec<Finding> {
     let config = match prepare_copy(copy, change, tmp, functions, table, recorded) {
         Ok(config) => config,
-        Err(problem) => return vec![not_run(&problem)],
+        Err(problem) => return vec![not_run(&problem, "Python")],
     };
     // Rooted at the top, not the configuration's directory, as mutmut's --rootdir=. roots its runs.
     let setup = || Setup {
@@ -530,12 +518,12 @@ fn on_copy(
         Some(Narrowed::Not(why)) => (table.clone(), vec![not_narrowed(&why)]),
     };
     let ran = give_mutmut(copy, &table, &config).and_then(|()| {
-        copy.mutmut(&["run"], Duration::from_secs(seconds))
+        copy.mutmut(&["run"], budget.deadline.saturating_duration_since(Instant::now()))
             .map_err(|e| format!("could not start mutmut with the Python `{}`: {e}", copy.python_named()))
     });
     match ran {
-        Ok(run) => out.extend(mutmut_findings(copy, functions, &run, seconds, &table)),
-        Err(problem) => out.push(not_run(&problem)),
+        Ok(run) => out.extend(mutmut_findings(copy, functions, &run, budget.seconds, &table)),
+        Err(problem) => out.push(not_run(&problem, "Python")),
     }
     out
 }
@@ -857,12 +845,12 @@ fn mutmut_findings(
     });
     let no_tests = run.status != 0 && NO_TESTS.is_match(&run.stdout);
     if run.status != 0 && !run.stopped && !no_tests {
-        return vec![not_run(&format!("mutmut exited with status {}: {}", run.status, said_by_mutmut(run)))];
+        return vec![not_run(&format!("mutmut exited with status {}: {}", run.status, said_by_mutmut(run)), "Python")];
     }
-    let deadline = Instant::now() + Duration::from_secs(REPORT_TIMEOUT);
-    let (mut statuses, cut_off) = match statuses_after_run(copy, run.stopped, deadline) {
+    let report = Budget::starting_now(REPORT_TIMEOUT);
+    let (mut statuses, cut_off) = match statuses_after_run(copy, run.stopped, &report) {
         Ok(listed) => listed,
-        Err(problem) => return vec![not_run(&problem)],
+        Err(problem) => return vec![not_run(&problem, "Python")],
     };
     if no_tests {
         statuses.iter_mut().for_each(|(_, status)| *status = "no tests".into());
@@ -888,7 +876,7 @@ fn mutmut_findings(
         })
         .collect();
     for (owner, mine) in &mutants {
-        out.extend(listed_findings(copy, functions[*owner], mine, deadline));
+        out.extend(listed_findings(copy, functions[*owner], mine, &report));
     }
     if run.stopped {
         out.push(budget_reached(&statuses, seconds, &unreached, &cut_off));
@@ -916,14 +904,14 @@ fn mutants_by_function<'a>(functions: &[&Function], statuses: &'a Statuses) -> V
 }
 
 /// The findings for `f` from `mine`, the mutants mutmut listed of it: one for those that survived, with what
-/// [`survivors`] has mutmut show of them in `copy` by `deadline`, and one for those no test calls.
-fn listed_findings(copy: &TreeCopy, f: &Function, mine: &Listed, deadline: Instant) -> Vec<Finding> {
+/// [`survivors`] has mutmut show of them in `copy` by `report`'s deadline, and one for those no test calls.
+fn listed_findings(copy: &TreeCopy, f: &Function, mine: &Listed, report: &Budget) -> Vec<Finding> {
     let tried = mine.iter().filter(|(_, status)| !UNTRIED.contains(status)).count();
     let of = |wanted: &str| -> Vec<&str> { mine.iter().filter(|(_, s)| *s == wanted).map(|(m, _)| *m).collect() };
     let mut out = vec![];
     let survived = of("survived");
     if !survived.is_empty() {
-        out.push(survivors(copy, f, &survived, tried, deadline));
+        out.push(survivors(copy, f, &survived, tried, report));
     }
     let untested = of("no tests").len();
     if untested > 0 {
@@ -934,20 +922,20 @@ fn listed_findings(copy: &TreeCopy, f: &Function, mine: &Listed, deadline: Insta
     out
 }
 
-/// [`mutant_statuses`]'s listing of the mutants a run of mutmut made in `copy`, by `deadline`, with the paths of the
-/// modules whose results the run's stop lost, sorted; `stopped` is whether the budget stopped the run. Errs with the
-/// problem, a clause, when they could not be listed.
+/// [`mutant_statuses`]'s listing of the mutants a run of mutmut made in `copy`, by `report`'s deadline, with the paths
+/// of the modules whose results the run's stop lost, sorted; `stopped` is whether the budget stopped the run. Errs with
+/// the problem, a clause, when they could not be listed.
 ///
 /// The stop can land while mutmut rewrites a module's .meta, which `mutmut results` cannot read, so a stopped run's
 /// cut-off .meta files are removed from the copy first; their modules then list no mutant, as one the budget kept
 /// mutmut from does.
-fn statuses_after_run(copy: &TreeCopy, stopped: bool, deadline: Instant) -> Result<(Statuses, Vec<OsString>), String> {
+fn statuses_after_run(copy: &TreeCopy, stopped: bool, report: &Budget) -> Result<(Statuses, Vec<OsString>), String> {
     let cut_off = match stopped {
         true => drop_cut_off_saves(&copy.state())
             .map_err(|e| format!("could not clear the results mutmut's stop cut off: {e}"))?,
         false => vec![],
     };
-    match mutant_statuses(copy, deadline) {
+    match mutant_statuses(copy, report) {
         Ok(statuses) => Ok((statuses, cut_off)),
         Err(problem) if cut_off.is_empty() => Err(problem),
         Err(problem) => {
@@ -988,11 +976,12 @@ fn drop_cut_off_saves(state: &Path) -> std::io::Result<Vec<OsString>> {
 type Statuses = Vec<(String, String)>;
 
 /// Each mutant mutmut made in `copy` with its status, as `mutmut results` words it: killed, survived, no tests, not
-/// checked and the like. Errs with the problem, a clause, when they could not be listed by `deadline`, which
+/// checked and the like. Errs with the problem, a clause, when they could not be listed by `report`'s deadline, which
 /// mutmut's stop is kept within: with too little time left for a listing and its stop, none is started.
-fn mutant_statuses(copy: &TreeCopy, deadline: Instant) -> Result<Statuses, String> {
+fn mutant_statuses(copy: &TreeCopy, report: &Budget) -> Result<Statuses, String> {
     let late = || format!("mutmut did not list its results within {REPORT_TIMEOUT} seconds");
-    let listed = copy.mutmut(&["results", "--all", "true"], time_left(deadline).ok_or_else(late)?).map_err(|e| {
+    let timeout = report.before_soft_stop(STOP_GRACE).ok_or_else(late)?;
+    let listed = copy.mutmut(&["results", "--all", "true"], timeout).map_err(|e| {
         format!("could not start mutmut with the Python `{}` to list its results: {e}", copy.python_named())
     })?;
     if listed.stopped {
@@ -1134,9 +1123,9 @@ fn mutmut_pragma(comment: &str) -> Option<&'static str> {
 
 /// The finding for the mutants `survived` of `f`, of the `tried` ones mutmut ran against its tests: how many, and what
 /// the first surviving_mutants::SURVIVOR_EXAMPLES of them change, each as `mutmut show` gives it in `copy` by
-/// `deadline`.
-fn survivors(copy: &TreeCopy, f: &Function, survived: &[&str], tried: usize, deadline: Instant) -> Finding {
-    let shown = survived.iter().take(SURVIVOR_EXAMPLES).filter_map(|mutant| example(copy, &f.unit, mutant, deadline));
+/// `report`'s deadline.
+fn survivors(copy: &TreeCopy, f: &Function, survived: &[&str], tried: usize, report: &Budget) -> Finding {
+    let shown = survived.iter().take(SURVIVOR_EXAMPLES).filter_map(|mutant| example(copy, &f.unit, mutant, report));
     let examples: Vec<String> = shown.collect();
     let said = format!("{} of {tried} mutants of `{}` survived its tests", survived.len(), f.unit.name);
     let message = match examples.is_empty() {
@@ -1147,9 +1136,9 @@ fn survivors(copy: &TreeCopy, f: &Function, survived: &[&str], tried: usize, dea
 }
 
 /// What `mutant`, a mutant of `unit`, changes, as "line N, `before` became `after`"; None when mutmut does not show
-/// it in `copy` by `deadline`, which mutmut's stop is kept within.
-fn example(copy: &TreeCopy, unit: &Unit, mutant: &str, deadline: Instant) -> Option<String> {
-    let shown = copy.mutmut(&["show", mutant], time_left(deadline)?).ok()?;
+/// it in `copy` by `report`'s deadline, which mutmut's stop is kept within.
+fn example(copy: &TreeCopy, unit: &Unit, mutant: &str, report: &Budget) -> Option<String> {
+    let shown = copy.mutmut(&["show", mutant], report.before_soft_stop(STOP_GRACE)?).ok()?;
     if shown.stopped || shown.status != 0 {
         return None;
     }
@@ -1202,6 +1191,7 @@ fn said_by_mutmut(run: &Finished) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::process::KILL_WAIT;
     use crate::scratch::ScratchDir;
 
     /// The units of the Python `source`, as lang_python reads them.
@@ -1224,29 +1214,21 @@ mod tests {
         std::fs::write(&python, "#!/bin/sh\ntrap '' INT\nexec sleep 60\n").unwrap();
         std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755)).unwrap();
         let copy = TreeCopy { python: &python, tree: &tree };
-        let deadline = Instant::now() + STOP_GRACE + KILL_WAIT + Duration::from_secs(2);
-        let listed = mutant_statuses(&copy, deadline);
-        let late = Instant::now().checked_duration_since(deadline);
+        let report = Budget { seconds: 2, deadline: Instant::now() + STOP_GRACE + KILL_WAIT + Duration::from_secs(2) };
+        let listed = mutant_statuses(&copy, &report);
+        let late = Instant::now().checked_duration_since(report.deadline);
         assert_eq!(listed, Err(format!("mutmut did not list its results within {REPORT_TIMEOUT} seconds")));
         assert_eq!(late, None, "the listing ended after its deadline");
         // With no time left for a listing and its stop, none is started: a Python that is not there would be an
         // error of its own.
         let copy = TreeCopy { python: &tree.join("no-python"), tree: &tree };
-        assert_eq!(mutant_statuses(&copy, Instant::now() + STOP_GRACE + KILL_WAIT), listed);
+        let spent = Budget { seconds: 0, deadline: Instant::now() + STOP_GRACE + KILL_WAIT };
+        assert_eq!(mutant_statuses(&copy, &spent), listed);
     }
 
     /// The `[tool.mutmut]` whose settings `settings` holds, as TOML.
     fn table(settings: &str) -> Table {
         settings.parse().unwrap()
-    }
-
-    #[test]
-    fn a_run_that_must_end_by_a_deadline_gets_the_time_before_its_stop() {
-        let stop = STOP_GRACE + KILL_WAIT;
-        assert_eq!(time_left(Instant::now() + stop - Duration::from_secs(1)), None);
-        assert_eq!(time_left(Instant::now()), None);
-        let left = time_left(Instant::now() + stop + Duration::from_secs(20)).unwrap();
-        assert!(Duration::from_secs(19) < left && left <= Duration::from_secs(20), "{left:?}");
     }
 
     #[test]

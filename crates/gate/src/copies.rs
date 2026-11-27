@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::change::Change;
+use crate::process::KILL_WAIT;
 use crate::report::Finding;
 use crate::scratch_directory::ScratchDirectory;
 use crate::{git, text, Unjudged};
@@ -140,6 +141,13 @@ impl Budget {
         let share = self.deadline.saturating_duration_since(now) / parts.max(1);
         Budget { seconds: share.as_secs_f64().round() as u64, deadline: now + share }
     }
+
+    /// The timeout to give a run that is stopped softly with `grace` (process::Extras::soft_stop), so that it ends by
+    /// the deadline, its stop and the wait for what it printed (process::KILL_WAIT) included; None when no time is
+    /// left for it.
+    pub fn before_soft_stop(&self, grace: Duration) -> Option<Duration> {
+        self.deadline.checked_duration_since(Instant::now() + grace + KILL_WAIT).filter(|left| !left.is_zero())
+    }
 }
 
 /// Puts `findings` in the order a check gives them: by path and line, a finding on no path or line first.
@@ -256,7 +264,7 @@ fn copy_base_with_tests(
 
 /// Removes what is at `path`, a directory with all it holds, nothing when there is nothing, and never through a link
 /// at `path` itself. Errs, a clause, when it cannot.
-fn remove_entry(path: &Path) -> Result<(), String> {
+pub fn remove_entry(path: &Path) -> Result<(), String> {
     match path.symlink_metadata() {
         Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(path),
         Ok(_) => std::fs::remove_file(path),
@@ -368,6 +376,16 @@ mod tests {
         assert_eq!(budget.share(0).seconds, 300);
         let spent = Budget { seconds: 300, deadline: Instant::now() };
         assert_eq!(spent.share(2).seconds, 0);
+    }
+
+    #[test]
+    fn a_soft_stopped_run_gets_the_time_before_its_stop() {
+        let grace = Duration::from_secs(10);
+        let ending_in = |after: Duration| Budget { seconds: 0, deadline: Instant::now() + after };
+        assert_eq!(ending_in(grace + KILL_WAIT - Duration::from_secs(1)).before_soft_stop(grace), None);
+        assert_eq!(ending_in(Duration::ZERO).before_soft_stop(grace), None);
+        let left = ending_in(grace + KILL_WAIT + Duration::from_secs(20)).before_soft_stop(grace).unwrap();
+        assert!(Duration::from_secs(19) < left && left <= Duration::from_secs(20), "{left:?}");
     }
 
     use std::cell::RefCell;

@@ -398,7 +398,7 @@ fn rules_that_name_no_source_paths_are_a_finding() {
         found[0].3,
         format!(
             "[tool.mutmut] in {named} names no source_paths as a list of paths, so what mutmut mutates is unknown; \
-             the change's functions were not mutation-tested."
+             the change's Python was not mutation-tested."
         )
     );
 }
@@ -553,7 +553,7 @@ fn a_pyproject_that_links_to_no_file_is_a_finding() {
     assert_eq!(
         found[0].3,
         "could not start mutmut: `pyproject.toml` is a symbolic link, and what it names cannot be read: No such \
-         file or directory (os error 2); the change's functions were not mutation-tested."
+         file or directory (os error 2); the change's Python was not mutation-tested."
     );
 }
 
@@ -631,7 +631,7 @@ fn tests_under_more_than_one_configuration_are_not_mutation_tested_under_either(
     assert_eq!(
         found[0].3,
         "the tests mutmut runs take more than one pytest configuration, `more/pytest.ini` and `tests/pytest.ini`, \
-         where mutmut runs them all under one; the change's functions were not mutation-tested."
+         where mutmut runs them all under one; the change's Python was not mutation-tested."
     );
 }
 
@@ -661,7 +661,7 @@ fn a_mutmut_table_of_the_wrong_shape_is_a_finding_and_leaves_nothing_behind() {
         assert_eq!(
             found[0].3,
             format!(
-                "[tool.mutmut] {key} in {named} is not a list of strings; the change's functions were not \
+                "[tool.mutmut] {key} in {named} is not a list of strings; the change's Python was not \
                  mutation-tested."
             )
         );
@@ -949,7 +949,7 @@ fn a_listing_that_fails_once_the_cut_off_save_is_removed_is_not_run_and_says_so(
     assert_eq!(
         found[0].3,
         "mutmut could not list its results, exiting with status 1: broken after the gate removed the cut-off results \
-         of calc.py; the change's functions were not mutation-tested."
+         of calc.py; the change's Python was not mutation-tested."
     );
     assert_eq!(std::fs::read_to_string(listed).unwrap(), "\n");
 }
@@ -1008,8 +1008,8 @@ fn a_cut_off_save_that_cannot_be_removed_is_not_run_and_says_why() {
     let message = stopped_with_a_locked_state("chmod 500 mutants;");
     assert_eq!(
         message,
-        "could not clear the results mutmut's stop cut off: Permission denied (os error 13); the change's functions \
-         were not mutation-tested."
+        "could not clear the results mutmut's stop cut off: Permission denied (os error 13); the change's Python \
+         was not mutation-tested."
     );
 }
 
@@ -1018,8 +1018,8 @@ fn a_state_that_cannot_be_searched_after_a_stop_is_not_run_and_says_why() {
     let message = stopped_with_a_locked_state("chmod 300 mutants;");
     assert_eq!(
         message,
-        "could not clear the results mutmut's stop cut off: Permission denied (os error 13); the change's functions \
-         were not mutation-tested."
+        "could not clear the results mutmut's stop cut off: Permission denied (os error 13); the change's Python \
+         was not mutation-tested."
     );
 }
 
@@ -1117,7 +1117,7 @@ fn not_run_by(run: &str) -> String {
 fn a_run_that_fails_is_a_finding() {
     assert_eq!(
         not_run_by("echo 'failed to collect stats. runner returned 1'; exit 1"),
-        "mutmut exited with status 1: failed to collect stats. runner returned 1; the change's functions were not \
+        "mutmut exited with status 1: failed to collect stats. runner returned 1; the change's Python was not \
          mutation-tested."
     );
 }
@@ -1128,7 +1128,7 @@ fn a_project_without_mutmut_gets_a_finding_naming_the_import_error() {
                echo \"ModuleNotFoundError: No module named 'mutmut'\" >&2; exit 1";
     assert_eq!(
         not_run_by(run),
-        "mutmut exited with status 1: ModuleNotFoundError: No module named 'mutmut'; the change's functions were not \
+        "mutmut exited with status 1: ModuleNotFoundError: No module named 'mutmut'; the change's Python was not \
          mutation-tested."
     );
 }
@@ -1197,7 +1197,7 @@ fn a_mutmut_that_cannot_start_is_a_finding() {
         found[0].3,
         format!(
             "could not start mutmut with the Python `{}`: No such file or directory (os error 2); the change's \
-             functions were not mutation-tested.",
+             Python was not mutation-tested.",
             python.display()
         )
     );
@@ -1220,7 +1220,9 @@ fn an_unparsable_source_file_is_a_finding() {
     repo.put("calc.py", format!("{BASE}def broken(:\n").as_bytes());
     let found = findings(&repo, Gate::with_python(mutmut_that_tells(&repo)));
     assert!(!ran(&repo).exists());
-    assert_eq!(places(&found), [(Some("calc.py"), None, "not-run")]);
+    // At the broken def, the line after BASE's.
+    let line = u32::try_from(BASE.lines().count() + 1).unwrap();
+    assert_eq!(places(&found), [(Some("calc.py"), Some(line), "not-run")]);
     assert!(found[0].3.ends_with(", so its functions were not mutation-tested."), "{}", found[0].3);
 }
 

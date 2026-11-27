@@ -862,9 +862,11 @@ fn an_unparsable_test_file_is_a_finding() {
     let repo = calc();
     repo.put("calc.py", fixed_calc("").as_bytes());
     repo.put("tests/test_calc.py", format!("{TESTS}def test_new(:\n").as_bytes());
+    // At the broken def, the line after TESTS'.
+    let line = u32::try_from(TESTS.lines().count() + 1).unwrap();
     assert_eq!(findings(&repo, Gate::default()), vec![(
         Some("tests/test_calc.py".into()),
-        None,
+        Some(line),
         "not-run".into(),
         "does not parse as Python, so its tests were not run at the base.".into(),
     )]);
@@ -877,7 +879,7 @@ fn an_unparsable_test_file_leaves_the_others_judged() {
     repo.put("tests/test_calc.py", format!("{TESTS}{MUL_AGAIN}").as_bytes());
     repo.put("tests/test_broken.py", b"def test_new(:\n");
     assert_eq!(found(&repo), vec![
-        (Some("tests/test_broken.py".into()), None, "not-run".into()),
+        (Some("tests/test_broken.py".into()), Some(1), "not-run".into()),
         at("tests/test_calc.py", 8, "passes-at-base"),
     ]);
 }

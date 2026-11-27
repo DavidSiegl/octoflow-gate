@@ -84,9 +84,8 @@ impl<'a> Sources<'a> {
     }
 }
 
-/// (path, why) for each file a check could not read or parse, the path from the tree's top level and why a clause a
-/// finding can open with, as model::Unreadable's.
-pub type UnreadFiles = Vec<(OsString, String)>;
+/// Each file a check could not read or parse, by its path from the tree's top level, with what kept it unread.
+pub type UnreadFiles = Vec<(OsString, Unreadable)>;
 
 /// The bytes a language change read of its files' sides, as [`Stored::files`] read them: a key for each side of the
 /// change's files that the language read, and for no other path.
@@ -192,7 +191,7 @@ impl<'a> PythonChange<'a> {
             }
             // Every working-tree side of `files` has its bytes (SideBytes); one without would go untested unseen.
             let Some(source) = self.source_now(path) else {
-                unreadable.push((path.clone(), "could not be read".into()));
+                unreadable.push((path.clone(), Unreadable { line: None, why: "could not be read".into() }));
                 continue;
             };
             match lang_python::units(source) {
@@ -200,7 +199,7 @@ impl<'a> PythonChange<'a> {
                     let touched = read.into_iter().filter(|unit| touched(unit, &file.added, removed));
                     units.extend(touched.map(|unit| (path.clone(), unit)));
                 }
-                Err(unreadable_file) => unreadable.push((path.clone(), unreadable_file.why)),
+                Err(unreadable_file) => unreadable.push((path.clone(), unreadable_file)),
             }
         }
         (units, unreadable)

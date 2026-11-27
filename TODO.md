@@ -132,6 +132,19 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   ones that would pass there. Accepted: the check reports only, and splitting the file's tests from its imports would
   mean rewriting them. Closes, if its run metrics show these files are common, by importing such names inside the tests
   that use them, or by running each test with the failing import stubbed. Moved from octoflow-ai on 2026-11-05.
+- **A Go or Rust file `test-files.support` matches counts as code under test in `passes-at-base`.** As cross-review
+  47 put it (round 3, not recorded, 2026-11-27): "`GoChange::is_code` and `RustChange::code_paths` count a `.go`/`.rs`
+  file that `test-files.support` matches as code under test, where `PythonChange::is_code` leaves support out. So
+  editing a support-matched `tests/helper.go` (default `**/tests/**`) with a new test calling the new helper makes
+  `edits_code()` true, the base copy takes helper.go from the working tree, and the test gives a false
+  `passes-at-base`." (`crates/gate/src/sources.rs`). Pre-existing on main. Closes with Go's and Rust's code under test
+  leaving out what `test-files.support` matches, as Python's does.
+- **A Go test reading a `.py` file under `testdata/` sees the base's when a changed Python test runs at the base too.**
+  `passes_at_base` (`crates/gate/src/passes_at_base/mod.rs`) takes from the working tree a file that goes with any
+  language's tests but for one that a language with tests to run there counts as code under test, and Python counts
+  such a `.py` file as code under test; so that Go test may fail at the base for the old input, a false negative,
+  documented there. Raised by cross-review 47 (round 3, not recorded, 2026-11-27). Closes, if run metrics show such
+  repositories, with each language's tests run against the files its own reading gives.
 - **A test file whose name is not UTF-8 is never rerun by `flaky-tests`.** pytest-randomly 5.0.0 hashes each node id as
   strict UTF-8 (`pytest_randomly._crc32`, called from `pytest_runtest_setup` and its neighbours) and stops with an
   internal error, exit status 3. `run` in `crates/gate/src/pytest.rs` already lets pytest print such an id

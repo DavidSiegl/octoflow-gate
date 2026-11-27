@@ -11,9 +11,9 @@ use std::ffi::{OsStr, OsString};
 use std::time::Duration;
 
 use checks::Finding;
-use model::Function;
+use model::{Function, Unreadable};
 
-use crate::copies::{in_working_tree_copy, sort_by_place, Budget, OnCopy};
+use crate::copies::{finding, in_working_tree_copy, sort_by_place, Budget, OnCopy};
 use crate::sources::Sources;
 use crate::text;
 
@@ -26,10 +26,6 @@ use rust::{edited_rust, rust_mutants};
 /// How long cargo-mutants has, after the SIGINT that stops a run at the deadline, to write what it found and exit
 /// before it is killed, and mutmut as long.
 const STOP_GRACE: Duration = Duration::from_secs(10);
-
-/// What a run is given beyond [`STOP_GRACE`] after the deadline: the most process::run_with waits for what a killed
-/// process printed (its KILL_WAIT).
-const KILL_WAIT: Duration = Duration::from_secs(5);
 
 /// How many of a function's surviving mutants its finding shows, in the order the mutation tool made them.
 const SURVIVOR_EXAMPLES: usize = 3;
@@ -57,7 +53,7 @@ pub fn surviving_mutants(sources: &Sources, mutmut: &Mutmut, budget: u64) -> Vec
     let (has_rust, has_go) = (!rust.is_empty(), !go.is_empty());
     let share = |later: &[bool]| budget.share(1 + later.iter().map(|&has| u32::from(has)).sum::<u32>());
     let python = share(&[has_rust, has_go]);
-    let (found, mutmut_run) = python_mutants(&sources.python, mutmut, python.seconds);
+    let (found, mutmut_run) = python_mutants(&sources.python, mutmut, &python);
     out.extend(found);
     let mut runs: Vec<OnCopy> = mutmut_run.into_iter().collect();
     if has_rust {
@@ -96,6 +92,25 @@ impl Edited {
 /// change::Change::removal_points gives them. A deleted guard clause needs a test as much as an added one.
 fn edits(f: &Function, added: &BTreeSet<u32>, removed: &BTreeSet<u32>) -> bool {
     added.range(f.line..=f.lines.last).next().is_some() || removed.iter().any(|&n| f.line <= n && n < f.lines.last)
+}
+
+/// A `not-run` finding: `problem`, a clause, and that the change's `language`, as findings name it ("Rust"), was not
+/// mutation-tested.
+fn not_run(problem: &str, language: &str) -> Finding {
+    finding(None, None, "not-run", format!("{problem}; the change's {language} was not mutation-tested."))
+}
+
+/// The `not-run` finding that the budget ran out before `tool`, the mutation tool as findings name it
+/// ("cargo-mutants"), reached `place`, as "the workspace at `.`", so that the change's `language` there was not
+/// mutation-tested.
+fn not_reached(tool: &str, place: &str, language: &str) -> Finding {
+    not_run(&format!("the budget ran out before {tool} reached {place}"), language)
+}
+
+/// The `not-run` finding on `path`, a file of the change, which `unreadable` says could not be read or parsed.
+fn unread_not_run(path: &OsStr, unreadable: &Unreadable) -> Finding {
+    let message = format!("{}, so its functions were not mutation-tested.", unreadable.why);
+    finding(Some(path), unreadable.line, "not-run", message)
 }
 
 /// The directory `dir`, from the tree's top, as findings name it, as a Cargo workspace's or a Go module's: `.` for the

@@ -722,6 +722,8 @@ fn an_unparsable_test_file_is_a_finding() {
     repo.put(STATE, format!("{BASE}def test_new(:\n").as_bytes());
     let found = findings(&repo);
     let places: Vec<_> = found.iter().map(|(path, line, rule, _)| (path.as_deref(), *line, rule.as_str())).collect();
-    assert_eq!(places, [(Some(STATE), None, "not-rerun")]);
+    // At the broken def, the line after BASE's.
+    let line = u32::try_from(BASE.lines().count() + 1).unwrap();
+    assert_eq!(places, [(Some(STATE), Some(line), "not-rerun")]);
     assert!(found[0].3.ends_with(", so its tests were not rerun."), "{}", found[0].3);
 }

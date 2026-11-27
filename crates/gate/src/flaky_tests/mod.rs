@@ -7,8 +7,11 @@ mod go;
 mod python;
 
 use std::collections::{BTreeMap, HashMap};
+use std::ffi::OsStr;
 use std::hash::Hash;
 use std::time::Duration;
+
+use model::Unreadable;
 
 use crate::copies::{finding, in_working_tree_copy, sort_by_place};
 use crate::junit::Outcome;
@@ -54,6 +57,12 @@ fn stopped_not_rerun(problem: &str, which: Option<&str>, ran: &[u32]) -> Finding
         format!("only the reruns{of} under {} were judged.", seeds(ran))
     };
     finding(None, None, "not-rerun", format!("{problem}; {judged}"))
+}
+
+/// The `not-rerun` finding on `path`, a changed test file, which `unreadable` says could not be read or parsed.
+fn unread_not_rerun((path, unreadable): (&OsStr, &Unreadable)) -> Finding {
+    let message = format!("{}, so its tests were not rerun.", unreadable.why);
+    finding(Some(path), unreadable.line, "not-rerun", message)
 }
 
 /// What the reruns of a set of tests, one under each of [`SEEDS`] in turn, told of each test, a test known by a key

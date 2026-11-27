@@ -24,9 +24,8 @@ use rust::rust_at_base;
 ///
 /// Runs the tests the change adds or edits against the base's code and reports each one that passed there (rule
 /// `passes-at-base`): Python's as [`python_at_base`] says, then Rust's as [`rust_at_base`] does, then Go's as
-/// [`go_at_base`] does. Each language's runs may take `budget` seconds, Python's counted from when they
-/// start, and Rust's and Go's from the start of the check, so that Rust's have what Python's left of them, and Go's
-/// what both left.
+/// [`go_at_base`] does. The runs of all three may take `budget` seconds, counted from the start of the check, so that
+/// Rust's have what Python's left of them, and Go's what both left.
 ///
 /// The three run in turn in one copy of the base (copies::in_base_copy), made only when one of them has tests to run
 /// there, with the change's files that go with the tests in place of the base's: those gate.toml places with them
@@ -38,7 +37,7 @@ use rust::rust_at_base;
 /// submodules it leaves empty one more, and a copy that cannot be removed afterwards a `not-removed` one.
 pub fn passes_at_base(sources: &Sources, budget: u64) -> Vec<Finding> {
     let budget = Budget::starting_now(budget);
-    let (mut out, python) = python_at_base(&sources.python, budget.seconds);
+    let (mut out, python) = python_at_base(&sources.python, &budget);
     let (rust_found, rust) = rust_at_base(&sources.rust, &budget);
     let (go_found, go) = go_at_base(&sources.go, &budget);
     out.extend(rust_found.into_iter().chain(go_found));

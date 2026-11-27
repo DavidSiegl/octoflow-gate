@@ -11,7 +11,7 @@ use crate::report::Finding;
 use crate::sources::PythonChange;
 use crate::Unjudged;
 
-use super::{stopped_not_rerun, Reruns, RUN_TIMEOUT};
+use super::{stopped_not_rerun, unread_not_rerun, Reruns, RUN_TIMEOUT};
 
 /// The check's findings on `python`, in no order: those on its changed test files that cannot be read, and the run on
 /// the copy that gives the others, None when there is no test to rerun.
@@ -37,10 +37,7 @@ use super::{stopped_not_rerun, Reruns, RUN_TIMEOUT};
 /// each configuration the changed tests fall under adds its runs to the check's time.
 pub(super) fn python_findings<'a>(python: &'a PythonChange) -> (Vec<Finding>, Option<OnCopy<'a>>) {
     let (tests, unreadable) = changed_tests(python);
-    let not_rerun = |(path, why): (OsString, String)| {
-        finding(Some(&path), None, "not-rerun", format!("{why}, so its tests were not rerun."))
-    };
-    let out = unreadable.into_iter().map(not_rerun).collect();
+    let out = unreadable.iter().map(|(path, unreadable)| unread_not_rerun((path, unreadable))).collect();
     let run = (!tests.is_empty()).then(|| -> OnCopy { Box::new(move |copy| rerun_findings(python, copy, &tests)) });
     (out, run)
 }

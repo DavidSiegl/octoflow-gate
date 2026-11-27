@@ -11,7 +11,7 @@ use std::time::Duration;
 use crate::copies::{copy_working_tree, finding, in_scratch_directory, sort_by_place};
 use crate::gotest::{self, Packages, Ran};
 use crate::junit::{junit_outcomes, Outcome};
-use crate::parser_checks::{GoChange, PythonChange, Sources};
+use crate::sources::{GoChange, PythonChange, Sources};
 use crate::pytest::{self, changed_tests, junit_case, labels, listed_tests, node_parts, Group, Setup, Tests};
 use crate::report::Finding;
 use crate::text::series;

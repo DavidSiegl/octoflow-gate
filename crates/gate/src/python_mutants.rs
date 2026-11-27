@@ -25,7 +25,7 @@ use crate::copies::{copy_working_tree, finding, in_scratch_directory};
 use crate::glob::fnmatch;
 use crate::change::{Change, MUTMUT_STATE};
 use crate::mutants::{KILL_WAIT, STOP_GRACE, SURVIVOR_EXAMPLES};
-use crate::parser_checks::{python_test, regular_files_at_base, PythonChange};
+use crate::sources::{python_test, PythonChange};
 use crate::paths::{normpath, real_path};
 use crate::process::{self, run_with, Extras, Finished};
 use crate::pytest::{self, truthy, Setup};
@@ -134,7 +134,7 @@ pub fn python_mutants(python: &PythonChange, mutmut: &Mutmut, seconds: u64) -> V
 /// (lang_python::Unit::code), which only the unit's comments and layout can have changed, as nothing mutmut mutates
 /// does. Every unit of a file counts as edited where the file holds a mutmut pragma ([`mutmut_pragma`]) at the base or
 /// in the working tree, since a pragma is a comment that decides which lines mutmut mutates, by where it sits; and
-/// where its base is no regular file, cannot be read or parsed, or is none.
+/// where its base was not read as Python (PythonChange::source_at_base), does not parse, or is none.
 fn edited(python: &PythonChange, units: Vec<(OsString, Unit)>) -> Vec<Function> {
     // The base path of each file the units are in that has one.
     let mut befores: HashMap<OsString, OsString> = HashMap::new();
@@ -144,13 +144,11 @@ fn edited(python: &PythonChange, units: Vec<(OsString, Unit)>) -> Vec<Function> 
             befores.insert(path.clone(), before.path.clone());
         }
     }
-    let wanted: Vec<OsString> = befores.values().cloned().collect();
-    let sources = regular_files_at_base(python.change, &wanted).unwrap_or_default();
     // The units to compare a file's with: its base's, or None where each of its units counts as edited.
     let comparable = |path: &OsStr| -> Option<Vec<Unit>> {
-        let base = sources.get(befores.get(path)?)?;
-        let now = std::fs::read(python.change.root.join(path)).ok()?;
-        if holds_pragma(base) || holds_pragma(&now) {
+        let base = python.source_at_base(befores.get(path)?)?;
+        let now = python.source_now(path)?;
+        if holds_pragma(base) || holds_pragma(now) {
             return None;
         }
         lang_python::units(base).ok()

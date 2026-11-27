@@ -16,9 +16,9 @@ use crate::changed_tests::{changed_tests, ChangedTest};
 use crate::copies::{copy_base_with_tests, failed, finding, in_scratch_directory, sort_by_place, Budget};
 use crate::go_at_base::go_at_base;
 use crate::junit::{junit_outcomes, Outcome};
-use crate::parser_checks::{project_dir, RustChange, Sources};
 use crate::process::{run_with, Extras};
 use crate::python_at_base::python_at_base;
+use crate::sources::{project_dir, RustChange, Sources};
 use crate::{text, Unjudged};
 
 /// The profile of the nextest configuration the runs at the base take with `--config-file`, in place of the copy's
@@ -55,14 +55,14 @@ pub fn passes_at_base(sources: &Sources, budget: u64) -> Vec<Finding> {
 /// its fn each one that passed there (rule `passes-at-base`): it does not test the change. A change to the tests
 /// alone has no "without the change" to run them in.
 ///
-/// The tests run in a copy of the base (copies::copy_base_with_tests) with the change's files that go with the
-/// tests ([`beside_tests`]) in place of the base's. A test in a file the change also edits outside its test code, its
-/// items marked `#[cfg(test)]`, cannot be separated from the code it tests: it is a `not-run` finding at its fn.
-/// Each Cargo target the tests are in ([`CrateLayout::targets`]) is built and run on its own, `cargo nextest run`
-/// filtered to its tests, `--locked` when the base tracks its workspace's Cargo.lock (the rule of crate::clippy), with
-/// a target directory of its own outside the copy; one whose tests do not compile there counts as failing, which is
-/// what the check expects of a test that needs the change, and gives nothing. A test the run did not report, as one a
-/// cfg leaves out at the base, gives nothing, and one built in several targets is reported only when it passed in each.
+/// The tests run in a copy of the base (copies::copy_base_with_tests) with the change's files that go with the tests
+/// (RustChange::beside_tests) in place of the base's. A test in a file the change also edits outside its test code, its
+/// items marked `#[cfg(test)]`, cannot be separated from the code it tests: it is a `not-run` finding at its fn. Each
+/// Cargo target the tests are in ([`CrateLayout::targets`]) is built and run on its own, `cargo nextest run` filtered
+/// to its tests, `--locked` when the base tracks its workspace's Cargo.lock (the rule of crate::clippy), with a target
+/// directory of its own outside the copy; one whose tests do not compile there counts as failing, which is what the
+/// check expects of a test that needs the change, and gives nothing. A test the run did not report, as one a cfg leaves
+/// out at the base, gives nothing, and one built in several targets is reported only when it passed in each.
 ///
 /// The budget running out is a `budget-reached` finding, and each target after it a `not-run` one. A changed test
 /// file that does not parse, a test whose target cannot be placed, a copy that cannot be made, submodules the copy
@@ -95,23 +95,11 @@ fn rust_at_base(rust: &RustChange, budget: &Budget) -> Vec<Finding> {
     out
 }
 
-/// Whether a repository path belongs with Rust's tests rather than with the code they test, as the copy the tests run
-/// in at the base takes it from the working tree: a file gate.toml's `test-support` names, as Cargo's integration
-/// tests' data under a tests directory by default, a Rust test file as a whole in the working tree
-/// ([`RustChange::among_tests`]), and a .rs file the change edits only inside its test code, which
-/// [`RustChange::is_code`] does not count as code.
-fn beside_tests(rust: &RustChange, path: &OsStr) -> bool {
-    let settings = &rust.change.settings;
-    settings.test_support.matches(path)
-        || rust.among_tests(path, false)
-        || (path.as_bytes().ends_with(b".rs") && !rust.is_code(path))
-}
-
 /// The findings on `tests`, built and run within `budget` in a copy of the base made in `dir`, an empty directory,
 /// beside the runs' target directory and nextest configuration.
 fn base_run_findings(rust: &RustChange, dir: &Path, tests: &[ChangedTest], budget: &Budget) -> Vec<Finding> {
     let (tree, store) = (dir.join("tree"), dir.join("nextest"));
-    let copied = copy_base_with_tests(rust.change, &tree, &dir.join("base.tar"), |p| beside_tests(rust, p))
+    let copied = copy_base_with_tests(rust.change, &tree, &dir.join("base.tar"), |p| rust.beside_tests(p))
         .and_then(|empty| write_nextest_config(&dir.join("nextest.toml"), &store).map(|()| empty));
     let empty = match copied {
         Ok(empty) => empty,

@@ -36,15 +36,6 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   `outside_mutmut` rebuilds the source_paths and pattern vectors for each one. Nothing here gives a wrong result."
   Closes with each computed once per file or copy: the function's bindings taken from the file's, the constants
   only where a test may name them, and mutmut's patterns built once.
-- **surviving-mutants reads each base Go file with a git process of its own.** As cross-review 35 put it (F7,
-  2026-11-14): "`crates/gate/src/go_mutants.rs:104` still starts one `git cat-file blob` per base Go file", where
-  todo/19 had the parser checks' base files read by one `git::objects` (`crates/gate/src/git.rs`).
-  `unchanged_declarations` (`go_mutants.rs`) is the one caller. Closes with the change's base Go files read by one
-  `git::objects`, or from what the parser checks already read.
-- **Python's code under test is told by a scan, Rust's by a set.** As cross-review 35 put it (F10, 2026-11-14):
-  "`RustChange::is_code` now looks up a set built once, while `PythonChange` keeps `any_path(|p| self.is_code(p))`
-  over `self.files`, the quadratic shape todo/19 removed for Rust." `PythonChange::is_code` and `edits_code` are in
-  `crates/gate/src/parser_checks.rs`. Closes with `PythonChange` holding its code paths as `RustChange` does.
 - **passes-at-base reads every Rust file of the base's copy before it looks at the deadline.** As cross-review 34 put
   it (F9, 2026-11-14): "`CrateLayout::of` (:366-372) reads and parses every `.rs` of the copy before any deadline
   check." In a large tree that spends `--base-run-budget` with no `budget-reached` to show for it, and the work is
@@ -159,7 +150,7 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   function starts mutmut, a change adding `x.py -> calc.py` has every function of `calc.py` mutated a second time, as
   `x.py`, spending the budget on mutants no finding reports; and `x.py -> /dev/zero` or a FIFO reads without end or
   blocks until the budget runs out. The gate's own selection skips such links (`Stored::files` in
-  `crates/gate/src/parser_checks.rs`). Raised by the cross-review of `gate-python-files` (R2-F1, 2026-10-26); rests on
+  `crates/gate/src/sources.rs`). Raised by the cross-review of `gate-python-files` (R2-F1, 2026-10-26); rests on
   mutmut's source, not on a run. Closes with the copy or `mark_for_mutmut` keeping links out of mutmut's walk, without
   breaking a tracked link the tests import through, and a test that also edits a real function. Moved from octoflow-ai
   on 2026-11-05.
@@ -188,9 +179,10 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   every copy the Python checks make holding the configuration files pytest reads as regular files, read as the rules'
   own file is.
 - **The gate's Python checks: three design nits of cross-review 14 (2026-11-10), in its words.**
-  - F8, `crates/gate/src/parser_checks.rs`: "`changed_units` reads and parses each changed Python file again after
-    `Sources::read` did, and is reached three times a run (flaky_tests, python_at_base, python_mutants); its "could not
-    be read" branch is all but dead." Closes with the three checks given the units read once.
+  - F8, `crates/gate/src/sources.rs`: "`changed_units` reads and parses each changed Python file again after
+    `Sources::read` did, and is reached three times a run (flaky_tests, python_at_base, python_mutants)". It now takes
+    the bytes `Sources::read` read (architecture-deepening/01), but still parses them into units on each call.
+    Closes with the three checks given the units read once.
   - F9, `crates/gate/src/mutants.rs`: "The Python halves and the Rust halves' modules import each other (...
     `mutants` <-> `python_mutants` for `KILL_WAIT`, `STOP_GRACE`, `SURVIVOR_EXAMPLES`), consts widened to `pub(crate)`
     to cross the cycle." Go's half, `go_mutants`, imports those and more from `mutants` the same way. Closes with what
@@ -250,7 +242,7 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
   release. The user's choice in go-support/01 (2026-11-11), over reading the tag set from the go tool on `PATH`, which
   would make the finding depend on the machine. Closes only if that choice is revisited.
 - **A Go test file's name and its constraint lines are judged apart.** A `_windows` suffix the change gives a test
-  file's name is a `platform-only` finding whatever the file's `//go:build` says (`GoChange::platform_named`,
+  file's name is a `platform-only` finding whatever the file's `//go:build` says (`platform_named`,
   `crates/gate/src/parser_checks.rs`), and a constraint line is judged without the name (`constraint::weakenings`), so
   `calc_test.go` with `//go:build linux` renamed to `calc_windows_test.go`, which then builds nowhere, is a finding to
   weigh rather than a failing `skip`. Found with todo/28 (2026-11-14). Closes with the name's suffix and'd into the
@@ -278,11 +270,12 @@ The entries that say "moved from octoflow-ai" were written while the gate lived 
 - **dependency-cycles reads and parses every tracked file of a language twice a run.** As cross-review 24 put it (F6,
   2026-11-12): "Every untouched file's bytes are cloned into `base` and each tree is parsed in full by `imports`, so a
   one-line change parses the repository's whole `.py`/`.rs` set twice; `git ls-files -z` repeats `judge_change`'s
-  listing" (`trees` in `crates/gate/src/parser_checks.rs`). duplicated-blocks (structural-checks/03) lists and reads the
-  working tree's files of each language a third time, and parses them once more (`duplicated_blocks`, same file); and,
-  for Rust, `RustChange::of` (same file) reads both trees once more and parses them for `lang_rust::test_modules`.
-  Closes with an untouched file's imports and modules read once for both sides, the listing and the base's files taken
-  from what the gate already read, and each working-tree file read once for both checks.
+  listing" (`trees` in `crates/gate/src/sources.rs`). duplicated-blocks (structural-checks/03) lists and reads the
+  working tree's files of each language a third time, and parses them once more (`duplicated_blocks`,
+  `crates/gate/src/parser_checks.rs`); and, for Rust, `RustChange::of` (`sources.rs`) reads both trees once more and
+  parses them for `lang_rust::test_modules`. Closes with an untouched file's imports and modules read once for both
+  sides, the listing and the base's files taken from what the gate already read, and each working-tree file read once
+  for both checks.
 - **lang-rust reads an item's outer attributes two ways.** As cross-review 24 put it (F7, 2026-11-12): `path_attribute`
   (`crates/lang-rust/src/imports.rs`) "looks back through siblings, the pattern e7f9115 removed for test detection",
   via `syntax::preceding_attributes`, while `walk_children` passes each item's attributes as it walks them. Closes with

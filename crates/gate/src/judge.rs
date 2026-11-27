@@ -12,13 +12,12 @@ use crate::diff::ChangedLines;
 use crate::flaky_tests::flaky_tests;
 use crate::linters::{JudgedFiles, Linter, LINTERS};
 use crate::mutants::surviving_mutants;
-use crate::parser_checks::{
-    dependency_cycles, duplicated_blocks, too_complex, vague_names, weakened_tests, RustChange, Sources,
-};
+use crate::parser_checks::{dependency_cycles, duplicated_blocks, too_complex, vague_names, weakened_tests};
 use crate::passes_at_base::passes_at_base;
 use crate::process::tool_env;
 use crate::python_mutants::Mutmut;
 use crate::report::{Finding, QualityReport};
+use crate::sources::{RustChange, Sources};
 use crate::settings::JudgedBy;
 use crate::suppressions::{added_suppressions, stray_line_end_condition, stray_line_ends};
 use crate::test_commands::test_results;

@@ -4,7 +4,7 @@ use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
-use crate::diff::{change_diff, changed_files, changed_lines, ChangedFile, ChangedLines};
+use crate::diff::{change_diff, changed_files, changed_lines, removal_points, ChangedFile, ChangedLines};
 use crate::git::{judged_files, UntrackedAdded};
 use crate::settings::Settings;
 use crate::Unjudged;
@@ -28,6 +28,9 @@ pub struct Change {
     pub diff: Vec<u8>,
     /// `changed_lines(diff)`.
     pub changed: ChangedLines,
+    /// `removal_points(diff)`: for each file of changed, the lines of the working tree after which the change only
+    /// removed lines.
+    pub removal_points: ChangedLines,
     /// diff::changed_files from base, of the files the gate sees.
     pub files: Vec<ChangedFile>,
     /// The files the change adds or edits under [`MUTMUT_STATE`], the one part of it the fields above leave out, in
@@ -65,6 +68,7 @@ impl Change {
             root: root.to_path_buf(),
             base: base.to_string(),
             changed: changed_lines(&diff),
+            removal_points: removal_points(&diff),
             files: changed_files(&tree, base, &[OUTSIDE_MUTMUT_STATE])?,
             diff,
             mutmut_state,

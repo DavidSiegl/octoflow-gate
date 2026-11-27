@@ -7,7 +7,6 @@ use std::ffi::{OsStr, OsString};
 use checks::ChangedFile;
 use model::{Lines, Test, Unreadable};
 
-use crate::diff::removal_points;
 use crate::change::Change;
 
 /// A test the change adds or edits, as [`changed_tests`] finds one, in the working tree.
@@ -21,7 +20,7 @@ pub struct ChangedTest {
 }
 
 /// The tests of `files`, files of `change`, that `runs` accepts and the change touches: adds lines to, or removes
-/// lines at one of the diff's removal points (diff::removal_points) from just above its first line, as an `#[ignore]`
+/// lines at one of the diff's removal points (Change::removal_points) from just above its first line, as an `#[ignore]`
 /// taken off its top, to just above its last; a removal after its last line, the `}`, is below the test, as a deleted
 /// neighbour's is, and does not count. Only the files the change leaves in the working tree are read, in the change's
 /// order, each file's tests by where they start.
@@ -33,11 +32,10 @@ pub fn changed_tests<'a>(
     files: &'a [ChangedFile],
     runs: impl Fn(&Test) -> bool,
 ) -> (Vec<ChangedTest>, Vec<(&'a OsStr, &'a Unreadable)>) {
-    let removals = removal_points(&change.diff);
     let (mut tests, mut unread) = (vec![], vec![]);
     for file in files {
         let Some(after) = &file.after else { continue };
-        let removed = removals.get(&after.path).cloned().unwrap_or_default();
+        let removed = change.removal_points.get(&after.path).cloned().unwrap_or_default();
         if file.added.is_empty() && removed.is_empty() {
             continue;
         }
